@@ -196,6 +196,167 @@ func TestProcessEvent_ReasoningToText_ClosesReasoning(t *testing.T) {
 	}
 }
 
+func partialFunctionCallEvent(toolCallID, toolCallName string, args map[string]any) *session.Event {
+	ev := session.NewEvent("inv-partial")
+	ev.Partial = true
+	ev.Content = &genai.Content{
+		Role: string(genai.RoleModel),
+		Parts: []*genai.Part{{
+			FunctionCall: &genai.FunctionCall{
+				ID:   toolCallID,
+				Name: toolCallName,
+				Args: args,
+			},
+		}},
+	}
+	return ev
+}
+
+func confirmationInterruptEvent(confirmID, hint, originalID, originalName string, originalArgs map[string]any) *session.Event {
+	ev := session.NewEvent("inv-confirm")
+	ev.Content = &genai.Content{
+		Role: string(genai.RoleModel),
+		Parts: []*genai.Part{{
+			FunctionCall: &genai.FunctionCall{
+				ID:   confirmID,
+				Name: toolconfirmation.FunctionCallName,
+				Args: map[string]any{
+					"toolConfirmation": map[string]any{
+						"hint": hint,
+					},
+					"originalFunctionCall": map[string]any{
+						"ID":   originalID,
+						"Name": originalName,
+						"Args": originalArgs,
+					},
+				},
+			},
+		}},
+	}
+	return ev
+}
+
+func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
+	const (
+		originalToolID = "adk-1a21d257-f8c7-4411-8a93-905e13a187c0"
+		confirmID      = "adk-bb8e2f59-cff5-4fa4-8435-2eabbc51c4bd"
+	)
+
+	ticketArgs := map[string]any{"support_ticket_id": "1AB3546"}
+
+	tests := []struct {
+		name            string
+		wantTotalEvents int
+		wantStarts      map[string]int // toolCallId -> expected TOOL_CALL_START count
+		wantLastType    events.EventType
+		run             func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error
+	}{
+		{
+			name:            "duplicate partial same args",
+			wantTotalEvents: 3,
+			wantStarts:      map[string]int{"fc-1": 1},
+			run: func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error {
+				t.Helper()
+				args := map[string]any{"city": "London"}
+				for range 3 {
+					if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", args), state); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
+		{
+			name:            "evolving args same toolCallId",
+			wantTotalEvents: 6,
+			wantStarts:      map[string]int{"fc-1": 2},
+			run: func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error {
+				t.Helper()
+				if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", map[string]any{"city": "London"}), state); err != nil {
+					return err
+				}
+				if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", map[string]any{"city": "Paris"}), state); err != nil {
+					return err
+				}
+				return nil
+			},
+		},
+		{
+			name: "empty toolCallId rejected",
+			run: func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error {
+				t.Helper()
+				_, err := l.processEvent(e, partialFunctionCallEvent("", "get_weather", map[string]any{"city": "London"}), state)
+				if err == nil {
+					return fmt.Errorf("processEvent() error = nil, want missing toolCallId error")
+				}
+				return nil
+			},
+		},
+		{
+			name:            "duplicate partials then confirmation interrupt",
+			wantTotalEvents: 4,
+			wantStarts:      map[string]int{originalToolID: 1},
+			wantLastType:    events.EventTypeRunFinished,
+			run: func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error {
+				t.Helper()
+				for range 3 {
+					done, err := l.processEvent(e, partialFunctionCallEvent(originalToolID, "fetch_support_ticket", ticketArgs), state)
+					if err != nil {
+						return err
+					}
+					if done {
+						return fmt.Errorf("unexpected done before confirmation")
+					}
+				}
+				done, err := l.processEvent(e, confirmationInterruptEvent(
+					confirmID,
+					"Please confirm if you want to fetch the support ticket",
+					originalToolID,
+					"fetch_support_ticket",
+					ticketArgs,
+				), state)
+				if err != nil {
+					return err
+				}
+				if !done {
+					return fmt.Errorf("want done after confirmation")
+				}
+				return nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := newTestLauncher("test-app")
+			e, rec := newTestEmitter()
+			state := &streamState{runID: "r1", threadID: "t1"}
+
+			if err := tt.run(t, l, e, state); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+
+			evts := parseSSEEvents(rec.Body.String())
+			if tt.wantTotalEvents > 0 && len(evts) != tt.wantTotalEvents {
+				t.Fatalf("SSE event count = %d, want %d", len(evts), tt.wantTotalEvents)
+			}
+			for toolCallID, want := range tt.wantStarts {
+				if got := countToolCallStarts(evts, toolCallID); got != want {
+					t.Errorf("TOOL_CALL_START for %q = %d, want %d", toolCallID, got, want)
+				}
+			}
+			if tt.wantLastType != "" {
+				if len(evts) == 0 {
+					t.Fatal("no SSE events")
+				}
+				if evts[len(evts)-1].Type != tt.wantLastType {
+					t.Errorf("last event type = %v, want %v", evts[len(evts)-1].Type, tt.wantLastType)
+				}
+			}
+		})
+	}
+}
+
 func TestProcessEvent_FunctionCall(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
@@ -327,6 +488,7 @@ func TestProcessEvent_ConfirmationInterrupt(t *testing.T) {
 	state := &streamState{runID: "r1", threadID: "t1"}
 
 	ev := session.NewEvent("inv1")
+	ev.InvocationID = "e-test-invocation"
 	ev.Content = &genai.Content{
 		Role: string(genai.RoleModel),
 		Parts: []*genai.Part{{
@@ -433,6 +595,20 @@ func TestProcessEvent_ConfirmationInterrupt(t *testing.T) {
 	if adkMeta["confirmationCallId"] != "confirm-1" {
 		t.Errorf("confirmationCallId = %v, want confirm-1", adkMeta["confirmationCallId"])
 	}
+	if adkMeta["invocationId"] != "e-test-invocation" {
+		t.Errorf("invocationId = %v, want e-test-invocation", adkMeta["invocationId"])
+	}
+}
+
+// countToolCallStarts returns how many TOOL_CALL_START events reference toolCallId.
+func countToolCallStarts(evts []sseEvent, toolCallID string) int {
+	n := 0
+	for _, ev := range evts {
+		if ev.Type == events.EventTypeToolCallStart && ev.str("toolCallId") == toolCallID {
+			n++
+		}
+	}
+	return n
 }
 
 func TestProcessEvent_ConfirmationInterrupt_TypedHint(t *testing.T) {
@@ -1098,5 +1274,77 @@ func TestMarshalPooled(t *testing.T) {
 	}
 	if decoded["key"] != "value" {
 		t.Errorf("decoded[key] = %v, want value", decoded["key"])
+	}
+}
+
+func TestExtractToolConfirmation_map(t *testing.T) {
+	fc := &genai.FunctionCall{
+		ID:   "confirm-1",
+		Name: toolconfirmation.FunctionCallName,
+		Args: map[string]any{
+			"toolConfirmation": map[string]any{
+				"hint":      "Custom hint text",
+				"confirmed": false,
+				"payload":   map[string]any{"key": "value"},
+			},
+			"originalFunctionCall": map[string]any{
+				"id":   "orig-1",
+				"name": "my_tool",
+			},
+		},
+	}
+	tc, err := extractToolConfirmation(fc)
+	if err != nil {
+		t.Fatalf("extractToolConfirmation() error = %v", err)
+	}
+	if tc.Hint != "Custom hint text" {
+		t.Errorf("Hint = %q, want Custom hint text", tc.Hint)
+	}
+}
+
+func TestExtractToolConfirmation_jsonRoundTrip(t *testing.T) {
+	// Simulates session-persisted args where toolConfirmation is not a plain map[string]any.
+	original := toolconfirmation.ToolConfirmation{
+		Hint:      "Session persisted hint",
+		Confirmed: false,
+		Payload:   map[string]any{"ticket": "1AB"},
+	}
+	b, _ := json.Marshal(original)
+	var generic any
+	if err := json.Unmarshal(b, &generic); err != nil {
+		t.Fatal(err)
+	}
+	fc := &genai.FunctionCall{
+		ID:   "confirm-2",
+		Name: toolconfirmation.FunctionCallName,
+		Args: map[string]any{
+			"toolConfirmation": generic,
+		},
+	}
+	tc, err := extractToolConfirmation(fc)
+	if err != nil {
+		t.Fatalf("extractToolConfirmation() error = %v", err)
+	}
+	if tc.Hint != "Session persisted hint" {
+		t.Errorf("Hint = %q, want Session persisted hint", tc.Hint)
+	}
+}
+
+func TestExtractToolConfirmation_typed(t *testing.T) {
+	fc := &genai.FunctionCall{
+		ID:   "confirm-3",
+		Name: toolconfirmation.FunctionCallName,
+		Args: map[string]any{
+			"toolConfirmation": &toolconfirmation.ToolConfirmation{
+				Hint: "Typed struct hint",
+			},
+		},
+	}
+	tc, err := extractToolConfirmation(fc)
+	if err != nil {
+		t.Fatalf("extractToolConfirmation() error = %v", err)
+	}
+	if tc.Hint != "Typed struct hint" {
+		t.Errorf("Hint = %q", tc.Hint)
 	}
 }

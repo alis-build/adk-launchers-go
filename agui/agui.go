@@ -658,6 +658,15 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		if stateMap, ok := req.State.(map[string]any); ok && len(stateMap) > 0 {
 			runReq.StateDelta = stateMap
 		}
+		if isResumeRun {
+			var resumeSess session.Session
+			if resumeSess, err = l.getSession(ctx, userID, sessionID); err != nil {
+				log.Printf("agui: resume: session.Get for invocation id: %v", err)
+			}
+			if invID := resolveInvocationIDForResume(pending, req.Resume, req.State, resumeSess); invID != "" {
+				runReq.InvocationID = invID
+			}
+		}
 
 		_, adkEvents, err := l.runtime.RunSSE(ctx, runReq)
 		if err != nil {
@@ -709,7 +718,12 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		// Persist or clear pending interrupts for the next run on this thread.
 		// The terminal SSE event has already been emitted, so failures here are
 		// logged rather than sent as RunError (which would duplicate the terminal).
+		// Skip persistence when the SSE stream is dead (e.err != nil) — the client
+		// never received the interrupt, so persisting it would leave the thread in
+		// a state requiring resume for an interrupt the client never saw.
 		switch {
+		case e.err != nil:
+			log.Printf("agui: SSE stream error; skipping interrupt persistence: %v", e.err)
 		case len(state.emittedInterrupts) > 0:
 			if err := l.persistPendingInterrupts(ctx, userID, sessionID, state.emittedInterrupts); err != nil {
 				log.Printf("agui: failed to persist pending interrupts: %v", err)

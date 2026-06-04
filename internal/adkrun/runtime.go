@@ -159,6 +159,17 @@ func (rt *Runtime) RunSSE(ctx context.Context, req RunRequest) (string, iter.Seq
 		opts = append(opts, runner.WithStateDelta(req.StateDelta))
 	}
 
+	// TODO(adk-invocation-resume): When google.golang.org/adk/runner exposes invocation
+	// resume (e.g. runner.WithInvocationID), pass req.InvocationID into
+	// icontext.NewInvocationContext so confirmation resume continues the same ADK
+	// invocation per https://adk.dev/tools-custom/confirmation/ and
+	// https://adk.dev/runtime/resume/. Today runner.Run always allocates a new
+	// e-<uuid> invocation even when req.InvocationID is set.
+	if req.InvocationID != "" {
+		// Reserved for future wiring; stored on RunRequest for launcher/clients now.
+		_ = req.InvocationID
+	}
+
 	msg := req.NewMessage
 	msg.Parts = slices.Clone(req.NewMessage.Parts)
 	return sessionID, r.Run(ctx, req.UserID, sessionID, &msg, runCfg, opts...), nil

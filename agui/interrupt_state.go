@@ -11,6 +11,7 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool/toolconfirmation"
 )
 
 // pendingInterruptsStateKey is the ADK session state key used to persist open
@@ -26,6 +27,8 @@ type pendingInterruptRecord struct {
 	Reason         string         `json:"reason"`
 	ExpiresAt      string         `json:"expiresAt,omitempty"`
 	ResponseSchema map[string]any `json:"responseSchema,omitempty"`
+	// InvocationID is the ADK invocation that emitted adk_request_confirmation (for future resume).
+	InvocationID string `json:"invocationId,omitempty"`
 }
 
 // toolConfirmationResponseSchema returns the JSON Schema advertised to clients
@@ -55,9 +58,104 @@ func pendingRecordsFromInterrupts(interrupts []types.Interrupt) []pendingInterru
 			Reason:         intr.Reason,
 			ExpiresAt:      intr.ExpiresAt,
 			ResponseSchema: intr.ResponseSchema,
+			InvocationID:   invocationIDFromInterruptMetadata(intr.Metadata),
 		}
 	}
 	return out
+}
+
+// invocationIDFromInterruptMetadata reads metadata.adk.invocationId from an AG-UI interrupt.
+func invocationIDFromInterruptMetadata(metadata map[string]any) string {
+	if metadata == nil {
+		return ""
+	}
+	adkMeta, ok := metadata["adk"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	id, _ := adkMeta["invocationId"].(string)
+	return id
+}
+
+// invocationIDFromPendingInterrupts returns the invocation id for the first resume entry
+// that matches a pending interrupt record with a non-empty InvocationID.
+func invocationIDFromPendingInterrupts(pending []pendingInterruptRecord, entries []types.ResumeEntry) string {
+	if len(pending) == 0 || len(entries) == 0 {
+		return ""
+	}
+	byID := make(map[string]pendingInterruptRecord, len(pending))
+	for _, p := range pending {
+		byID[p.ID] = p
+	}
+	for _, entry := range entries {
+		if entry.InterruptID == "" {
+			continue
+		}
+		if rec, ok := byID[entry.InterruptID]; ok && rec.InvocationID != "" {
+			return rec.InvocationID
+		}
+	}
+	return ""
+}
+
+// invocationIDFromClientState reads state.adk.invocationId from RunAgentInput.state.
+func invocationIDFromClientState(state any) string {
+	stateMap, ok := state.(map[string]any)
+	if !ok || stateMap == nil {
+		return ""
+	}
+	adkMeta, ok := stateMap["adk"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	id, _ := adkMeta["invocationId"].(string)
+	return id
+}
+
+// confirmationInvocationIndex builds a confirmationCallID → invocationID map
+// from session events in a single pass.
+func confirmationInvocationIndex(sess session.Session) map[string]string {
+	if sess == nil {
+		return nil
+	}
+	var idx map[string]string
+	for ev := range sess.Events().All() {
+		if ev == nil || ev.Content == nil || ev.InvocationID == "" {
+			continue
+		}
+		for _, part := range ev.Content.Parts {
+			if part == nil || part.FunctionCall == nil {
+				continue
+			}
+			if part.FunctionCall.Name == toolconfirmation.FunctionCallName && part.FunctionCall.ID != "" {
+				if idx == nil {
+					idx = make(map[string]string)
+				}
+				idx[part.FunctionCall.ID] = ev.InvocationID
+			}
+		}
+	}
+	return idx
+}
+
+// resolveInvocationIDForResume picks an invocation id for a confirmation resume run.
+func resolveInvocationIDForResume(pending []pendingInterruptRecord, entries []types.ResumeEntry, clientState any, sess session.Session) string {
+	if id := invocationIDFromPendingInterrupts(pending, entries); id != "" {
+		return id
+	}
+	if id := invocationIDFromClientState(clientState); id != "" {
+		return id
+	}
+	idx := confirmationInvocationIndex(sess)
+	for _, entry := range entries {
+		if entry.InterruptID == "" {
+			continue
+		}
+		if id, ok := idx[entry.InterruptID]; ok {
+			return id
+		}
+	}
+	return ""
 }
 
 // getSession loads an ADK session by app/user/session id. Returns a nil

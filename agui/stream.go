@@ -85,6 +85,45 @@ type streamState struct {
 	emittedReasoningLen       int               // bytes of reasoning already emitted; used to compute deltas from accumulated partials
 	runFinalized              bool              // true once RunFinished or RunError has been emitted
 	emittedInterrupts         []types.Interrupt // interrupts emitted this run; persisted to session state
+	emittedToolCallArgsJSON   map[string]string // toolCallID -> args JSON from last successful lifecycle emission
+}
+
+// emitToolCallLifecycle emits TOOL_CALL_START/ARGS/END for a tool proposal.
+//
+// Duplicate streaming events with the same toolCallID are skipped only when args
+// match (canonical JSON). Different args for the same ID emit another lifecycle so
+// clients see the latest proposal. Empty toolCallID is never deduplicated (avoids
+// unrelated calls sharing one bucket). Args are marshaled before any SSE write;
+// the dedup map is updated only after all three emits succeed (no e.err).
+func emitToolCallLifecycle(e *emitter, state *streamState, toolCallID, toolCallName string, args map[string]any, startOpts []events.ToolCallStartOption) error {
+	if strings.TrimSpace(toolCallID) == "" {
+		return fmt.Errorf("function call missing toolCallId")
+	}
+
+	argsJSON, err := marshalPooled(args)
+	if err != nil {
+		return fmt.Errorf("failed to marshal function call args: %w", err)
+	}
+
+	if state.emittedToolCallArgsJSON != nil {
+		if prev, ok := state.emittedToolCallArgsJSON[toolCallID]; ok && prev == argsJSON {
+			return nil
+		}
+	}
+
+	e.emit(events.NewToolCallStartEvent(toolCallID, toolCallName, startOpts...))
+	e.emit(events.NewToolCallArgsEvent(toolCallID, argsJSON))
+	e.emit(events.NewToolCallEndEvent(toolCallID))
+
+	if e.err != nil {
+		return e.err
+	}
+
+	if state.emittedToolCallArgsJSON == nil {
+		state.emittedToolCallArgsJSON = make(map[string]string)
+	}
+	state.emittedToolCallArgsJSON[toolCallID] = argsJSON
+	return nil
 }
 
 // processEvent maps a single ADK session.Event to the corresponding AG-UI SSE events.
@@ -93,8 +132,8 @@ type streamState struct {
 //   - Reasoning: ReasoningStart -> ReasoningMessageStart -> ReasoningMessageContent* -> ReasoningMessageEnd -> ReasoningEnd
 //   - Sub-agent steps: StepStarted -> StepFinished (triggered by Author changes)
 //
-// Tool calls are emitted atomically (Start+Args+End) because ADK provides
-// complete function call args in a single event, not incrementally.
+// Tool calls are emitted atomically (Start+Args+End); duplicate partials with the
+// same toolCallID and args are skipped; same ID with different args re-emits.
 //
 // Returns (done, err). When done is true the run has been finalized (e.g. an
 // interrupt was emitted) and the caller should stop processing events.
@@ -212,28 +251,19 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 				// Pending validation in interrupt_state.go may need reason-specific schema rules.
 				// See https://docs.ag-ui.com/concepts/interrupts#reason-taxonomy
 				if part.FunctionCall.Name == toolconfirmation.FunctionCallName {
-					if err := l.emitInterrupt(e, state, part.FunctionCall); err != nil {
+					if err := l.emitInterrupt(e, state, part.FunctionCall, ev.InvocationID); err != nil {
 						return false, err
 					}
 					return true, nil
 				}
 
-				// Link tool call to the preceding text message if one exists.
 				var opts []events.ToolCallStartOption
 				if state.lastTextMessageID != "" {
 					opts = append(opts, events.WithParentMessageID(state.lastTextMessageID))
 				}
-				e.emit(events.NewToolCallStartEvent(part.FunctionCall.ID, part.FunctionCall.Name, opts...))
-
-				argsJSON, err := marshalPooled(part.FunctionCall.Args)
-				if err != nil {
-					return false, fmt.Errorf("failed to marshal function call args: %w", err)
+				if err := emitToolCallLifecycle(e, state, part.FunctionCall.ID, part.FunctionCall.Name, part.FunctionCall.Args, opts); err != nil {
+					return false, err
 				}
-				e.emit(events.NewToolCallArgsEvent(part.FunctionCall.ID, argsJSON))
-
-				// ToolCallEnd signals the invocation description is complete,
-				// not that the tool finished executing.
-				e.emit(events.NewToolCallEndEvent(part.FunctionCall.ID))
 				continue
 			}
 
@@ -324,43 +354,27 @@ func closeReasoningMessage(e *emitter, state *streamState) {
 //
 // The resumed run should not re-emit tool call lifecycle events; ADK continues
 // after the client sends a FunctionResponse via [resumeEntriesToConfirmationContent].
-func (l *aguiLauncher) emitInterrupt(e *emitter, state *streamState, fc *genai.FunctionCall) error {
+func (l *aguiLauncher) emitInterrupt(e *emitter, state *streamState, fc *genai.FunctionCall, invocationID string) error {
 	originalCall, err := toolconfirmation.OriginalCallFrom(fc)
 	if err != nil {
 		return fmt.Errorf("failed to extract original call from confirmation: %w", err)
 	}
 
-	// Extract confirmation hint from the wrapper's args.
-	var hintMessage string
-	if tcRaw, ok := fc.Args["toolConfirmation"]; ok {
-		switch v := tcRaw.(type) {
-		case map[string]any:
-			if h, ok := v["hint"].(string); ok {
-				hintMessage = h
-			}
-		case *toolconfirmation.ToolConfirmation:
-			hintMessage = v.Hint
-		}
-	}
+	tc, tcErr := extractToolConfirmation(fc)
+	hintMessage := tc.Hint
 
 	// Close all open lifecycle events before the interrupt terminal event.
 	finalizeLifecycle(e, state)
 
-	// Emit ToolCall events for the original tool (the agent's proposal).
-	// Per the AG-UI spec ("Tool-bound interrupts"), the interrupted run
-	// emits ToolCallStart/Args/End; the resumed run emits ToolCallResult.
+	// Emit ToolCall events for the original tool (the agent's proposal) when not
+	// already emitted from earlier streaming events (duplicate partial FCs).
 	var startOpts []events.ToolCallStartOption
 	if state.lastTextMessageID != "" {
 		startOpts = append(startOpts, events.WithParentMessageID(state.lastTextMessageID))
 	}
-	e.emit(events.NewToolCallStartEvent(originalCall.ID, originalCall.Name, startOpts...))
-
-	argsJSON, err := marshalPooled(originalCall.Args)
-	if err != nil {
-		return fmt.Errorf("failed to marshal original function call args: %w", err)
+	if err := emitToolCallLifecycle(e, state, originalCall.ID, originalCall.Name, originalCall.Args, startOpts); err != nil {
+		return err
 	}
-	e.emit(events.NewToolCallArgsEvent(originalCall.ID, argsJSON))
-	e.emit(events.NewToolCallEndEvent(originalCall.ID))
 
 	// AG-UI spec: emit snapshots before interrupt RunFinished so clients can resume
 	// from persisted state and message history (see docs.ag-ui.com/concepts/interrupts).
@@ -377,6 +391,26 @@ func (l *aguiLauncher) emitInterrupt(e *emitter, state *streamState, fc *genai.F
 		}
 	}
 
+	adkMeta := map[string]any{
+		"confirmationCallId":   fc.ID,
+		"confirmationCallName": toolconfirmation.FunctionCallName,
+	}
+	if invocationID != "" {
+		adkMeta["invocationId"] = invocationID
+	}
+	if tc.Payload != nil {
+		adkMeta["confirmationPayload"] = tc.Payload
+	}
+	interruptMeta := map[string]any{
+		"adk": adkMeta,
+	}
+	if hintMessage != "" {
+		interruptMeta["hitl"] = map[string]any{"summary": hintMessage}
+	}
+	if tcErr != nil {
+		log.Printf("agui: emitInterrupt: extractToolConfirmation: %v", tcErr)
+	}
+
 	// interrupt.id doubles as ADK confirmation call id for resume correlation.
 	interrupt := types.Interrupt{
 		ID:             fc.ID,
@@ -384,12 +418,7 @@ func (l *aguiLauncher) emitInterrupt(e *emitter, state *streamState, fc *genai.F
 		Message:        hintMessage,
 		ToolCallID:     originalCall.ID,
 		ResponseSchema: toolConfirmationResponseSchema(),
-		Metadata: map[string]any{
-			"adk": map[string]any{
-				"confirmationCallId":   fc.ID,
-				"confirmationCallName": toolconfirmation.FunctionCallName,
-			},
-		},
+		Metadata:       interruptMeta,
 	}
 
 	// Build and emit RunFinished with interrupt outcome.
@@ -398,6 +427,9 @@ func (l *aguiLauncher) emitInterrupt(e *emitter, state *streamState, fc *genai.F
 		state.runID,
 		events.WithInterruptOutcome([]types.Interrupt{interrupt}),
 	))
+	if e.err != nil {
+		return e.err
+	}
 	state.emittedInterrupts = append(state.emittedInterrupts, interrupt)
 	state.runFinalized = true
 	return nil
@@ -421,4 +453,51 @@ func marshalPooled(v any) (string, error) {
 		return "", err
 	}
 	return strings.TrimSuffix(buf.String(), "\n"), nil
+}
+
+// extractToolConfirmation reads toolConfirmation from an adk_request_confirmation
+// FunctionCall. Production ADK/session paths may store Args values as maps,
+// structs, or other JSON-decoded shapes; JSON round-trip handles them uniformly.
+func extractToolConfirmation(fc *genai.FunctionCall) (toolconfirmation.ToolConfirmation, error) {
+	if fc == nil || fc.Args == nil {
+		return toolconfirmation.ToolConfirmation{}, fmt.Errorf("function call or args is nil")
+	}
+	raw, ok := fc.Args["toolConfirmation"]
+	if !ok {
+		return toolconfirmation.ToolConfirmation{}, fmt.Errorf("toolConfirmation missing from confirmation call")
+	}
+
+	switch v := raw.(type) {
+	case *toolconfirmation.ToolConfirmation:
+		if v != nil {
+			return *v, nil
+		}
+		return toolconfirmation.ToolConfirmation{}, fmt.Errorf("toolConfirmation is nil")
+	case toolconfirmation.ToolConfirmation:
+		return v, nil
+	case map[string]any:
+		return decodeToolConfirmationMap(v)
+	}
+
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return toolconfirmation.ToolConfirmation{}, fmt.Errorf("marshal toolConfirmation: %w", err)
+	}
+	var tc toolconfirmation.ToolConfirmation
+	if err := json.Unmarshal(b, &tc); err != nil {
+		return toolconfirmation.ToolConfirmation{}, fmt.Errorf("unmarshal toolConfirmation: %w", err)
+	}
+	return tc, nil
+}
+
+func decodeToolConfirmationMap(m map[string]any) (toolconfirmation.ToolConfirmation, error) {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return toolconfirmation.ToolConfirmation{}, err
+	}
+	var tc toolconfirmation.ToolConfirmation
+	if err := json.Unmarshal(b, &tc); err != nil {
+		return toolconfirmation.ToolConfirmation{}, err
+	}
+	return tc, nil
 }
