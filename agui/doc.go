@@ -33,6 +33,7 @@
 //	{path_prefix}/threads/{threadId}             GET    — single thread metadata (authenticated, WithThreadService)
 //	{path_prefix}/threads/{threadId}             DELETE — delete a thread (authenticated, WithThreadService)
 //	{path_prefix}/threads                        GET    — thread listing with metadata (authenticated, WithThreadService)
+//	{path_prefix}/agents/state                   POST   — on-demand state and message history (authenticated, WithAgentStateEndpoint)
 //
 // When CORS is enabled via WithCORS, OPTIONS preflight is handled for the registered
 // routes in addition to POST and GET.
@@ -55,6 +56,9 @@
 //   - WithCapabilities — expose GET /capabilities for client discovery (see below).
 //   - WithGenAIPartConverter — customize how [genai.Part] values map to AG-UI events.
 //   - WithThreadService — enable thread metadata tracking and GET /threads listing.
+//   - WithMessagesSnapshotOnRunEnd — emit MESSAGES_SNAPSHOT before RunFinished on every successful run.
+//   - WithPredictState — emit PredictState custom events for CopilotKit real-time state preview.
+//   - WithAgentStateEndpoint — register POST /agents/state for on-demand state retrieval.
 //
 // CLI flags (after the "agui" keyword on the web command line):
 //
@@ -208,6 +212,96 @@
 // handles OPTIONS preflight. When AllowCredentials is true, the middleware echoes the
 // request Origin instead of using "*", per the CORS specification.
 //
+// # Client-side tools
+//
+// AG-UI clients like CopilotKit can define tools on the frontend (e.g. via
+// useCopilotAction) and send their definitions in [types.RunAgentInput.Tools].
+// The launcher supports these through the [clienttool] sub-package.
+//
+// To enable client-side tools, the agent must include a [clienttool.Toolset] in
+// its toolset list:
+//
+//	agent, _ := llmagent.New(llmagent.Config{
+//	    Name: "my_agent",
+//	    Toolsets: []tool.Toolset{
+//	        clienttool.NewToolset(),  // enables frontend-defined tools
+//	    },
+//	    Tools: []tool.Tool{
+//	        // ... server-side tools as usual
+//	    },
+//	})
+//
+// The data flow for a client-side tool call:
+//
+//  1. Client sends RunAgentInput with tool definitions in Tools[].
+//  2. Launcher injects definitions into session state via StateDelta.
+//  3. ADK calls [clienttool.Toolset.Tools], which reads state and creates proxy tools.
+//  4. LLM sees the tools in its schema and may call one.
+//  5. Proxy tool returns {"status": "pending"} — ADK emits the function call event.
+//  6. Launcher maps the event to TOOL_CALL_START/ARGS/END on the SSE stream.
+//  7. Run finishes. Client executes the tool locally.
+//  8. Client sends a new RunAgentInput with the result as a tool-role message
+//     (role "tool", toolCallId, and the result content).
+//  9. Launcher detects trailing tool messages, converts them to FunctionResponse
+//     parts, and starts a new ADK run with the responses.
+//  10. ADK processes the FunctionResponse and continues the conversation.
+//
+// Tool definitions with empty names are silently skipped. Duplicate names are
+// deduplicated (first wins). The "pending" FunctionResponse from proxy tools is
+// filtered from the SSE stream — clients never see it as a ToolCallResult.
+//
+// When using [WithCapabilities], tools.clientProvided is automatically set to
+// true via [MergeClientToolCapabilities].
+//
+// # Predictive state
+//
+// [WithPredictState] enables real-time state preview for CopilotKit's
+// useCoAgentStateRender. When a tool call matches a configured
+// [PredictStateMapping], a "PredictState" [CustomEvent] is emitted on the SSE
+// stream before the tool call events. This tells the UI to optimistically update
+// a state key from the tool's streaming arguments.
+//
+//	agui.NewLauncher("my-agent",
+//	    agui.WithPredictState(agui.PredictStateMapping{
+//	        StateKey:     "document",
+//	        Tool:         "write_document",
+//	        ToolArgument: "content",
+//	    }),
+//	)
+//
+// PredictState is emitted once per tool name per run. A second call to the same
+// tool in one run does not re-emit the event. This matches the Python ADK
+// middleware behaviour.
+//
+// # Agent state endpoint
+//
+// [WithAgentStateEndpoint] registers POST {path_prefix}/agents/state, which
+// returns thread state and message history without starting a new agent run.
+// Used by CopilotKit's useCoAgentState for on-demand state retrieval.
+//
+// Request body: {"threadId": "..."}. Identity is resolved from IAM
+// authentication (same as /run_sse).
+//
+// Response:
+//
+//	{
+//	    "threadId": "...",
+//	    "threadExists": true,
+//	    "state": { ... },
+//	    "messages": [ ... ]
+//	}
+//
+// When the thread does not exist, threadExists is false and state/messages are
+// empty. Load failures return HTTP 500.
+//
+// # Messages snapshot at run end
+//
+// [WithMessagesSnapshotOnRunEnd] emits a MESSAGES_SNAPSHOT event before
+// RunFinished on every successful (non-interrupt) run. Without this option,
+// message snapshots are only emitted at interrupt boundaries (always). Enable
+// this for AG-UI clients that rely on complete message history without
+// maintaining their own from TEXT_MESSAGE_* streaming events.
+//
 // # Protocol dependencies
 //
 // Streaming and event types come from the AG-UI community Go SDK
@@ -228,6 +322,6 @@
 // server-side (not re-emitted as RunError, which would violate the
 // single-terminal-event protocol rule). Use
 // [WithCapabilities] or [DefaultInterruptCapabilities] to advertise
-// humanInTheLoop.interrupts and approveWithEdits. It does not register ADK tools
-// or plugins; it only mounts HTTP endpoints and maps ADK execution to AG-UI SSE.
+// humanInTheLoop.interrupts and approveWithEdits. Client-side tools require
+// agent opt-in via [clienttool.NewToolset]; see the Client-side tools section.
 package agui

@@ -79,8 +79,8 @@ func buildStateSnapshot(sess session.Session, reqState map[string]any) map[strin
 }
 
 // buildMessagesSnapshot converts ADK session history to AG-UI messages for
-// MESSAGES_SNAPSHOT events. Today only interrupt boundaries emit them; see
-// TODO(messages-snapshot-run-start) in agui.go for possible run-start emission.
+// MESSAGES_SNAPSHOT events. Emitted at interrupt boundaries (always) and
+// optionally at run end when WithMessagesSnapshotOnRunEnd is configured.
 func (l *aguiLauncher) buildMessagesSnapshot(ctx context.Context, sess session.Session) ([]types.Message, error) {
 	if sess == nil {
 		return nil, nil

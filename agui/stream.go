@@ -85,7 +85,9 @@ type streamState struct {
 	emittedReasoningLen       int               // bytes of reasoning already emitted; used to compute deltas from accumulated partials
 	runFinalized              bool              // true once RunFinished or RunError has been emitted
 	emittedInterrupts         []types.Interrupt // interrupts emitted this run; persisted to session state
-	emittedToolCallArgsJSON   map[string]string // toolCallID -> args JSON from last successful lifecycle emission
+	emittedToolCallArgsJSON   map[string]string           // toolCallID -> args JSON from last successful lifecycle emission
+	predictStateMappings      map[string][]PredictStateMapping // tool name -> mappings
+	emittedPredictStateTools  map[string]bool              // dedup per tool name, not per call — matches Python middleware; second call to same tool in one run won't re-emit
 }
 
 // emitToolCallLifecycle emits TOOL_CALL_START/ARGS/END for a tool proposal.
@@ -257,6 +259,9 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 					return true, nil
 				}
 
+				// Emit PredictState custom event before tool call when configured.
+				emitPredictStateIfConfigured(e, state, part.FunctionCall.Name)
+
 				var opts []events.ToolCallStartOption
 				if state.lastTextMessageID != "" {
 					opts = append(opts, events.WithParentMessageID(state.lastTextMessageID))
@@ -269,7 +274,12 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 
 			// Function response: emit ToolCallResult with the serialized response.
 			// Each result gets its own unique messageID (distinct from toolCallID).
+			// Skip "pending" responses from client proxy tools — these are
+			// internal LRO signals, not real results for the SSE stream.
 			if part.FunctionResponse != nil {
+				if isPendingProxyResponse(part.FunctionResponse.Response) {
+					continue
+				}
 				respJSON, err := marshalPooled(part.FunctionResponse.Response)
 				if err != nil {
 					return false, fmt.Errorf("failed to marshal function response: %w", err)
@@ -289,13 +299,18 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 	if len(ev.Actions.StateDelta) > 0 {
 		ops := make([]events.JSONPatchOperation, 0, len(ev.Actions.StateDelta))
 		for key, val := range ev.Actions.StateDelta {
+			if isInternalStateKey(key) {
+				continue
+			}
 			ops = append(ops, events.JSONPatchOperation{
 				Op:    "add",
 				Path:  "/" + escapeJSONPointer(key),
 				Value: val,
 			})
 		}
-		e.emit(events.NewStateDeltaEvent(ops))
+		if len(ops) > 0 {
+			e.emit(events.NewStateDeltaEvent(ops))
+		}
 	}
 
 	// On turn completion, close all open lifecycle events.
@@ -433,6 +448,44 @@ func (l *aguiLauncher) emitInterrupt(e *emitter, state *streamState, fc *genai.F
 	state.emittedInterrupts = append(state.emittedInterrupts, interrupt)
 	state.runFinalized = true
 	return nil
+}
+
+// emitPredictStateIfConfigured emits a "PredictState" CustomEvent when the
+// tool name matches a configured PredictStateMapping and hasn't been emitted
+// for this tool yet in this run.
+func emitPredictStateIfConfigured(e *emitter, state *streamState, toolName string) {
+	mappings, ok := state.predictStateMappings[toolName]
+	if !ok || len(mappings) == 0 {
+		return
+	}
+	if state.emittedPredictStateTools == nil {
+		state.emittedPredictStateTools = make(map[string]bool)
+	}
+	if state.emittedPredictStateTools[toolName] {
+		return
+	}
+	state.emittedPredictStateTools[toolName] = true
+
+	payload := make([]map[string]string, len(mappings))
+	for i, m := range mappings {
+		payload[i] = map[string]string{
+			"state_key":     m.StateKey,
+			"tool":          m.Tool,
+			"tool_argument": m.ToolArgument,
+		}
+	}
+	e.emit(events.NewCustomEvent("PredictState", events.WithValue(payload)))
+}
+
+// isPendingProxyResponse returns true when a FunctionResponse carries the
+// "pending" status emitted by client proxy tools. These internal LRO signals
+// should not be forwarded to the AG-UI client as ToolCallResult events.
+func isPendingProxyResponse(response map[string]any) bool {
+	if response == nil {
+		return false
+	}
+	status, _ := response["status"].(string)
+	return status == "pending"
 }
 
 // escapeJSONPointer escapes a key for use in a JSON Pointer path (RFC 6901).

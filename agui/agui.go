@@ -17,6 +17,7 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"go.alis.build/adk/launchers/agui/clienttool"
 	"go.alis.build/adk/launchers/internal/adkrun"
 	"go.alis.build/adk/launchers/internal/launcherutils"
 	launchersweb "go.alis.build/adk/launchers/web"
@@ -87,6 +88,16 @@ type AGUIConfig struct {
 	// threadService, when non-nil, enables thread metadata tracking and the
 	// GET /threads listing endpoint.
 	threadService *historyservice.ThreadService
+	// emitMessagesSnapshotOnRunEnd emits a MESSAGES_SNAPSHOT before RunFinished
+	// on successful (non-interrupt) runs when true. Interrupt boundaries always
+	// emit snapshots regardless of this flag.
+	emitMessagesSnapshotOnRunEnd bool
+	// predictStateMappings configures predictive state custom events. When a
+	// tool call matches a mapping, a PredictState CustomEvent is emitted before
+	// the tool call events.
+	predictStateMappings []PredictStateMapping
+	// enableAgentStateEndpoint registers POST {pathPrefix}/agents/state when true.
+	enableAgentStateEndpoint bool
 }
 
 // Option configures an [AGUIConfig] passed to [NewLauncher].
@@ -119,6 +130,7 @@ func WithCORS(cors CORSConfig) Option {
 func WithCapabilities(caps Capabilities) Option {
 	return func(c *AGUIConfig) {
 		MergeInterruptCapabilities(&caps)
+		MergeClientToolCapabilities(&caps)
 		c.capabilities = &caps
 	}
 }
@@ -150,6 +162,48 @@ func WithGenAIPartConverter(converter GenAIPartConverter) Option {
 func WithThreadService(svc *historyservice.ThreadService) Option {
 	return func(c *AGUIConfig) {
 		c.threadService = svc
+	}
+}
+
+// PredictStateMapping declares how a tool call argument should be mapped to
+// a state key for predictive state updates. When the LLM calls a tool matching
+// Tool, a "PredictState" CustomEvent is emitted before the tool call events,
+// telling the UI to optimistically render the state change.
+type PredictStateMapping struct {
+	// StateKey is the key in the AG-UI state to update.
+	StateKey string `json:"state_key"`
+	// Tool is the name of the tool that triggers this mapping.
+	Tool string `json:"tool"`
+	// ToolArgument is the argument from the tool call that provides the value.
+	ToolArgument string `json:"tool_argument"`
+}
+
+// WithMessagesSnapshotOnRunEnd enables emitting a MESSAGES_SNAPSHOT event
+// before RunFinished on every successful run (not just interrupt boundaries).
+// This is useful for AG-UI clients that rely on complete message history
+// without maintaining their own from TEXT_MESSAGE_* events.
+func WithMessagesSnapshotOnRunEnd() Option {
+	return func(c *AGUIConfig) {
+		c.emitMessagesSnapshotOnRunEnd = true
+	}
+}
+
+// WithPredictState configures predictive state updates. When a tool call
+// matches one of the mappings, a "PredictState" CustomEvent is emitted on
+// the SSE stream before the tool call events, enabling CopilotKit's
+// useCoAgentStateRender real-time state preview.
+func WithPredictState(mappings ...PredictStateMapping) Option {
+	return func(c *AGUIConfig) {
+		c.predictStateMappings = append(c.predictStateMappings, mappings...)
+	}
+}
+
+// WithAgentStateEndpoint registers POST {pathPrefix}/agents/state, which
+// returns thread state and message history without starting a new agent run.
+// Used by CopilotKit's useCoAgentState for on-demand state retrieval.
+func WithAgentStateEndpoint() Option {
+	return func(c *AGUIConfig) {
+		c.enableAgentStateEndpoint = true
 	}
 }
 
@@ -278,6 +332,13 @@ func (l *aguiLauncher) mountHostRoutes(config *launcher.Config) error {
 		alismux.Get(capsPath, l.capabilitiesFunc(), corsMW...)
 	}
 
+	// POST /agents/state — on-demand state and message history (optional).
+	if l.config.enableAgentStateEndpoint {
+		statePath := l.config.pathPrefix + "/agents/state"
+		l.registerCORSPreflight(statePath, "POST")
+		alismux.AuthenticatedPost(statePath, l.agentStateFunc(), corsMW...)
+	}
+
 	return nil
 }
 
@@ -292,6 +353,9 @@ func (l *aguiLauncher) UserMessage(webURL string, printer func(v ...any)) {
 	if l.config.capabilities != nil {
 		printer(fmt.Sprintf("       agui:  capabilities at %s%s/capabilities", webURL, l.config.pathPrefix))
 	}
+	if l.config.enableAgentStateEndpoint {
+		printer(fmt.Sprintf("       agui:  agent state at %s%s/agents/state", webURL, l.config.pathPrefix))
+	}
 }
 
 // capabilitiesFunc returns a [alismux.Func] that serves the agent's
@@ -303,6 +367,74 @@ func (l *aguiLauncher) capabilitiesFunc() alismux.Func {
 			http.Error(w, "failed to encode capabilities", http.StatusInternalServerError)
 		}
 		return nil
+	}
+}
+
+// agentStateRequest is the JSON request body for POST /agents/state.
+type agentStateRequest struct {
+	ThreadID string `json:"threadId"`
+}
+
+// agentStateResponse is the JSON response body for POST /agents/state.
+type agentStateResponse struct {
+	ThreadID     string         `json:"threadId"`
+	ThreadExists bool           `json:"threadExists"`
+	State        map[string]any `json:"state"`
+	Messages     []types.Message `json:"messages"`
+}
+
+// agentStateFunc returns a handler for POST /agents/state that returns
+// thread state and message history without starting a new agent run.
+func (l *aguiLauncher) agentStateFunc() alismux.Func {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		var req agentStateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return nil
+		}
+		defer r.Body.Close()
+
+		if req.ThreadID == "" {
+			http.Error(w, "threadId is required", http.StatusBadRequest)
+			return nil
+		}
+
+		ctx := r.Context()
+		userID := ""
+		if identity, err := iam.FromContext(ctx); err == nil && identity != nil {
+			userID = identity.ID
+		}
+		if userID == "" {
+			http.Error(w, "userID is required", http.StatusUnauthorized)
+			return nil
+		}
+
+		resp := agentStateResponse{
+			ThreadID: req.ThreadID,
+			State:    map[string]any{},
+			Messages: []types.Message{},
+		}
+
+		sess, ok, loadErr := l.loadSessionForSnapshot(ctx, userID, req.ThreadID)
+		if loadErr != nil {
+			log.Printf("agui: /agents/state: failed to load session for thread %s: %v", req.ThreadID, loadErr)
+			http.Error(w, "failed to load session", http.StatusInternalServerError)
+			return nil
+		}
+		if ok && sess != nil {
+			resp.ThreadExists = true
+			if snap := buildStateSnapshot(sess, nil); snap != nil {
+				resp.State = snap
+			}
+			if msgs, err := l.buildMessagesSnapshot(ctx, sess); err != nil {
+				log.Printf("agui: /agents/state: failed to build messages snapshot for thread %s: %v", req.ThreadID, err)
+			} else if len(msgs) > 0 {
+				resp.Messages = msgs
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		return json.NewEncoder(w).Encode(resp)
 	}
 }
 
@@ -423,6 +555,111 @@ func convertMultimodalInput(ic types.InputContent) (*genai.Part, error) {
 	return nil, fmt.Errorf("no data, url, or source available")
 }
 
+// contentToResponseMap normalises tool message content into the map[string]any
+// format expected by genai.FunctionResponse.Response. Handles string (optionally
+// JSON-encoded), map, and arbitrary values.
+func contentToResponseMap(content any) map[string]any {
+	switch v := content.(type) {
+	case map[string]any:
+		return v
+	case string:
+		if v == "" {
+			return map[string]any{}
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(v), &m); err == nil {
+			return m
+		}
+		return map[string]any{"result": v}
+	case nil:
+		return map[string]any{}
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return map[string]any{"result": fmt.Sprintf("%v", v)}
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			return map[string]any{"result": string(b)}
+		}
+		return m
+	}
+}
+
+// extractToolResultContent builds a genai.Content from tool-role messages in the
+// AG-UI message history. AG-UI clients send tool results as messages with
+// role "tool", toolCallId, and string content. Each is converted to a
+// genai.FunctionResponse part so ADK can process the tool result.
+//
+// The tool name is resolved by scanning preceding assistant messages for a
+// matching toolCallId in their toolCalls array. If no name is found, the
+// toolCallId is used as a fallback (ADK matches on ID, not name).
+func extractToolResultContent(messages []types.Message) (*genai.Content, error) {
+	// Build a map of toolCallId → tool name from assistant messages.
+	toolNames := make(map[string]string)
+	for _, m := range messages {
+		if m.Role != types.RoleAssistant {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			toolNames[tc.ID] = tc.Function.Name
+		}
+	}
+
+	// Only extract the trailing consecutive tool messages — these are the
+	// batch being submitted now. Earlier tool messages in the transcript are
+	// historical results that ADK already processed.
+	trailing := trailingToolMessages(messages)
+
+	var parts []*genai.Part
+	for _, m := range trailing {
+		name := toolNames[m.ToolCallID]
+		if name == "" {
+			name = m.ToolCallID
+		}
+
+		response := contentToResponseMap(m.Content)
+
+		parts = append(parts, &genai.Part{
+			FunctionResponse: &genai.FunctionResponse{
+				Name:     name,
+				ID:       m.ToolCallID,
+				Response: response,
+			},
+		})
+	}
+	if len(parts) == 0 {
+		return nil, nil
+	}
+	return genai.NewContentFromParts(parts, genai.RoleUser), nil
+}
+
+// isToolResultSubmission reports whether the trailing messages in the
+// transcript are tool-role results being submitted by the client.
+//
+// CopilotKit and most AG-UI clients send the full transcript on every run, so
+// historical tool results appear alongside new user messages. Checking only the
+// trailing messages avoids misrouting a normal user turn that happens to follow
+// an earlier tool round-trip.
+func isToolResultSubmission(messages []types.Message) bool {
+	return len(trailingToolMessages(messages)) > 0
+}
+
+// trailingToolMessages returns the consecutive run of role "tool" messages at
+// the end of the transcript. Returns nil when the transcript doesn't end with
+// tool results.
+func trailingToolMessages(messages []types.Message) []types.Message {
+	i := len(messages) - 1
+	for i >= 0 && messages[i].Role == types.RoleTool && messages[i].ToolCallID != "" {
+		i--
+	}
+	start := i + 1
+	if start >= len(messages) {
+		return nil
+	}
+	return messages[start:]
+}
+
 // extractLastUserMessage returns the latest user turn from an AG-UI message history.
 // Clients often send the full transcript; ADK session service already stores
 // history keyed by threadId, so only the newest user message is passed to adkrun.RunSSE.
@@ -492,6 +729,14 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		defer r.Body.Close()
 
 		state := &streamState{}
+
+		// Populate predictive state mappings indexed by tool name.
+		if len(l.config.predictStateMappings) > 0 {
+			state.predictStateMappings = make(map[string][]PredictStateMapping)
+			for _, m := range l.config.predictStateMappings {
+				state.predictStateMappings[m.Tool] = append(state.predictStateMappings[m.Tool], m)
+			}
+		}
 
 		// Use client-provided IDs when available; generate otherwise.
 		state.runID = req.RunID
@@ -631,12 +876,22 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		// Add run-start emission here if clients need full history on RunStarted without
 		// relying on prior interrupt snapshots or TEXT_MESSAGE_* streaming.
 
+		// Determine whether this is a tool-result submission (client-side
+		// tools returning results) vs a regular user message or resume.
+		isToolResultRun := !isResumeRun && isToolResultSubmission(req.Messages)
+
 		var msg *genai.Content
 		if isResumeRun {
 			// Map AG-UI resume[] → ADK adk_request_confirmation FunctionResponses.
 			msg, err = resumeEntriesToConfirmationContent(req.Resume)
 			if err != nil {
 				emitError(fmt.Errorf("invalid resume payload: %w", err))
+				return nil
+			}
+		} else if isToolResultRun {
+			msg, err = extractToolResultContent(req.Messages)
+			if err != nil {
+				emitError(fmt.Errorf("failed to extract tool results: %w", err))
 				return nil
 			}
 		} else {
@@ -657,6 +912,15 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		}
 		if stateMap, ok := req.State.(map[string]any); ok && len(stateMap) > 0 {
 			runReq.StateDelta = stateMap
+		}
+
+		// Inject AG-UI client tool definitions into the state delta so the
+		// clienttool.Toolset can read them at invocation time.
+		if len(req.Tools) > 0 {
+			if runReq.StateDelta == nil {
+				runReq.StateDelta = make(map[string]any)
+			}
+			runReq.StateDelta[clienttool.StateKey] = req.Tools
 		}
 		if isResumeRun {
 			var resumeSess session.Session
@@ -707,6 +971,16 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 
 		// Emit RunFinishedEvent only if no terminal event (RunError) was already sent.
 		if !state.runFinalized {
+			// Optionally emit messages snapshot before RunFinished for clients
+			// that need full history (e.g. CopilotKit).
+			if l.config.emitMessagesSnapshotOnRunEnd {
+				if sess, ok, err := l.loadSessionForSnapshot(ctx, userID, sessionID); err == nil && ok {
+					if msgs, err := l.buildMessagesSnapshot(ctx, sess); err == nil {
+						emitMessagesSnapshotIfNonEmpty(e, msgs)
+					}
+				}
+			}
+
 			e.emit(events.NewRunFinishedEventWithOptions(
 				state.threadID,
 				state.runID,

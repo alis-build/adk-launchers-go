@@ -3,7 +3,7 @@ module go.alis.build/adk/launchers
 go 1.26.1
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260604052614-0947e87c7727
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260605062135-720c1db0fa62
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	go.alis.build/a2a/extension/scheduler v1.2.4
@@ -32,7 +32,7 @@ require (
 	cloud.google.com/go/scheduler v1.16.0 // indirect
 	cloud.google.com/go/spanner v1.91.0 // indirect
 	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.6.0 // indirect
-	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.32.0 // indirect
+	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.33.0 // indirect
 	github.com/a2aproject/a2a-go/v2 v2.3.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

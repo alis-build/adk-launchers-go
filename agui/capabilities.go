@@ -152,6 +152,18 @@ func MergeInterruptCapabilities(caps *Capabilities) {
 	}
 }
 
+// MergeClientToolCapabilities ensures tools.clientProvided is set to true when
+// left unset. Call this when the agent supports AG-UI client-side tools
+// (i.e. it includes a clienttool.Toolset).
+func MergeClientToolCapabilities(caps *Capabilities) {
+	if caps.Tools == nil {
+		caps.Tools = &ToolsCapabilities{}
+	}
+	if caps.Tools.ClientProvided == nil {
+		caps.Tools.ClientProvided = new(true)
+	}
+}
+
 // DefaultInterruptCapabilities returns a minimal [Capabilities] value suitable
 // for agents that only need to advertise AG-UI interrupt resume for ADK tool
 // confirmations. Combine with other capability structs via manual field assignment

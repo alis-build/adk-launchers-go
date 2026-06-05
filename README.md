@@ -9,6 +9,7 @@ Use this repository when you need extra capabilities beyond the core ADK launche
 | Package                            | CLI keyword | Purpose                                                                                                        |
 | ---------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
 | [`agui`](./agui) | `agui` | [AG-UI](https://docs.ag-ui.com) SSE endpoint for CopilotKit and other AG-UI clients |
+| [`agui/clienttool`](./agui/clienttool) | — | Dynamic `tool.Toolset` for AG-UI client-side tools (agent opt-in, used with `agui`) |
 | [`lro`](./lro)   | `lro`  | HTTP resume routes for [go.alis.build/lro/v2](https://pkg.go.dev/go.alis.build/lro/v2) long-running operations |
 | [`scheduler`](./scheduler) | `scheduler` | [A2A scheduler](https://pkg.go.dev/go.alis.build/a2a/extension/scheduler) cron JSON-RPC and Cloud Tasks callback (in-process ADK runner) |
 
