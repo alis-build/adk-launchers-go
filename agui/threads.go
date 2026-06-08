@@ -74,8 +74,14 @@ func (l *aguiLauncher) threadMessagesFunc() alismux.Func {
 			limit = n
 		}
 
+		appName, appNameErr := resolveAppNameFromSources(l, l.launcherCfg, nil, nil, r.URL.Query().Get("agentId"))
+		if appNameErr != nil {
+			http.Error(w, appNameErr.Error(), http.StatusBadRequest)
+			return nil
+		}
+
 		getReq := &session.GetRequest{
-			AppName:   l.config.appName,
+			AppName:   appName,
 			UserID:    userID,
 			SessionID: threadID,
 		}
@@ -317,7 +323,7 @@ func (l *aguiLauncher) listThreadsFunc() alismux.Func {
 
 // upsertThreadMetadata creates or updates thread metadata via the ThreadService.
 // Best-effort: failures are logged, not returned as errors.
-func (l *aguiLauncher) upsertThreadMetadata(ctx context.Context, identity *iam.Identity, threadID string, req *types.RunAgentInput) {
+func (l *aguiLauncher) upsertThreadMetadata(ctx context.Context, identity *iam.Identity, threadID, agentID string, req *types.RunAgentInput) {
 	var userText string
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role != types.RoleUser {
@@ -333,10 +339,11 @@ func (l *aguiLauncher) upsertThreadMetadata(ctx context.Context, identity *iam.I
 	// proto-defined RPC and has no dedicated constant. The method name is only
 	// used for identity extraction, not authorization.
 	svcCtx := injectGrpcMetadata(ctx, identity, pb.ThreadService_GetThread_FullMethodName)
+	displayName := agentDisplayName(l.launcherCfg, l.config.appName, agentID)
 	if err := l.config.threadService.CreateOrUpdateThread(svcCtx, &historyservice.CreateOrUpdateThreadRequest{
 		ThreadID:         threadID,
-		AgentID:          l.config.appName,
-		AgentDisplayName: l.config.appName,
+		AgentID:          agentID,
+		AgentDisplayName: displayName,
 		UserMessageText:  userText,
 	}); err != nil {
 		log.Printf("agui: thread metadata upsert failed for %s: %v", threadID, err)

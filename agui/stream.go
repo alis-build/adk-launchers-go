@@ -82,6 +82,7 @@ type streamState struct {
 	currentReasoningMessageID string            // active reasoning message within the phase, empty when none open
 	lastTextMessageID         string            // most recent closed text message, used as parentMessageID for tool calls
 	currentStepAuthor         string            // active sub-agent step, empty when at root agent
+	rootAppName               string            // resolved ADK app name for this run (step event filtering)
 	emittedReasoningLen       int               // bytes of reasoning already emitted; used to compute deltas from accumulated partials
 	runFinalized              bool              // true once RunFinished or RunError has been emitted
 	emittedInterrupts         []types.Interrupt // interrupts emitted this run; persisted to session state
@@ -141,12 +142,12 @@ func emitToolCallLifecycle(e *emitter, state *streamState, toolCallID, toolCallN
 // interrupt was emitted) and the caller should stop processing events.
 func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *streamState) (bool, error) {
 	// Emit step events when the active sub-agent changes.
-	// Root agent (l.config.appName) doesn't get step events.
+	// Root agent (state.rootAppName) doesn't get step events.
 	if ev.Author != "" && ev.Author != state.currentStepAuthor {
 		if state.currentStepAuthor != "" {
 			e.emit(events.NewStepFinishedEvent(state.currentStepAuthor))
 		}
-		if ev.Author != l.config.appName {
+		if ev.Author != state.rootAppName {
 			e.emit(events.NewStepStartedEvent(ev.Author))
 			state.currentStepAuthor = ev.Author
 		} else {
@@ -394,7 +395,7 @@ func (l *aguiLauncher) emitInterrupt(e *emitter, state *streamState, fc *genai.F
 	// AG-UI spec: emit snapshots before interrupt RunFinished so clients can resume
 	// from persisted state and message history (see docs.ag-ui.com/concepts/interrupts).
 	if state.runCtx != nil && state.userID != "" {
-		if sess, ok, err := l.loadSessionForSnapshot(state.runCtx, state.userID, state.threadID); err == nil && ok {
+		if sess, ok, err := l.loadSessionForSnapshot(state.runCtx, state.rootAppName, state.userID, state.threadID); err == nil && ok {
 			emitStateSnapshotIfNonEmpty(e, buildStateSnapshot(sess, state.reqState))
 			if msgs, err := l.buildMessagesSnapshot(state.runCtx, sess); err != nil {
 				log.Printf("agui: failed to build messages snapshot for interrupt: %v", err)

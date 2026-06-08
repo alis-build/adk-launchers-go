@@ -179,6 +179,7 @@ func (l *schedulerLauncher) SetupHostRoutes(config *adklauncher.Config) error {
 	l.setupOnce.Do(func() {
 		l.setupErr = l.mountHostRoutes(config)
 	})
+
 	return l.setupErr
 }
 

@@ -76,4 +76,10 @@
 //	hostmux.HandleGRPC(grpcServer)
 //
 // CLI: adk web --port 8080 api scheduler -app_name=my.agent
+//
+// # Multi-agent crons (TODO)
+//
+// Per-cron agent_id is not implemented yet (proto field + executeCron →
+// RunRequest.AppName + LoadAgent). Until then, all crons use the app name
+// passed to NewLauncher.
 package scheduler

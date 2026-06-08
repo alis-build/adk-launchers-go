@@ -21,8 +21,8 @@ func isInternalStateKey(key string) bool {
 // Returns (nil, false, nil) when the session does not exist or session service
 // is unset. Get errors are logged but treated as "session missing" because ADK
 // has no sentinel not-found error (see loadPendingInterrupts for rationale).
-func (l *aguiLauncher) loadSessionForSnapshot(ctx context.Context, userID, sessionID string) (session.Session, bool, error) {
-	sess, err := l.getSession(ctx, userID, sessionID)
+func (l *aguiLauncher) loadSessionForSnapshot(ctx context.Context, appName, userID, sessionID string) (session.Session, bool, error) {
+	sess, err := l.getSession(ctx, appName, userID, sessionID)
 	if err != nil {
 		log.Printf("agui: loadSessionForSnapshot: session.Get failed (treating as missing): %v", err)
 		return nil, false, nil
@@ -36,8 +36,8 @@ func (l *aguiLauncher) loadSessionForSnapshot(ctx context.Context, userID, sessi
 // ensureSessionForSnapshot returns an existing session or creates one so a run-start
 // StateSnapshot can be emitted before adkrun.RunSSE (AutoCreateSession otherwise runs
 // only inside the runner).
-func (l *aguiLauncher) ensureSessionForSnapshot(ctx context.Context, userID, sessionID string, initialState map[string]any) (session.Session, error) {
-	sess, ok, _ := l.loadSessionForSnapshot(ctx, userID, sessionID)
+func (l *aguiLauncher) ensureSessionForSnapshot(ctx context.Context, appName, userID, sessionID string, initialState map[string]any) (session.Session, error) {
+	sess, ok, _ := l.loadSessionForSnapshot(ctx, appName, userID, sessionID)
 	if ok {
 		return sess, nil
 	}
@@ -45,7 +45,7 @@ func (l *aguiLauncher) ensureSessionForSnapshot(ctx context.Context, userID, ses
 		return nil, nil
 	}
 	createResp, err := l.sessionService.Create(ctx, &session.CreateRequest{
-		AppName:   l.config.appName,
+		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessionID,
 		State:     initialState,

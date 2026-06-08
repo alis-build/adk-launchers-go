@@ -160,12 +160,12 @@ func resolveInvocationIDForResume(pending []pendingInterruptRecord, entries []ty
 
 // getSession loads an ADK session by app/user/session id. Returns a nil
 // session.Session (not an error) when the session service is unconfigured.
-func (l *aguiLauncher) getSession(ctx context.Context, userID, sessionID string) (session.Session, error) {
+func (l *aguiLauncher) getSession(ctx context.Context, appName, userID, sessionID string) (session.Session, error) {
 	if l.sessionService == nil {
 		return nil, nil
 	}
 	getResp, err := l.sessionService.Get(ctx, &session.GetRequest{
-		AppName:   l.config.appName,
+		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessionID,
 	})
@@ -187,8 +187,8 @@ func (l *aguiLauncher) getSession(ctx context.Context, userID, sessionID string)
 //
 // The only error returned is a decode failure on the stored records
 // (indicating data corruption, not a missing session).
-func (l *aguiLauncher) loadPendingInterrupts(ctx context.Context, userID, sessionID string) ([]pendingInterruptRecord, error) {
-	sess, err := l.getSession(ctx, userID, sessionID)
+func (l *aguiLauncher) loadPendingInterrupts(ctx context.Context, appName, userID, sessionID string) ([]pendingInterruptRecord, error) {
+	sess, err := l.getSession(ctx, appName, userID, sessionID)
 	if err != nil {
 		log.Printf("agui: loadPendingInterrupts: session.Get failed (treating as no pending): %v", err)
 		return nil, nil
@@ -234,8 +234,8 @@ func decodePendingInterruptRecords(raw any) ([]pendingInterruptRecord, error) {
 
 // writePendingInterruptsState updates session state via AppendEvent with a state
 // delta. ADK merges StateDelta into the session on append (see session.updateSessionState).
-func (l *aguiLauncher) writePendingInterruptsState(ctx context.Context, userID, sessionID string, records []pendingInterruptRecord) error {
-	sess, err := l.getSession(ctx, userID, sessionID)
+func (l *aguiLauncher) writePendingInterruptsState(ctx context.Context, appName, userID, sessionID string, records []pendingInterruptRecord) error {
+	sess, err := l.getSession(ctx, appName, userID, sessionID)
 	if err != nil {
 		return fmt.Errorf("load session for pending interrupts: %w", err)
 	}
@@ -252,14 +252,14 @@ func (l *aguiLauncher) writePendingInterruptsState(ctx context.Context, userID, 
 
 // persistPendingInterrupts saves interrupts emitted at the end of a run so the
 // next request on this thread can be validated against AG-UI resume rules.
-func (l *aguiLauncher) persistPendingInterrupts(ctx context.Context, userID, sessionID string, interrupts []types.Interrupt) error {
-	return l.writePendingInterruptsState(ctx, userID, sessionID, pendingRecordsFromInterrupts(interrupts))
+func (l *aguiLauncher) persistPendingInterrupts(ctx context.Context, appName, userID, sessionID string, interrupts []types.Interrupt) error {
+	return l.writePendingInterruptsState(ctx, appName, userID, sessionID, pendingRecordsFromInterrupts(interrupts))
 }
 
 // clearPendingInterrupts removes pending interrupt state after a successful
 // non-interrupt run (agent completed without pausing for user input).
-func (l *aguiLauncher) clearPendingInterrupts(ctx context.Context, userID, sessionID string) error {
-	return l.writePendingInterruptsState(ctx, userID, sessionID, nil)
+func (l *aguiLauncher) clearPendingInterrupts(ctx context.Context, appName, userID, sessionID string) error {
+	return l.writePendingInterruptsState(ctx, appName, userID, sessionID, nil)
 }
 
 // validateResumeAgainstPending enforces AG-UI interrupt contract rules when

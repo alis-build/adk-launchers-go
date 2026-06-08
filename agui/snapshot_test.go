@@ -56,7 +56,7 @@ func TestEnsureSessionForSnapshot_CreatesWhenMissing(t *testing.T) {
 	svc := session.InMemoryService()
 	l := newTestLauncher("test-app", svc)
 	ctx := context.Background()
-	sess, err := l.ensureSessionForSnapshot(ctx, "user-1", "thread-1", map[string]any{"init": true})
+	sess, err := l.ensureSessionForSnapshot(ctx, "test-app", "user-1", "thread-1", map[string]any{"init": true})
 	if err != nil {
 		t.Fatalf("ensureSessionForSnapshot() error = %v", err)
 	}

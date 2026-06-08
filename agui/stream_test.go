@@ -54,7 +54,7 @@ func parseSSEEvents(body string) []sseEvent {
 func TestProcessEvent_TextStreaming(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	// Partial event should emit TextMessageStart + TextMessageContent.
 	ev := session.NewEvent("inv1")
@@ -100,7 +100,7 @@ func TestProcessEvent_TextStreaming(t *testing.T) {
 func TestProcessEvent_TextStreaming_FinalSkipped(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	// Non-partial (final) text event should be skipped.
 	ev := session.NewEvent("inv1")
@@ -120,7 +120,7 @@ func TestProcessEvent_TextStreaming_FinalSkipped(t *testing.T) {
 func TestProcessEvent_ReasoningPhase(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.Content = &genai.Content{
@@ -150,7 +150,7 @@ func TestProcessEvent_ReasoningPhase(t *testing.T) {
 
 func TestProcessEvent_ReasoningToText_ClosesReasoning(t *testing.T) {
 	l := newTestLauncher("test-app")
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	// First: open a reasoning phase.
 	e1, _ := newTestEmitter()
@@ -330,7 +330,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			l := newTestLauncher("test-app")
 			e, rec := newTestEmitter()
-			state := &streamState{runID: "r1", threadID: "t1"}
+			state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 			if err := tt.run(t, l, e, state); err != nil {
 				t.Fatalf("run: %v", err)
@@ -360,7 +360,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 func TestProcessEvent_FunctionCall(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.Content = &genai.Content{
@@ -402,7 +402,7 @@ func TestProcessEvent_FunctionCall(t *testing.T) {
 func TestProcessEvent_FunctionResponse(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.Content = &genai.Content{
@@ -435,6 +435,7 @@ func TestProcessEvent_ConfirmationInterrupt_ClosesOpenStep(t *testing.T) {
 	state := &streamState{
 		runID:             "r1",
 		threadID:          "t1",
+		rootAppName:       "test-app",
 		currentStepAuthor: "sub-agent",
 	}
 
@@ -485,7 +486,7 @@ func TestProcessEvent_ConfirmationInterrupt_ClosesOpenStep(t *testing.T) {
 func TestProcessEvent_ConfirmationInterrupt(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.InvocationID = "e-test-invocation"
@@ -614,7 +615,7 @@ func countToolCallStarts(evts []sseEvent, toolCallID string) int {
 func TestProcessEvent_ConfirmationInterrupt_TypedHint(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.Content = &genai.Content{
@@ -660,7 +661,7 @@ func TestProcessEvent_ConfirmationInterrupt_TypedHint(t *testing.T) {
 func TestProcessEvent_StateDelta(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.Actions.StateDelta["count"] = 42
@@ -681,7 +682,7 @@ func TestProcessEvent_StateDelta(t *testing.T) {
 
 func TestProcessEvent_TurnComplete(t *testing.T) {
 	l := newTestLauncher("test-app")
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	// Open a text message.
 	e1, _ := newTestEmitter()
@@ -739,7 +740,7 @@ func TestProcessEvent_TurnComplete(t *testing.T) {
 func TestProcessEvent_StepEvents(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1"}
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 	// Sub-agent event should emit StepStarted.
 	ev := session.NewEvent("inv1")
@@ -783,7 +784,7 @@ func TestProcessEvent_GenAIPartConverter(t *testing.T) {
 			return []events.Event{events.NewRunErrorEvent("custom")}, nil
 		}
 		e, rec := newTestEmitter()
-		state := &streamState{runID: "r1", threadID: "t1"}
+		state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 		ev := session.NewEvent("inv1")
 		ev.Content = genai.NewContentFromText("text", genai.RoleModel)
@@ -808,7 +809,7 @@ func TestProcessEvent_GenAIPartConverter(t *testing.T) {
 			return nil, nil
 		}
 		e, rec := newTestEmitter()
-		state := &streamState{runID: "r1", threadID: "t1"}
+		state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
 		ev := session.NewEvent("inv1")
 		ev.Content = genai.NewContentFromText("text", genai.RoleModel)
@@ -869,7 +870,8 @@ func TestProcessEvent_ConfirmationInterrupt_EmitsSnapshots(t *testing.T) {
 	e, rec := newTestEmitter()
 	state := &streamState{
 		runID: "r1", threadID: "t1", userID: "user-1", runCtx: ctx,
-		reqState: map[string]any{"ui": "panel"},
+		rootAppName: "test-app",
+		reqState:    map[string]any{"ui": "panel"},
 	}
 
 	ev := session.NewEvent("inv1")
@@ -992,7 +994,7 @@ func TestInterrupt_PersistFailure_NoDoubleTerminal(t *testing.T) {
 	}
 
 	// Simulate what runSSEFunc does after the event loop: persist fails.
-	persistErr := l.persistPendingInterrupts(ctx, "user-1", "t1", state.emittedInterrupts)
+	persistErr := l.persistPendingInterrupts(ctx, "test-app", "user-1", "t1", state.emittedInterrupts)
 	if persistErr == nil {
 		t.Fatal("expected persist to fail with failAppendService")
 	}

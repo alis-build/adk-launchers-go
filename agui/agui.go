@@ -21,6 +21,7 @@ import (
 	"go.alis.build/adk/launchers/internal/adkrun"
 	"go.alis.build/adk/launchers/internal/launcherutils"
 	launchersweb "go.alis.build/adk/launchers/web"
+	historyjsonrpc "go.alis.build/agui/history/jsonrpc"
 	historyservice "go.alis.build/agui/history/service"
 	"go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
@@ -98,6 +99,10 @@ type AGUIConfig struct {
 	predictStateMappings []PredictStateMapping
 	// enableAgentStateEndpoint registers POST {pathPrefix}/agents/state when true.
 	enableAgentStateEndpoint bool
+	// appNameResolver optionally extracts app name from RunAgentInput before state/context.
+	appNameResolver AppNameResolver
+	// historyJSONRPCOpts are forwarded to history jsonrpc.Register when WithThreadService is set.
+	historyJSONRPCOpts []historyjsonrpc.JSONRPCHandlerOption
 }
 
 // Option configures an [AGUIConfig] passed to [NewLauncher].
@@ -213,6 +218,7 @@ type aguiLauncher struct {
 	flags          *flag.FlagSet
 	config         *AGUIConfig
 	runtime        *adkrun.Runtime
+	launcherCfg    *launcher.Config
 	sessionService session.Service // used for pending-interrupt persistence across runs
 
 	hostSetupOnce sync.Once
@@ -298,6 +304,7 @@ func (l *aguiLauncher) mountHostRoutes(config *launcher.Config) error {
 		return fmt.Errorf("failed to create ADK runtime: %w", err)
 	}
 	l.runtime = rt
+	l.launcherCfg = config
 	l.sessionService = config.SessionService
 
 	// Build the CORS middleware once (nil slice when CORS is not configured).
@@ -312,6 +319,8 @@ func (l *aguiLauncher) mountHostRoutes(config *launcher.Config) error {
 	messagesPath := l.config.pathPrefix + "/threads/{threadId}/messages"
 	l.registerCORSPreflight(messagesPath, "GET")
 	alismux.AuthenticatedGet(messagesPath, l.threadMessagesFunc(), corsMW...)
+
+	l.registerHistoryJSONRPC()
 
 	// Thread metadata endpoints (optional, requires WithThreadService).
 	if l.config.threadService != nil {
@@ -349,6 +358,7 @@ func (l *aguiLauncher) UserMessage(webURL string, printer func(v ...any)) {
 	if l.config.threadService != nil {
 		printer(fmt.Sprintf("       agui:  thread detail at %s%s/threads/{threadId}", webURL, l.config.pathPrefix))
 		printer(fmt.Sprintf("       agui:  thread listing at %s%s/threads", webURL, l.config.pathPrefix))
+		printer(fmt.Sprintf("       agui:  history JSON-RPC at %s%s", webURL, historyjsonrpc.JSONRPCPath))
 	}
 	if l.config.capabilities != nil {
 		printer(fmt.Sprintf("       agui:  capabilities at %s%s/capabilities", webURL, l.config.pathPrefix))
@@ -373,6 +383,7 @@ func (l *aguiLauncher) capabilitiesFunc() alismux.Func {
 // agentStateRequest is the JSON request body for POST /agents/state.
 type agentStateRequest struct {
 	ThreadID string `json:"threadId"`
+	AgentID  string `json:"agentId,omitempty"`
 }
 
 // agentStateResponse is the JSON response body for POST /agents/state.
@@ -415,7 +426,17 @@ func (l *aguiLauncher) agentStateFunc() alismux.Func {
 			Messages: []types.Message{},
 		}
 
-		sess, ok, loadErr := l.loadSessionForSnapshot(ctx, userID, req.ThreadID)
+		agentID := req.AgentID
+		if agentID == "" {
+			agentID = r.URL.Query().Get("agentId")
+		}
+		appName, appNameErr := resolveAppNameFromSources(l, l.launcherCfg, nil, nil, agentID)
+		if appNameErr != nil {
+			http.Error(w, appNameErr.Error(), http.StatusBadRequest)
+			return nil
+		}
+
+		sess, ok, loadErr := l.loadSessionForSnapshot(ctx, appName, userID, req.ThreadID)
 		if loadErr != nil {
 			log.Printf("agui: /agents/state: failed to load session for thread %s: %v", req.ThreadID, loadErr)
 			http.Error(w, "failed to load session", http.StatusInternalServerError)
@@ -789,13 +810,20 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		}
 		userID := callCtx.User.Name
 
+		resolvedAppName, appNameErr := resolveAppName(l, req, l.launcherCfg)
+		if appNameErr != nil {
+			http.Error(w, appNameErr.Error(), http.StatusBadRequest)
+			return nil
+		}
+		state.rootAppName = resolvedAppName
+
 		// Upsert thread metadata after interceptors succeed and userID is
 		// validated, so rejected requests don't increment run_count.
 		// Re-extract identity from the post-interceptor context so it
 		// reflects any identity changes made by interceptors.
 		if l.config.threadService != nil && state.threadID != "" && userID != "" {
 			if iamIdentity, identityErr := iam.FromContext(ctx); identityErr == nil && iamIdentity != nil {
-				l.upsertThreadMetadata(ctx, iamIdentity, state.threadID, &req)
+				l.upsertThreadMetadata(ctx, iamIdentity, state.threadID, resolvedAppName, &req)
 			}
 		}
 
@@ -839,7 +867,7 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		}
 
 		// Load interrupts left open on a prior run for this thread (session id).
-		pending, err := l.loadPendingInterrupts(ctx, userID, sessionID)
+		pending, err := l.loadPendingInterrupts(ctx, resolvedAppName, userID, sessionID)
 		if err != nil {
 			emitError(fmt.Errorf("failed to load pending interrupts: %w", err))
 			return nil
@@ -861,7 +889,7 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 
 		// Baseline state before deltas (AG-UI spec). Create session when missing so
 		// first-turn runs can still emit a snapshot before adkrun.RunSSE.
-		snapSess, snapErr := l.ensureSessionForSnapshot(ctx, userID, sessionID, reqState)
+		snapSess, snapErr := l.ensureSessionForSnapshot(ctx, resolvedAppName, userID, sessionID, reqState)
 		if snapErr != nil {
 			emitError(fmt.Errorf("failed to prepare session for state snapshot: %w", snapErr))
 			return nil
@@ -904,6 +932,7 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 
 		// Stream ADK events, mapping each to AG-UI protocol events.
 		runReq := adkrun.RunRequest{
+			AppName:                   resolvedAppName,
 			UserID:                    userID,
 			SessionID:                 sessionID,
 			NewMessage:                *msg,
@@ -924,7 +953,7 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		}
 		if isResumeRun {
 			var resumeSess session.Session
-			if resumeSess, err = l.getSession(ctx, userID, sessionID); err != nil {
+			if resumeSess, err = l.getSession(ctx, resolvedAppName, userID, sessionID); err != nil {
 				log.Printf("agui: resume: session.Get for invocation id: %v", err)
 			}
 			if invID := resolveInvocationIDForResume(pending, req.Resume, req.State, resumeSess); invID != "" {
@@ -974,7 +1003,7 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 			// Optionally emit messages snapshot before RunFinished for clients
 			// that need full history (e.g. CopilotKit).
 			if l.config.emitMessagesSnapshotOnRunEnd {
-				if sess, ok, err := l.loadSessionForSnapshot(ctx, userID, sessionID); err == nil && ok {
+				if sess, ok, err := l.loadSessionForSnapshot(ctx, resolvedAppName, userID, sessionID); err == nil && ok {
 					if msgs, err := l.buildMessagesSnapshot(ctx, sess); err == nil {
 						emitMessagesSnapshotIfNonEmpty(e, msgs)
 					}
@@ -999,12 +1028,12 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		case e.err != nil:
 			log.Printf("agui: SSE stream error; skipping interrupt persistence: %v", e.err)
 		case len(state.emittedInterrupts) > 0:
-			if err := l.persistPendingInterrupts(ctx, userID, sessionID, state.emittedInterrupts); err != nil {
+			if err := l.persistPendingInterrupts(ctx, resolvedAppName, userID, sessionID, state.emittedInterrupts); err != nil {
 				log.Printf("agui: failed to persist pending interrupts: %v", err)
 				handlerErr = err
 			}
 		case handlerErr == nil:
-			if err := l.clearPendingInterrupts(ctx, userID, sessionID); err != nil {
+			if err := l.clearPendingInterrupts(ctx, resolvedAppName, userID, sessionID); err != nil {
 				log.Printf("agui: failed to clear pending interrupts: %v", err)
 				handlerErr = err
 			}

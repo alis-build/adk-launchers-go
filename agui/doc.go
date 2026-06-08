@@ -9,15 +9,34 @@
 // the process-wide host mux (go.alis.build/mux) via [HostRouteSetup]. The /run_sse
 // and /threads endpoints require IAM authentication; /capabilities is public.
 //
-// # Agent binding
+// # Agent binding and multi-agent routing
 //
-// NewLauncher requires an app name string used as the ADK runner AppName and to
-// distinguish the root agent from sub-agent step events on the SSE stream.
+// NewLauncher takes a default app name used when clients do not specify an agent.
+// Each request resolves the ADK app name via the same chain (used by /run_sse,
+// GET /threads/{id}/messages, and POST /agents/state):
 //
-// At setup time, [SetupHostRoutes] creates a single [adkrun.Runtime] bound to the
-// configured app name. One aguiLauncher instance therefore serves exactly
-// one agent. To expose multiple agents, deploy one launcher per agent (the same
-// pattern as the A2A sublauncher) or extend routing to load agents per request.
+//   - Optional [WithAppNameResolver] (full RunAgentInput for /run_sse; partial for
+//     GET/POST handlers — agentId query/body is injected as context "app" for the resolver)
+//   - RunAgentInput.state app_name / appName
+//   - RunAgentInput.context entry with description "app" (recommended for browser clients)
+//   - AgentLoader.RootAgent().Name()
+//   - The NewLauncher default app name
+//
+// Names from resolver, state, or context are validated against
+// AgentLoader.ListAgents when a multi-agent loader is configured.
+//
+// Browser clients should pass the selected agent on every run:
+//
+//	runAgent({ context: [{ description: "app", value: agentId }] })
+//
+// GET thread message history and POST /agents/state accept an optional agentId
+// query or body field for the same resolution. Thread metadata display names
+// use each agent's ADK Description() when set (see agentDisplayName).
+// When [WithThreadService] is set, history JSON-RPC is mounted
+// at POST /alis.agui.history.v1.ThreadService for browser clients.
+//
+// At setup time, [SetupHostRoutes] creates a single [adkrun.Runtime]; per-request
+// [adkrun.RunRequest.AppName] selects the agent via AgentLoader.LoadAgent.
 //
 // Conversation continuity uses a 1:1 mapping between AG-UI threadId and the ADK
 // session ID. [adkrun.Runtime] enables AutoCreateSession so the first request for a
@@ -55,7 +74,9 @@
 //   - WithCORS — enable CORS middleware for browser-based frontends.
 //   - WithCapabilities — expose GET /capabilities for client discovery (see below).
 //   - WithGenAIPartConverter — customize how [genai.Part] values map to AG-UI events.
-//   - WithThreadService — enable thread metadata tracking and GET /threads listing.
+//   - WithThreadService — enable thread metadata tracking, GET /threads listing, and history JSON-RPC.
+//   - WithAppNameResolver — custom app name extraction from RunAgentInput.
+//   - WithHistoryJSONRPCOptions — CORS and other options for the history JSON-RPC handler.
 //   - WithMessagesSnapshotOnRunEnd — emit MESSAGES_SNAPSHOT before RunFinished on every successful run.
 //   - WithPredictState — emit PredictState custom events for CopilotKit real-time state preview.
 //   - WithAgentStateEndpoint — register POST /agents/state for on-demand state retrieval.
@@ -310,8 +331,7 @@
 //
 // # Limitations
 //
-// This package does not implement multi-agent path routing (one root agent per
-// launcher instance). AG-UI interrupt resume is supported for ADK tool
+// AG-UI interrupt resume is supported for ADK tool
 // confirmations (adk_request_confirmation) with reason "tool_call" only.
 // Core AG-UI reasons "input_required" and "confirmation" are not implemented;
 // support depends on a future ADK pause/HITL API (see TODO in stream.go).
