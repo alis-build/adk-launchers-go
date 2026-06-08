@@ -1,0 +1,45 @@
+// Vuetify overrides
+
+@use 'vuetify/settings' with (
+  //Attempt at getting this to be MD3 compliant
+  $rounded: (
+    'xs': 4px,
+    'sm': 8px,
+    'md': 12px,
+    'lg': 16px,
+  )
+);
+
+:root {
+  --v-font-body: 'Roboto', sans-serif;
+  --v-font-heading: 'Roboto', sans-serif;
+}
+
+.v-tab__slider {
+  width: calc(100% - 64px);
+  left: 32px;
+  height: 3px;
+  border-radius: 8px 8px 0 0;
+}
+
+.v-card--hover:hover {
+  box-shadow: 0px 2px 1px -1px var(--v-shadow-key-umbra-opacity, rgba(0, 0, 0, 0.2)), 0px 1px 1px 0px var(--v-shadow-key-penumbra-opacity, rgba(0, 0, 0, 0.14)), 0px 1px 3px 0px var(--v-shadow-key-ambient-opacity, rgba(0, 0, 0, 0.12));
+}
+
+.x-list-item .v-list-item__spacer {
+  width: 16px;
+}
+
+.x-transition-width {
+  transition: max-width 0.2s ease, padding-inline 0.2s ease;
+  overflow-x: hidden;
+}
+
+.x-navigation-pane {
+  max-width: 256px;
+}
+
+.x-navigation-pane.is-collapsed {
+  max-width: 0;
+  padding-inline: 0;
+}

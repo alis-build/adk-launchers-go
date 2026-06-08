@@ -1,0 +1,76 @@
+/* Global Tiptap Styles */
+.tiptap-content {
+  transition: font 0.2s ease-in-out;
+  max-width: 856px;
+}
+
+.tiptap-content h1:not(:first-of-type) {
+  margin-top: 32px;
+}
+
+.tiptap-content h1 {
+  font-size: 1.75em;
+  font-weight: 500;
+  margin-bottom: 12px;
+  color: rgb(60, 60, 60);
+}
+
+.tiptap-content h2 {
+  font-size: 1.5em;
+  font-weight: 500;
+  color: rgb(60, 60, 60);
+  margin-top: 32px;
+}
+
+.tiptap-content h3 {
+  font-size: 1.25em;
+  font-weight: 500;
+  color: rgb(60, 60, 60);
+  margin-bottom: 16px;
+  margin-top: 16px;
+}
+
+.tiptap-content h4 {
+  font-size: 1.25em;
+  font-weight: 500;
+  color: rgb(60, 60, 60);
+  margin-bottom: 16px;
+  margin-top: 20px;
+}
+
+.tiptap-content p {
+  font-size: 1em;
+  font-weight: 400;
+  margin: 0 0 12px 0;
+}
+
+.tiptap-content a {
+  text-decoration: none;
+  color: grey;
+}
+
+.tiptap-content sup {
+  font-size: 10px;
+}
+
+.tiptap-content li:first-child {
+  margin: 12px 0 0 32px;
+}
+
+.tiptap-content li {
+  font-size: 1em;
+  font-weight: 400;
+  margin: 0 0 0 32px;
+}
+
+.tiptap-content li:last-child {
+  margin: 0 0 12px 32px;
+}
+
+.tiptap-content p:last-child {
+  margin: 0;
+}
+
+.tiptap-content .ProseMirror-focused {
+  outline: none;
+}

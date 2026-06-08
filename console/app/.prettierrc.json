@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/prettierrc",
+  "semi": false,
+  "trailingComma": "all",
+  "singleQuote": true,
+  "tabWidth": 2,
+  "useTabs": false,
+  "printWidth": 240,
+  "bracketSpacing": true,
+  "vueIndentScriptAndStyle": true,
+  "spaceBeforeFunctionParent": true,
+  "singleAttributePerLine": true,
+  "arrowParens": "always",
+  "bracketSameLine": false,
+  "organizeImportsSkipDestructiveCodeActions": true,
+  "plugins": ["prettier-plugin-organize-imports"]
+}

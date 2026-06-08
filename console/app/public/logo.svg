@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <filter id="goo">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.6" result="blur"/>
+      <feColorMatrix in="blur" mode="matrix" values="
+        1 0 0 0 0
+        0 1 0 0 0
+        0 0 1 0 0
+        0 0 0 19 -8
+      " result="goo"/>
+      <feBlend in="SourceGraphic" in2="goo"/>
+    </filter>
+  </defs>
+  <style>
+    .dot { fill: #ed1c24; opacity: 0.92; }
+    .goo-dot { fill: #ed1c24; opacity: 0.94; }
+    .traveler { fill: #ed1c24; }
+  </style>
+
+  <g filter="url(#goo)">
+    <circle class="goo-dot" cx="64.0006" cy="23.742" r="7.7339"/>
+    <circle class="goo-dot" cx="84.1075" cy="23.742" r="7.7339"/>
+    <circle class="goo-dot" cx="64.0006" cy="43.8713" r="7.7339"/>
+    <circle class="goo-dot" cx="84.1075" cy="43.8713" r="7.7339"/>
+    <circle class="goo-dot" cx="43.8939" cy="64" r="7.7339"/>
+    <circle class="goo-dot" cx="64.0006" cy="64" r="7.7339"/>
+    <circle class="goo-dot" cx="84.1075" cy="64" r="7.7339"/>
+    <circle class="goo-dot" cx="43.8939" cy="84.1294" r="7.7339"/>
+    <circle class="goo-dot" cx="64.0006" cy="84.1294" r="7.7339"/>
+    <circle class="goo-dot" cx="43.8939" cy="104.258" r="7.7339"/>
+    <circle class="goo-dot" cx="64.0006" cy="104.258" r="7.7339"/>
+
+    <circle class="traveler" cx="64.0006" cy="64" r="7.7339">
+      <animate
+        attributeName="cx"
+        dur="28s"
+        repeatCount="indefinite"
+        values="64.0006;64.0006;84.1075;84.1075;64.0006;43.8939;43.8939;64.0006"
+      />
+      <animate
+        attributeName="cy"
+        dur="28s"
+        repeatCount="indefinite"
+        values="64;43.8713;43.8713;64;84.1294;84.1294;104.258;64"
+      />
+    </circle>
+  </g>
+
+  <g>
+    <circle class="dot" cx="64.0006" cy="23.742" r="7.7339"/>
+    <circle class="dot" cx="84.1075" cy="23.742" r="7.7339"/>
+    <circle class="dot" cx="64.0006" cy="43.8713" r="7.7339"/>
+    <circle class="dot" cx="84.1075" cy="43.8713" r="7.7339"/>
+    <circle class="dot" cx="43.8939" cy="64" r="7.7339"/>
+    <circle class="dot" cx="64.0006" cy="64" r="7.7339"/>
+    <circle class="dot" cx="84.1075" cy="64" r="7.7339"/>
+    <circle class="dot" cx="43.8939" cy="84.1294" r="7.7339"/>
+    <circle class="dot" cx="64.0006" cy="84.1294" r="7.7339"/>
+    <circle class="dot" cx="43.8939" cy="104.258" r="7.7339"/>
+    <circle class="dot" cx="64.0006" cy="104.258" r="7.7339"/>
+  </g>
+</svg>

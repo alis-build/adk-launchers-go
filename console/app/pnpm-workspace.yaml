@@ -1,0 +1,14 @@
+allowBuilds:
+  "@parcel/watcher": true
+  esbuild: true
+  protobufjs: true
+minimumReleaseAgeExclude:
+  - "@alis-build/common-es@1.1.5"
+supportedArchitectures:
+  os:
+    - linux
+    - darwin
+    - win32
+  cpu:
+    - x64
+    - arm64
