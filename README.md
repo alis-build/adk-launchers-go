@@ -6,13 +6,13 @@ Use this repository when you need extra capabilities beyond the core ADK launche
 
 ## Packages
 
-| Package                            | CLI keyword | Purpose                                                                                                        |
-| ---------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
-| [`agui`](./agui) | `agui` | [AG-UI](https://docs.ag-ui.com) SSE endpoint for CopilotKit and other AG-UI clients |
-| [`agui/clienttool`](./agui/clienttool) | — | Dynamic `tool.Toolset` for AG-UI client-side tools (agent opt-in, used with `agui`) |
-| [`lro`](./lro)   | `lro`  | HTTP resume routes for [go.alis.build/lro/v2](https://pkg.go.dev/go.alis.build/lro/v2) long-running operations |
-| [`scheduler`](./scheduler) | `scheduler` | [A2A scheduler](https://pkg.go.dev/go.alis.build/a2a/extension/scheduler) cron JSON-RPC and Cloud Tasks callback (in-process ADK runner) |
-| [`console`](./console) | `console` | Embedded Vue operator console SPA, runtime config, and `/auth/me` (register **last** in `web.NewLauncher`) |
+| Package                                | CLI keyword | Purpose                                                                                                                                  |
+| -------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| [`agui`](./agui)                       | `agui`      | [AG-UI](https://docs.ag-ui.com) SSE endpoint for CopilotKit and other AG-UI clients                                                      |
+| [`agui/clienttool`](./agui/clienttool) | —           | Dynamic `tool.Toolset` for AG-UI client-side tools (agent opt-in, used with `agui`)                                                      |
+| [`lro`](./lro)                         | `lro`       | HTTP resume routes for [go.alis.build/lro/v2](https://pkg.go.dev/go.alis.build/lro/v2) long-running operations                           |
+| [`scheduler`](./scheduler)             | `scheduler` | [A2A scheduler](https://pkg.go.dev/go.alis.build/a2a/extension/scheduler) cron JSON-RPC and Cloud Tasks callback (in-process ADK runner) |
+| [`console`](./console)                 | `console`   | Embedded Vue operator console SPA, runtime config, and `/auth/me` (register **last** in `web.NewLauncher`)                               |
 
 ## Quick start
 
@@ -99,13 +99,79 @@ SPA_DEV_SERVER_URL=http://localhost:8000 adk web --port 8080 agui scheduler cons
 
 Unset `SPA_DEV_SERVER_URL` to test the production embed locally. Use `console.WithIsLocal(...)` in code to force either mode.
 
+### Custom console dist
+
+By default the console serves the **embedded** `app/dist`. To serve a custom production build (for example from a Docker frontend stage):
+
+```go
+console.NewLauncher(
+    console.WithDist(console.DirDist("dist")),
+)
+```
+
+Or set `SPA_DIST_DIR=./dist` when `WithDist` is not used. Other built-in resolvers: `DefaultDist()`, `EmbedDist(fs, root)`, and `HandlerDist(http.Handler)`.
+
+Dev mode (`SPA_DEV_SERVER_URL`) always takes precedence over any custom dist.
+
+### Backend API contract (custom dist)
+
+If you replace the bundled SPA, your app must call the same host APIs on the **same origin** (so IAM cookies apply). Register sublaunchers before `console` so API routes are not shadowed by the SPA catch-all.
+
+**Authentication:** Routes marked _(auth)_ require `go.alis.build/mux` IAM (session cookies or `Authorization` bearer). `GET /auth/logout` is handled by the mux identity layer (redirect sign-out), not by package `console`.
+
+#### Console (`console` sublauncher)
+
+| Method | Path                                 | Description                                                         |
+| ------ | ------------------------------------ | ------------------------------------------------------------------- |
+| GET    | `/assets/config/runtime-config.json` | _(auth)_ Agents, `defaultAgentId`, `gcpProject`, shell `branding`   |
+| GET    | `/auth/me`                           | _(auth)_ `{"sub":"...","email":"..."}`                              |
+| GET    | `/`                                  | _(auth)_ SPA static files (catch-all)                               |
+| GET    | `/console/branding/*`                | _(auth)_ Optional logo/favicon when using `EmbedAsset` / `DirAsset` |
+
+`runtime-config.json` shape matches [`console/app/src/runtimeConfig.ts`](console/app/src/runtimeConfig.ts).
+
+#### AG-UI (`agui` sublauncher, default prefix `/agui`)
+
+Requires `agui` on the `adk web` command line. Change prefix with `agui -path_prefix=/api/agui`.
+
+| Method | Path                                | Description                                                                                                                                                                                               |
+| ------ | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/agui/run_sse`                     | _(auth)_ JSON **RunAgentInput** body → `text/event-stream` (AG-UI SSE). Bundled app passes `context: [{description:"app", value: agentId}]` for multi-agent routing. [AG-UI spec](https://docs.ag-ui.com) |
+| GET    | `/agui/threads/{threadId}/messages` | _(auth)_ Query: `agentId`, `after` (RFC 3339), `limit`. JSON: `{"messages":[],"nextCursor":"..."}` or SSE if `Accept: text/event-stream`                                                                  |
+| GET    | `/agui/threads/{threadId}`          | _(auth)_ Single thread metadata (`WithThreadService`)                                                                                                                                                     |
+| DELETE | `/agui/threads/{threadId}`          | _(auth)_ Delete thread (`WithThreadService`)                                                                                                                                                              |
+| GET    | `/agui/threads`                     | _(auth)_ Query: `agentId`, `pageSize`, `pageToken`. Thread list with unread/pinned metadata (`WithThreadService`)                                                                                         |
+
+#### History JSON-RPC (`agui` + `WithThreadService`)
+
+`POST /alis.agui.history.v1.ThreadService` — JSON-RPC 2.0: `{"jsonrpc":"2.0","method":"...","params":{...},"id":1}`.
+
+Methods used by the bundled app:
+
+- **UpdateUserThreadState** — `params`: `userThreadState` (`thread`, `readRunCount`, `pinned`) and `updateMask` (comma-separated snake_case field paths, e.g. `"pinned,read_run_count"`)
+
+#### Scheduler (`scheduler` sublauncher)
+
+`POST /alis.a2a.extension.v1.SchedulerService` — JSON-RPC 2.0 (same envelope). Methods used by `/automation`:
+
+- **ListCrons** — `params`: `{pageSize?, pageToken?}`
+- **CreateCron** — `params`: `{cron: {...}}` (prompt, expr, timezone, type, at, …)
+- **DeleteCron** — `params`: `{name: "crons/<id>"}`
+- **RunCron** — `params`: `{id: "<cron-id>"}`
+
+Params are protojson-compatible camelCase. See [`agui/doc.go`](agui/doc.go) and [`scheduler/doc.go`](scheduler/doc.go) for full route and option details.
+
+#### Local Vite dev proxies
+
+When running `cd console/app && pnpm dev`, Vite proxies these paths to `AGENT_HOST` (default `http://localhost:8080`): `/agui`, `/auth`, `/alis.agui.history.v1.ThreadService`, `/alis.a2a.extension.v1.SchedulerService`, `/assets/config/runtime-config.json`.
+
 ## Testing
 
 ```bash
 go test ./...
 ```
 
-The scheduler package imports `go.alis.build/mux`; set `ALIS_OS_PROJECT` and `IDENTITY_SERVICE_URL` when running tests (see [.vscode/settings.json](./.vscode/settings.json) for local IDE defaults).
+The scheduler package imports `go.alis.build/mux`; set `ALIS_OS_PROJECT` and `IDENTITY_SERVICE_URL` when running tests.
 
 ## Requirements
 

@@ -97,6 +97,9 @@ func TestEmbedIncludesUnderscorePrefixedAssets(t *testing.T) {
 func TestSPAHandler_ServesEmbeddedAsset(t *testing.T) {
 	t.Setenv("SPA_DEV_SERVER_URL", "")
 	l := NewLauncher(WithIsLocal(func() bool { return false })).(*consoleLauncher)
+	if err := l.resolveProdHandler(); err != nil {
+		t.Fatalf("resolveProdHandler: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, findUnderscoreAsset(t), nil)
 	rec := httptest.NewRecorder()

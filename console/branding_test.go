@@ -2,6 +2,7 @@ package console
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -179,6 +180,25 @@ func (f *mapFile) Read(p []byte) (int, error) {
 	n := copy(p, f.data[f.offset:])
 	f.offset += n
 	return n, nil
+}
+
+func (f *mapFile) Seek(offset int64, whence int) (int64, error) {
+	var absolute int64
+	switch whence {
+	case io.SeekStart:
+		absolute = offset
+	case io.SeekCurrent:
+		absolute = int64(f.offset) + offset
+	case io.SeekEnd:
+		absolute = int64(len(f.data)) + offset
+	default:
+		return 0, fmt.Errorf("invalid whence")
+	}
+	if absolute < 0 || absolute > int64(len(f.data)) {
+		return 0, fmt.Errorf("invalid offset")
+	}
+	f.offset = int(absolute)
+	return absolute, nil
 }
 
 func (f *mapFile) Close() error { return nil }

@@ -1,16 +1,13 @@
 package console
 
 import (
-	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
-	iofs "io/fs"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"path"
 	"sync"
 
 	"github.com/gorilla/mux"
@@ -21,9 +18,6 @@ import (
 	adklauncher "google.golang.org/adk/cmd/launcher"
 	adkweb "google.golang.org/adk/cmd/launcher/web"
 )
-
-//go:embed all:app/dist
-var distFS embed.FS
 
 // Branding configures shell-level console chrome (not per-agent metadata).
 // Title and DisplayName are set directly. Logo and Favicon are optional
@@ -61,10 +55,11 @@ func WithDevServerURL(url string) Option {
 	}
 }
 
-// WithIsLocal overrides dev-proxy vs embedded-dist selection. When the function
-// returns true, GET / is proxied to the Vite dev server; when false, app/dist
-// is served from go:embed. By default, the dev proxy is used only when
-// SPA_DEV_SERVER_URL is set or WithDevServerURL was called.
+// WithIsLocal overrides dev-proxy vs production-dist selection. When the function
+// returns true, GET / is proxied to the Vite dev server; when false, the
+// production DistResolver (WithDist, SPA_DIST_DIR, or embedded app/dist) is
+// used. By default, the dev proxy is used only when SPA_DEV_SERVER_URL is set
+// or WithDevServerURL was called.
 func WithIsLocal(fn func() bool) Option {
 	return func(l *consoleLauncher) {
 		l.isLocal = fn
@@ -84,8 +79,9 @@ type consoleLauncher struct {
 	devServerURL string
 	isLocal      func() bool
 
-	distHandler http.Handler
-	devProxy    *httputil.ReverseProxy
+	distResolver DistResolver
+	prodHandler  http.Handler
+	devProxy     *httputil.ReverseProxy
 
 	setupOnce sync.Once
 	setupErr  error
@@ -109,11 +105,6 @@ func NewLauncher(opts ...Option) adkweb.Sublauncher {
 	if l.isLocal == nil {
 		l.isLocal = l.defaultUseDevProxy
 	}
-	distRoot, err := iofs.Sub(distFS, "app/dist")
-	if err != nil {
-		panic("console: embed app/dist: " + err.Error())
-	}
-	l.distHandler = http.FileServer(http.FS(distRoot))
 	l.devProxy = httputil.NewSingleHostReverseProxy(l.devServerURLParsed())
 
 	l.flags = flag.NewFlagSet("console", flag.ContinueOnError)
@@ -171,6 +162,10 @@ func (l *consoleLauncher) SetupHostRoutes(config *adklauncher.Config) error {
 }
 
 func (l *consoleLauncher) mountHostRoutes(config *adklauncher.Config) error {
+	if err := l.resolveProdHandler(); err != nil {
+		return fmt.Errorf("console: dist: %w", err)
+	}
+
 	registrar := hostBrandingRegistrar{}
 	if l.branding != nil {
 		if err := resolveBranding(l.branding, registrar); err != nil {
@@ -198,14 +193,7 @@ func (l *consoleLauncher) spaHandler(w http.ResponseWriter, r *http.Request) err
 		l.devProxy.ServeHTTP(w, r)
 		return nil
 	}
-	if path.Ext(r.URL.Path) == "" {
-		cloned := *r.URL
-		cloned.Path = "/"
-		r2 := *r
-		r2.URL = &cloned
-		r = &r2
-	}
-	l.distHandler.ServeHTTP(w, r)
+	l.prodHandler.ServeHTTP(w, r)
 	return nil
 }
 
@@ -248,6 +236,6 @@ func (l *consoleLauncher) UserMessage(webURL string, printer func(v ...any)) {
 	if l.isLocal() {
 		printer(fmt.Sprintf("       console:  Vite dev proxy at %s (embedded dist when SPA_DEV_SERVER_URL is unset)", l.devServerURLParsed()))
 	} else {
-		printer("       console:  serving embedded app/dist")
+		printer("       console:  " + l.distSourceMessage())
 	}
 }
