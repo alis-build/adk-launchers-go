@@ -2,6 +2,8 @@
 // ADK agent execution to AG-UI Server-Sent Events (SSE), enabling CopilotKit and
 // other AG-UI-compatible frontends to stream agent responses in real time.
 //
+// See [README.md] for a short overview and architecture table.
+//
 // # Role in the ADK web launcher
 //
 // The ADK web launcher composes one or more sublaunchers, each activated by a CLI
@@ -75,6 +77,7 @@
 // Options apply when calling NewLauncher:
 //
 //   - WithInterceptor — add [CallInterceptor] hooks (auth, logging, event mutation).
+//   - WithExecutor — replace or decorate the protocol-level [AgentExecutor] (see below).
 //   - WithCORS — enable CORS middleware for browser-based frontends.
 //   - WithCapabilities — expose GET /capabilities for client discovery (see below).
 //   - WithGenAIPartConverter — customize how [genai.Part] values map to AG-UI events.
@@ -118,12 +121,78 @@
 // On startup, UserMessage prints the registered endpoint URLs (for example
 // http://localhost:8080/agui/run_sse and the thread messages path).
 //
+// # Agent executor (protocol layer)
+//
+// The /run_sse handler is split into transport (HTTP/SSE, [CallInterceptor]) and
+// protocol ([AgentExecutor]). After SSE headers are committed, the handler ranges
+// over [AgentExecutor.Execute], applies [CallInterceptor.OnEmit] to each yielded
+// [events.Event], and writes to the wire.
+//
+// The default executor owns the run pipeline: RunStarted, pending-interrupt
+// validation, state/message snapshots, ADK invocation via [adkrun.Runtime], ADK→AG-UI
+// mapping ([internal/stream]), lifecycle finalization, RunFinished/RunError, and
+// interrupt persistence. Configure it with [WithExecutor]:
+//
+//	agui.WithExecutor(func(d agui.ExecutorDeps) agui.AgentExecutor {
+//	    return d.NewDefault(agui.ExecutorConfig{
+//	        AfterEventCallback: myObserveHook, // observe + abort only
+//	        GenAIPartConverter: myConverter,
+//	    })
+//	})
+//
+// [ExecutorContext] exposes request metadata and lazily loads the ADK session
+// (one [session.Service.Get] per Execute, cached) for [ExecutorContext.ReadonlyState]
+// and [ExecutorContext.Events]. [BeforeExecuteCallback], [AfterEventCallback], and
+// [AfterExecuteCallback] run at protocol boundaries; event mutation/suppression
+// stays in [CallInterceptor.OnEmit] at the HTTP boundary.
+//
+// [WithGenAIPartConverter] merges into the default [ExecutorConfig] when no custom
+// [WithExecutor] factory is set. When [WithExecutor] is used, the factory owns all
+// executor configuration (including the part converter).
+//
+// Three common [WithExecutor] patterns:
+//
+// Configure the default (callbacks or converter):
+//
+//	agui.WithExecutor(func(d agui.ExecutorDeps) agui.AgentExecutor {
+//	    return d.NewDefault(agui.ExecutorConfig{
+//	        AfterEventCallback: myHook,
+//	        GenAIPartConverter: myConverter,
+//	    })
+//	})
+//
+// Decorate the default (wrap, do not replace):
+//
+//	agui.WithExecutor(func(d agui.ExecutorDeps) agui.AgentExecutor {
+//	    inner := d.NewDefault(agui.ExecutorConfig{})
+//	    return &metricsExecutor{inner: inner}
+//	})
+//
+// Full replace (custom [AgentExecutor] implementation).
+//
+// # Internal packages
+//
+// Implementation details are split into unexported subpackages (not importable
+// outside agui):
+//
+//   - internal/aguimsg — inbound AG-UI→genai message helpers (user text, multimodal,
+//     tool-result trailing messages).
+//   - internal/interrupt — HITL [interrupt.Record], resume→FunctionResponse mapping,
+//     and resume validation against pending session state.
+//   - internal/stream — outbound ADK→AG-UI event mapping, SSE/yield sinks, snapshot
+//     emission, and [GenAIPartConverter] integration for live runs.
+//
+// Public extension points remain [WithExecutor], [CallInterceptor], and
+// [WithGenAIPartConverter].
+//
 // # Call interceptors
 //
 // [CallInterceptor] runs around each /run_sse request:
 //
 //   - Before — validate or enrich the request; return an error to reject before SSE starts.
 //   - OnEmit — observe or modify each AG-UI event before it is written to the wire.
+//     Runs in the handler after [AgentExecutor.Execute] yields an event; the executor
+//     and [AfterEventCallback] do not mutate yielded events.
 //   - After — cleanup; runs in reverse order for interceptors whose Before succeeded.
 //
 // The handler populates [CallContext.User] from the mux IAM identity before
@@ -133,10 +202,14 @@
 //
 // # Event mapping and part conversion
 //
-// During a run, ADK session events are translated into AG-UI protocol events on the
-// SSE stream: text streaming, tool calls, reasoning, sub-agent steps, interrupts
-// (human-in-the-loop confirmations), and run lifecycle (RunStarted, RunFinished,
-// RunError). Partial streaming deltas are folded into final messages before emission.
+// During a run, ADK session events are translated into AG-UI protocol events by
+// [internal/stream] and written to the SSE stream: text streaming, tool calls,
+// reasoning, sub-agent steps, interrupts (human-in-the-loop confirmations), and run
+// lifecycle (RunStarted, RunFinished, RunError). Partial streaming deltas are folded
+// into final messages before emission.
+//
+// Internal helpers live in [internal/aguimsg] (inbound messages), [internal/interrupt]
+// (HITL resume/validation), and [internal/stream] (outbound ADK→AG-UI mapping).
 //
 // [GenAIPartConverter] mirrors the adka2a pattern: return a non-nil slice (including
 // empty) to handle a part and skip default mapping; return (nil, nil) to use the
@@ -215,8 +288,8 @@
 // Resume validation runs after RunStarted (protocol errors become RunError on
 // the SSE stream). The server enforces AG-UI contract rules when pending state
 // exists: all open interrupts must be addressed, unknown ids rejected, optional
-// expiry and responseSchema checks applied. See [validateResumeAgainstPending]
-// and [resumeEntriesToConfirmationContent].
+// expiry and responseSchema checks applied. See [interrupt.ValidateResumeAgainstPending]
+// and [interrupt.EntriesToConfirmationContent].
 //
 // Mapping from AG-UI to ADK uses payload.approved → response.confirmed and
 // optional payload.editedArgs → response.payload, per ADK toolconfirmation
@@ -224,8 +297,8 @@
 //
 // Only interrupts with reason "tool_call" are emitted (from ADK tool confirmations).
 // AG-UI core reasons "input_required" and "confirmation" are deferred until ADK
-// exposes a native pause primitive; see the TODO in stream.go. Non-tool resume
-// paths are not implemented (see resume.go).
+// exposes a native pause primitive; see the TODO in internal/stream. Non-tool
+// resume paths are not implemented.
 //
 // At run start and before interrupt RunFinished, the launcher emits StateSnapshot
 // (and MessagesSnapshot at interrupt boundaries) so clients have baseline context.
@@ -339,7 +412,7 @@
 // AG-UI interrupt resume is supported for ADK tool
 // confirmations (adk_request_confirmation) with reason "tool_call" only.
 // Core AG-UI reasons "input_required" and "confirmation" are not implemented;
-// support depends on a future ADK pause/HITL API (see TODO in stream.go).
+// support depends on a future ADK pause/HITL API (see TODO in internal/stream).
 // Resume without matching pending session state is rejected. Resume idempotency
 // (replay of the same resume tuple) is not deduplicated server-side. Payload
 // validation uses a minimal JSON Schema subset, not a full validator. Pending

@@ -8,7 +8,7 @@ Use this repository when you need extra capabilities beyond the core ADK launche
 
 | Package                                | CLI keyword | Purpose                                                                                                                                  |
 | -------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| [`agui`](./agui)                       | `agui`      | [AG-UI](https://docs.ag-ui.com) SSE endpoint for CopilotKit and other AG-UI clients                                                      |
+| [`agui`](./agui)                       | `agui`      | [AG-UI](https://docs.ag-ui.com) SSE endpoint for CopilotKit and other AG-UI clients; optional [AgentExecutor](https://pkg.go.dev/go.alis.build/adk/launchers/agui#AgentExecutor) via `WithExecutor` |
 | [`agui/clienttool`](./agui/clienttool) | —           | Dynamic `tool.Toolset` for AG-UI client-side tools (agent opt-in, used with `agui`)                                                      |
 | [`lro`](./lro)                         | `lro`       | HTTP resume routes for [go.alis.build/lro/v2](https://pkg.go.dev/go.alis.build/lro/v2) long-running operations                           |
 | [`scheduler`](./scheduler)             | `scheduler` | [A2A scheduler](https://pkg.go.dev/go.alis.build/a2a/extension/scheduler) cron JSON-RPC and Cloud Tasks callback (in-process ADK runner) |
@@ -189,6 +189,30 @@ Methods used by the bundled app:
 
 Params are protojson-compatible camelCase. See [`agui/doc.go`](agui/doc.go) and [`scheduler/doc.go`](scheduler/doc.go) for full route and option details.
 
+#### AG-UI architecture
+
+The `agui` sublauncher splits each `/run_sse` request into two layers:
+
+1. **Transport** — HTTP/SSE, identity, CORS, and [`CallInterceptor`](./agui/interceptor.go) hooks (`Before`, `OnEmit`, `After`). `OnEmit` is the only supported place to mutate or suppress events on the wire.
+2. **Protocol** — [`AgentExecutor`](./agui/executor.go) yields AG-UI events (`RunStarted` → ADK run → `RunFinished` / `RunError`). The default executor handles interrupts, snapshots, and session persistence.
+
+Most apps need no custom executor. Use [`WithExecutor`](./agui/agui.go) to configure callbacks, wrap the default pipeline, or replace it entirely:
+
+```go
+agui.NewLauncher("my-agent",
+    agui.WithExecutor(func(d agui.ExecutorDeps) agui.AgentExecutor {
+        return d.NewDefault(agui.ExecutorConfig{
+            AfterExecuteCallback: func(_ agui.ExecutorContext, err error) error {
+                log.Printf("run finished: %v", err)
+                return nil
+            },
+        })
+    }),
+)
+```
+
+[`WithGenAIPartConverter`](./agui/agui.go) still works without `WithExecutor` (merged into the default config). When `WithExecutor` is set, the factory owns all executor settings including the part converter. See [`agui/doc.go`](agui/doc.go) for configure, decorate, and replace patterns.
+
 #### Local Vite dev proxies
 
 When running `cd console/app && pnpm dev`, Vite proxies these paths to `AGENT_HOST` (default `http://localhost:8080`): `/agui`, `/auth`, `/alis.agui.history.v1.ThreadService`, `/alis.a2a.extension.v1.SchedulerService`, `/assets/config/runtime-config.json`.
@@ -196,10 +220,10 @@ When running `cd console/app && pnpm dev`, Vite proxies these paths to `AGENT_HO
 ## Testing
 
 ```bash
-go test ./...
+ALIS_OS_PROJECT=test IDENTITY_SERVICE_URL=http://localhost go test ./...
 ```
 
-The scheduler package imports `go.alis.build/mux`; set `ALIS_OS_PROJECT` and `IDENTITY_SERVICE_URL` when running tests.
+Packages that import `go.alis.build/mux` (including [`agui`](./agui) and [`scheduler`](./scheduler)) require `ALIS_OS_PROJECT` and `IDENTITY_SERVICE_URL` at test time.
 
 ## Requirements
 

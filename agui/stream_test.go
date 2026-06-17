@@ -54,14 +54,14 @@ func parseSSEEvents(body string) []sseEvent {
 func TestProcessEvent_TextStreaming(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	// Partial event should emit TextMessageStart + TextMessageContent.
 	ev := session.NewEvent("inv1")
 	ev.Content = genai.NewContentFromText("Hello", genai.RoleModel)
 	ev.Partial = true
 
-	if _, err := l.processEvent(e, ev, state); err != nil {
+	if _, err := l.processEvent(e, ev, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
@@ -78,13 +78,13 @@ func TestProcessEvent_TextStreaming(t *testing.T) {
 
 	// Second partial should reuse the same messageID (no new Start).
 	rec2 := httptest.NewRecorder()
-	e2 := newEmitter(context.Background(), rec2, sse.NewSSEWriter(), nil, nil)
+	e2 := newEmitter(context.Background(), rec2, sse.NewSSEWriter())
 
 	ev2 := session.NewEvent("inv1")
 	ev2.Content = genai.NewContentFromText(" world", genai.RoleModel)
 	ev2.Partial = true
 
-	if _, err := l.processEvent(e2, ev2, state); err != nil {
+	if _, err := l.processEvent(e2, ev2, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
@@ -100,14 +100,14 @@ func TestProcessEvent_TextStreaming(t *testing.T) {
 func TestProcessEvent_TextStreaming_FinalSkipped(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	// Non-partial (final) text event should be skipped.
 	ev := session.NewEvent("inv1")
 	ev.Content = genai.NewContentFromText("final", genai.RoleModel)
 	ev.Partial = false
 
-	if _, err := l.processEvent(e, ev, state); err != nil {
+	if _, err := l.processEvent(e, ev, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
@@ -120,7 +120,7 @@ func TestProcessEvent_TextStreaming_FinalSkipped(t *testing.T) {
 func TestProcessEvent_ReasoningPhase(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.Content = &genai.Content{
@@ -129,7 +129,7 @@ func TestProcessEvent_ReasoningPhase(t *testing.T) {
 	}
 	ev.Partial = true
 
-	if _, err := l.processEvent(e, ev, state); err != nil {
+	if _, err := l.processEvent(e, ev, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
@@ -150,7 +150,7 @@ func TestProcessEvent_ReasoningPhase(t *testing.T) {
 
 func TestProcessEvent_ReasoningToText_ClosesReasoning(t *testing.T) {
 	l := newTestLauncher("test-app")
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	// First: open a reasoning phase.
 	e1, _ := newTestEmitter()
@@ -160,10 +160,10 @@ func TestProcessEvent_ReasoningToText_ClosesReasoning(t *testing.T) {
 		Parts: []*genai.Part{{Text: "thinking", Thought: true}},
 	}
 	ev1.Partial = true
-	if _, err := l.processEvent(e1, ev1, state); err != nil {
+	if _, err := l.processEvent(e1, ev1, state, nil); err != nil {
 		t.Fatalf("processEvent() reasoning error = %v", err)
 	}
-	if state.currentReasoningPhaseID == "" {
+	if state.CurrentReasoningPhaseID == "" {
 		t.Fatal("expected reasoning phase to be open")
 	}
 
@@ -172,7 +172,7 @@ func TestProcessEvent_ReasoningToText_ClosesReasoning(t *testing.T) {
 	ev2 := session.NewEvent("inv1")
 	ev2.Content = genai.NewContentFromText("answer", genai.RoleModel)
 	ev2.Partial = true
-	if _, err := l.processEvent(e2, ev2, state); err != nil {
+	if _, err := l.processEvent(e2, ev2, state, nil); err != nil {
 		t.Fatalf("processEvent() text error = %v", err)
 	}
 
@@ -259,7 +259,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 				t.Helper()
 				args := map[string]any{"city": "London"}
 				for range 3 {
-					if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", args), state); err != nil {
+					if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", args), state, nil); err != nil {
 						return err
 					}
 				}
@@ -272,10 +272,10 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 			wantStarts:      map[string]int{"fc-1": 2},
 			run: func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error {
 				t.Helper()
-				if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", map[string]any{"city": "London"}), state); err != nil {
+				if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", map[string]any{"city": "London"}), state, nil); err != nil {
 					return err
 				}
-				if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", map[string]any{"city": "Paris"}), state); err != nil {
+				if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", map[string]any{"city": "Paris"}), state, nil); err != nil {
 					return err
 				}
 				return nil
@@ -285,7 +285,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 			name: "empty toolCallId rejected",
 			run: func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error {
 				t.Helper()
-				_, err := l.processEvent(e, partialFunctionCallEvent("", "get_weather", map[string]any{"city": "London"}), state)
+				_, err := l.processEvent(e, partialFunctionCallEvent("", "get_weather", map[string]any{"city": "London"}), state, nil)
 				if err == nil {
 					return fmt.Errorf("processEvent() error = nil, want missing toolCallId error")
 				}
@@ -300,7 +300,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 			run: func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error {
 				t.Helper()
 				for range 3 {
-					done, err := l.processEvent(e, partialFunctionCallEvent(originalToolID, "fetch_support_ticket", ticketArgs), state)
+					done, err := l.processEvent(e, partialFunctionCallEvent(originalToolID, "fetch_support_ticket", ticketArgs), state, nil)
 					if err != nil {
 						return err
 					}
@@ -314,7 +314,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 					originalToolID,
 					"fetch_support_ticket",
 					ticketArgs,
-				), state)
+				), state, nil)
 				if err != nil {
 					return err
 				}
@@ -330,7 +330,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			l := newTestLauncher("test-app")
 			e, rec := newTestEmitter()
-			state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+			state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 			if err := tt.run(t, l, e, state); err != nil {
 				t.Fatalf("run: %v", err)
@@ -360,7 +360,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 func TestProcessEvent_FunctionCall(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.Content = &genai.Content{
@@ -374,7 +374,7 @@ func TestProcessEvent_FunctionCall(t *testing.T) {
 		}},
 	}
 
-	if _, err := l.processEvent(e, ev, state); err != nil {
+	if _, err := l.processEvent(e, ev, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
@@ -402,7 +402,7 @@ func TestProcessEvent_FunctionCall(t *testing.T) {
 func TestProcessEvent_FunctionResponse(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.Content = &genai.Content{
@@ -416,7 +416,7 @@ func TestProcessEvent_FunctionResponse(t *testing.T) {
 		}},
 	}
 
-	if _, err := l.processEvent(e, ev, state); err != nil {
+	if _, err := l.processEvent(e, ev, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
@@ -433,10 +433,10 @@ func TestProcessEvent_ConfirmationInterrupt_ClosesOpenStep(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
 	state := &streamState{
-		runID:             "r1",
-		threadID:          "t1",
-		rootAppName:       "test-app",
-		currentStepAuthor: "sub-agent",
+		RunID:             "r1",
+		ThreadID:          "t1",
+		RootAppName:       "test-app",
+		CurrentStepAuthor: "sub-agent",
 	}
 
 	ev := session.NewEvent("inv1")
@@ -459,15 +459,15 @@ func TestProcessEvent_ConfirmationInterrupt_ClosesOpenStep(t *testing.T) {
 		}},
 	}
 
-	done, err := l.processEvent(e, ev, state)
+	done, err := l.processEvent(e, ev, state, nil)
 	if err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 	if !done {
 		t.Fatal("processEvent() done = false, want true")
 	}
-	if state.currentStepAuthor != "" {
-		t.Errorf("currentStepAuthor = %q, want empty (step should be closed)", state.currentStepAuthor)
+	if state.CurrentStepAuthor != "" {
+		t.Errorf("currentStepAuthor = %q, want empty (step should be closed)", state.CurrentStepAuthor)
 	}
 
 	evts := parseSSEEvents(rec.Body.String())
@@ -486,7 +486,7 @@ func TestProcessEvent_ConfirmationInterrupt_ClosesOpenStep(t *testing.T) {
 func TestProcessEvent_ConfirmationInterrupt(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.InvocationID = "e-test-invocation"
@@ -510,15 +510,15 @@ func TestProcessEvent_ConfirmationInterrupt(t *testing.T) {
 		}},
 	}
 
-	done, err := l.processEvent(e, ev, state)
+	done, err := l.processEvent(e, ev, state, nil)
 	if err != nil {
 		t.Fatalf("processEvent() error = %v, want nil", err)
 	}
 	if !done {
 		t.Fatal("processEvent() done = false, want true")
 	}
-	if !state.runFinalized {
-		t.Error("state.runFinalized should be true after interrupt")
+	if !state.RunFinalized {
+		t.Error("state.RunFinalized should be true after interrupt")
 	}
 
 	evts := parseSSEEvents(rec.Body.String())
@@ -615,7 +615,7 @@ func countToolCallStarts(evts []sseEvent, toolCallID string) int {
 func TestProcessEvent_ConfirmationInterrupt_TypedHint(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.Content = &genai.Content{
@@ -637,7 +637,7 @@ func TestProcessEvent_ConfirmationInterrupt_TypedHint(t *testing.T) {
 		}},
 	}
 
-	done, err := l.processEvent(e, ev, state)
+	done, err := l.processEvent(e, ev, state, nil)
 	if err != nil {
 		t.Fatalf("processEvent() error = %v, want nil", err)
 	}
@@ -661,13 +661,13 @@ func TestProcessEvent_ConfirmationInterrupt_TypedHint(t *testing.T) {
 func TestProcessEvent_StateDelta(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	ev := session.NewEvent("inv1")
 	ev.Actions.StateDelta["count"] = 42
 	ev.Actions.StateDelta["nested/key"] = "value"
 
-	if _, err := l.processEvent(e, ev, state); err != nil {
+	if _, err := l.processEvent(e, ev, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
@@ -682,27 +682,27 @@ func TestProcessEvent_StateDelta(t *testing.T) {
 
 func TestProcessEvent_TurnComplete(t *testing.T) {
 	l := newTestLauncher("test-app")
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	// Open a text message.
 	e1, _ := newTestEmitter()
 	ev1 := session.NewEvent("inv1")
 	ev1.Content = genai.NewContentFromText("hi", genai.RoleModel)
 	ev1.Partial = true
-	_, _ = l.processEvent(e1, ev1, state)
+	_, _ = l.processEvent(e1, ev1, state, nil)
 
-	if state.currentTextMessageID == "" {
+	if state.CurrentTextMessageID == "" {
 		t.Fatal("expected open text message")
 	}
 
 	// Also set a sub-agent step.
-	state.currentStepAuthor = "sub-agent"
+	state.CurrentStepAuthor = "sub-agent"
 
 	// Turn complete should close everything.
 	e2, rec2 := newTestEmitter()
 	ev2 := session.NewEvent("inv1")
 	ev2.TurnComplete = true
-	if _, err := l.processEvent(e2, ev2, state); err != nil {
+	if _, err := l.processEvent(e2, ev2, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
@@ -729,10 +729,10 @@ func TestProcessEvent_TurnComplete(t *testing.T) {
 	if !hasStepFinished {
 		t.Error("expected STEP_FINISHED on turn complete")
 	}
-	if state.currentTextMessageID != "" {
+	if state.CurrentTextMessageID != "" {
 		t.Error("expected currentTextMessageID to be cleared")
 	}
-	if state.currentStepAuthor != "" {
+	if state.CurrentStepAuthor != "" {
 		t.Error("expected currentStepAuthor to be cleared")
 	}
 }
@@ -740,7 +740,7 @@ func TestProcessEvent_TurnComplete(t *testing.T) {
 func TestProcessEvent_StepEvents(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
-	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	// Sub-agent event should emit StepStarted.
 	ev := session.NewEvent("inv1")
@@ -748,7 +748,7 @@ func TestProcessEvent_StepEvents(t *testing.T) {
 	ev.Content = genai.NewContentFromText("sub response", genai.RoleModel)
 	ev.Partial = true
 
-	if _, err := l.processEvent(e, ev, state); err != nil {
+	if _, err := l.processEvent(e, ev, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
@@ -767,7 +767,7 @@ func TestProcessEvent_StepEvents(t *testing.T) {
 	ev2.Content = genai.NewContentFromText("root response", genai.RoleModel)
 	ev2.Partial = true
 
-	if _, err := l.processEvent(e2, ev2, state); err != nil {
+	if _, err := l.processEvent(e2, ev2, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
@@ -784,13 +784,13 @@ func TestProcessEvent_GenAIPartConverter(t *testing.T) {
 			return []events.Event{events.NewRunErrorEvent("custom")}, nil
 		}
 		e, rec := newTestEmitter()
-		state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+		state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 		ev := session.NewEvent("inv1")
 		ev.Content = genai.NewContentFromText("text", genai.RoleModel)
 		ev.Partial = true
 
-		if _, err := l.processEvent(e, ev, state); err != nil {
+		if _, err := l.processEvent(e, ev, state, nil); err != nil {
 			t.Fatalf("processEvent() error = %v", err)
 		}
 
@@ -809,13 +809,13 @@ func TestProcessEvent_GenAIPartConverter(t *testing.T) {
 			return nil, nil
 		}
 		e, rec := newTestEmitter()
-		state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+		state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 		ev := session.NewEvent("inv1")
 		ev.Content = genai.NewContentFromText("text", genai.RoleModel)
 		ev.Partial = true
 
-		if _, err := l.processEvent(e, ev, state); err != nil {
+		if _, err := l.processEvent(e, ev, state, nil); err != nil {
 			t.Fatalf("processEvent() error = %v", err)
 		}
 
@@ -869,9 +869,9 @@ func TestProcessEvent_ConfirmationInterrupt_EmitsSnapshots(t *testing.T) {
 	l := newTestLauncher("test-app", svc)
 	e, rec := newTestEmitter()
 	state := &streamState{
-		runID: "r1", threadID: "t1", userID: "user-1", runCtx: ctx,
-		rootAppName: "test-app",
-		reqState:    map[string]any{"ui": "panel"},
+		RunID: "r1", ThreadID: "t1", UserID: "user-1", RunCtx: ctx,
+		RootAppName: "test-app",
+		ReqState:    map[string]any{"ui": "panel"},
 	}
 
 	ev := session.NewEvent("inv1")
@@ -891,7 +891,7 @@ func TestProcessEvent_ConfirmationInterrupt_EmitsSnapshots(t *testing.T) {
 			},
 		}},
 	}
-	done, err := l.processEvent(e, ev, state)
+	done, err := l.processEvent(e, ev, state, nil)
 	if err != nil || !done {
 		t.Fatalf("processEvent() done=%v err=%v", done, err)
 	}
@@ -964,7 +964,7 @@ func TestInterrupt_PersistFailure_NoDoubleTerminal(t *testing.T) {
 	l := newTestLauncher("test-app", failSvc)
 	e, rec := newTestEmitter()
 	state := &streamState{
-		runID: "r1", threadID: "t1", userID: "user-1", runCtx: ctx,
+		RunID: "r1", ThreadID: "t1", UserID: "user-1", RunCtx: ctx,
 	}
 
 	// Process a confirmation event → emitInterrupt emits RunFinished with interrupt outcome.
@@ -985,16 +985,16 @@ func TestInterrupt_PersistFailure_NoDoubleTerminal(t *testing.T) {
 			},
 		}},
 	}
-	done, err := l.processEvent(e, ev, state)
+	done, err := l.processEvent(e, ev, state, nil)
 	if err != nil || !done {
 		t.Fatalf("processEvent() done=%v err=%v", done, err)
 	}
-	if !state.runFinalized {
+	if !state.RunFinalized {
 		t.Fatal("expected runFinalized=true after interrupt")
 	}
 
 	// Simulate what runSSEFunc does after the event loop: persist fails.
-	persistErr := l.persistPendingInterrupts(ctx, "test-app", "user-1", "t1", state.emittedInterrupts)
+	persistErr := l.persistPendingInterrupts(ctx, "test-app", "user-1", "t1", state.EmittedInterrupts)
 	if persistErr == nil {
 		t.Fatal("expected persist to fail with failAppendService")
 	}
@@ -1083,16 +1083,35 @@ func (o *onEmitFunc) OnEmit(ctx context.Context, callCtx *CallContext, event eve
 	return o.fn(ctx, callCtx, event)
 }
 
+// emitWithOnEmit mirrors the /run_sse handler: apply OnEmit interceptors, then write to the wire.
+func emitWithOnEmit(ctx context.Context, e *emitter, interceptors []CallInterceptor, callCtx *CallContext, event events.Event) {
+	if e.Err() != nil || event == nil {
+		return
+	}
+	for _, ic := range interceptors {
+		var err error
+		event, err = ic.OnEmit(ctx, callCtx, event)
+		if err != nil {
+			e.SetErr(err)
+			return
+		}
+		if event == nil {
+			return
+		}
+	}
+	e.Emit(event)
+}
+
 func TestEmitter_OnEmit_PassThrough(t *testing.T) {
 	rec := httptest.NewRecorder()
 	interceptor := &onEmitFunc{fn: func(_ context.Context, _ *CallContext, event events.Event) (events.Event, error) {
 		return event, nil
 	}}
-	e := newEmitter(context.Background(), rec, sse.NewSSEWriter(), []CallInterceptor{interceptor}, &CallContext{})
+	e := newEmitter(context.Background(), rec, sse.NewSSEWriter())
 
-	e.emit(events.NewRunStartedEvent("t1", "r1"))
-	if e.err != nil {
-		t.Fatalf("emit error = %v", e.err)
+	emitWithOnEmit(context.Background(), e, []CallInterceptor{interceptor}, &CallContext{}, events.NewRunStartedEvent("t1", "r1"))
+	if e.Err() != nil {
+		t.Fatalf("emit error = %v", e.Err())
 	}
 
 	evts := parseSSEEvents(rec.Body.String())
@@ -1109,11 +1128,11 @@ func TestEmitter_OnEmit_Suppress(t *testing.T) {
 	interceptor := &onEmitFunc{fn: func(_ context.Context, _ *CallContext, _ events.Event) (events.Event, error) {
 		return nil, nil
 	}}
-	e := newEmitter(context.Background(), rec, sse.NewSSEWriter(), []CallInterceptor{interceptor}, &CallContext{})
+	e := newEmitter(context.Background(), rec, sse.NewSSEWriter())
 
-	e.emit(events.NewRunStartedEvent("t1", "r1"))
-	if e.err != nil {
-		t.Fatalf("emit error = %v", e.err)
+	emitWithOnEmit(context.Background(), e, []CallInterceptor{interceptor}, &CallContext{}, events.NewRunStartedEvent("t1", "r1"))
+	if e.Err() != nil {
+		t.Fatalf("emit error = %v", e.Err())
 	}
 
 	evts := parseSSEEvents(rec.Body.String())
@@ -1127,18 +1146,18 @@ func TestEmitter_OnEmit_Error(t *testing.T) {
 	interceptor := &onEmitFunc{fn: func(_ context.Context, _ *CallContext, _ events.Event) (events.Event, error) {
 		return nil, fmt.Errorf("interceptor abort")
 	}}
-	e := newEmitter(context.Background(), rec, sse.NewSSEWriter(), []CallInterceptor{interceptor}, &CallContext{})
+	e := newEmitter(context.Background(), rec, sse.NewSSEWriter())
 
-	e.emit(events.NewRunStartedEvent("t1", "r1"))
-	if e.err == nil {
+	emitWithOnEmit(context.Background(), e, []CallInterceptor{interceptor}, &CallContext{}, events.NewRunStartedEvent("t1", "r1"))
+	if e.Err() == nil {
 		t.Fatal("expected error from interceptor")
 	}
-	if e.err.Error() != "interceptor abort" {
-		t.Errorf("error = %v, want 'interceptor abort'", e.err)
+	if e.Err().Error() != "interceptor abort" {
+		t.Errorf("error = %v, want 'interceptor abort'", e.Err())
 	}
 
 	// Subsequent emits should be no-ops.
-	e.emit(events.NewRunFinishedEvent("t1", "r1"))
+	emitWithOnEmit(context.Background(), e, []CallInterceptor{interceptor}, &CallContext{}, events.NewRunFinishedEvent("t1", "r1"))
 	evts := parseSSEEvents(rec.Body.String())
 	if len(evts) != 0 {
 		t.Fatalf("got %d events after error, want 0", len(evts))
@@ -1151,11 +1170,11 @@ func TestEmitter_OnEmit_Transform(t *testing.T) {
 		// Replace any event with RunError.
 		return events.NewRunErrorEvent("transformed"), nil
 	}}
-	e := newEmitter(context.Background(), rec, sse.NewSSEWriter(), []CallInterceptor{interceptor}, &CallContext{})
+	e := newEmitter(context.Background(), rec, sse.NewSSEWriter())
 
-	e.emit(events.NewRunStartedEvent("t1", "r1"))
-	if e.err != nil {
-		t.Fatalf("emit error = %v", e.err)
+	emitWithOnEmit(context.Background(), e, []CallInterceptor{interceptor}, &CallContext{}, events.NewRunStartedEvent("t1", "r1"))
+	if e.Err() != nil {
+		t.Fatalf("emit error = %v", e.Err())
 	}
 
 	evts := parseSSEEvents(rec.Body.String())
@@ -1179,11 +1198,11 @@ func TestEmitter_OnEmit_Chain(t *testing.T) {
 		order = append(order, "second")
 		return event, nil
 	}}
-	e := newEmitter(context.Background(), rec, sse.NewSSEWriter(), []CallInterceptor{first, second}, &CallContext{})
+	e := newEmitter(context.Background(), rec, sse.NewSSEWriter())
 
-	e.emit(events.NewRunStartedEvent("t1", "r1"))
-	if e.err != nil {
-		t.Fatalf("emit error = %v", e.err)
+	emitWithOnEmit(context.Background(), e, []CallInterceptor{first, second}, &CallContext{}, events.NewRunStartedEvent("t1", "r1"))
+	if e.Err() != nil {
+		t.Fatalf("emit error = %v", e.Err())
 	}
 
 	if len(order) != 2 || order[0] != "first" || order[1] != "second" {
@@ -1202,9 +1221,9 @@ func TestEmitter_OnEmit_ChainSuppressShortCircuits(t *testing.T) {
 		secondCalled = true
 		return event, nil
 	}}
-	e := newEmitter(context.Background(), rec, sse.NewSSEWriter(), []CallInterceptor{first, second}, &CallContext{})
+	e := newEmitter(context.Background(), rec, sse.NewSSEWriter())
 
-	e.emit(events.NewRunStartedEvent("t1", "r1"))
+	emitWithOnEmit(context.Background(), e, []CallInterceptor{first, second}, &CallContext{}, events.NewRunStartedEvent("t1", "r1"))
 
 	if secondCalled {
 		t.Error("second interceptor should not be called after first suppresses")
@@ -1224,9 +1243,9 @@ func TestEmitter_OnEmit_ReceivesCallContext(t *testing.T) {
 		receivedCtx = cc
 		return event, nil
 	}}
-	e := newEmitter(context.Background(), rec, sse.NewSSEWriter(), []CallInterceptor{interceptor}, callCtx)
+	e := newEmitter(context.Background(), rec, sse.NewSSEWriter())
 
-	e.emit(events.NewRunStartedEvent("t1", "r1"))
+	emitWithOnEmit(context.Background(), e, []CallInterceptor{interceptor}, callCtx, events.NewRunStartedEvent("t1", "r1"))
 
 	if receivedCtx == nil {
 		t.Fatal("OnEmit did not receive CallContext")

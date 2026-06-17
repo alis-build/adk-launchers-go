@@ -82,7 +82,7 @@ func (s *mockSession) LastUpdateTime() time.Time {
 // inspect the SSE output after processing.
 func newTestEmitter() (*emitter, *httptest.ResponseRecorder) {
 	rec := httptest.NewRecorder()
-	return newEmitter(context.Background(), rec, sse.NewSSEWriter(), nil, nil), rec
+	return newEmitter(context.Background(), rec, sse.NewSSEWriter()), rec
 }
 
 // newTestLauncher creates a minimal aguiLauncher for testing processEvent.

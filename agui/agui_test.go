@@ -1,4 +1,5 @@
 package agui
+
 import (
 	"encoding/base64"
 	"encoding/json"
@@ -7,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"go.alis.build/adk/launchers/agui/internal/aguimsg"
 )
 
 func TestParse_PathPrefixNormalization(t *testing.T) {
@@ -73,7 +75,7 @@ func TestConvertMultimodalInput(t *testing.T) {
 			Data:     data,
 			MimeType: "image/png",
 		}
-		part, err := convertMultimodalInput(ic)
+		part, err := aguimsg.ConvertMultimodalInput(ic)
 		if err != nil {
 			t.Fatalf("convertMultimodalInput() error = %v", err)
 		}
@@ -94,7 +96,7 @@ func TestConvertMultimodalInput(t *testing.T) {
 			URL:      "https://example.com/img.png",
 			MimeType: "image/png",
 		}
-		part, err := convertMultimodalInput(ic)
+		part, err := aguimsg.ConvertMultimodalInput(ic)
 		if err != nil {
 			t.Fatalf("convertMultimodalInput() error = %v", err)
 		}
@@ -116,7 +118,7 @@ func TestConvertMultimodalInput(t *testing.T) {
 				MimeType: "image/png",
 			},
 		}
-		part, err := convertMultimodalInput(ic)
+		part, err := aguimsg.ConvertMultimodalInput(ic)
 		if err != nil {
 			t.Fatalf("convertMultimodalInput() error = %v", err)
 		}
@@ -139,7 +141,7 @@ func TestConvertMultimodalInput(t *testing.T) {
 				Value: "https://example.com/img.png",
 			},
 		}
-		part, err := convertMultimodalInput(ic)
+		part, err := aguimsg.ConvertMultimodalInput(ic)
 		if err != nil {
 			t.Fatalf("convertMultimodalInput() error = %v", err)
 		}
@@ -156,7 +158,7 @@ func TestConvertMultimodalInput(t *testing.T) {
 			Type:     "image",
 			MimeType: "image/png",
 		}
-		_, err := convertMultimodalInput(ic)
+		_, err := aguimsg.ConvertMultimodalInput(ic)
 		if err == nil {
 			t.Error("expected error when no data, url, or source")
 		}
@@ -168,7 +170,7 @@ func TestConvertMultimodalInput(t *testing.T) {
 			Data:     "not-valid-base64!!",
 			MimeType: "image/png",
 		}
-		_, err := convertMultimodalInput(ic)
+		_, err := aguimsg.ConvertMultimodalInput(ic)
 		if err == nil {
 			t.Error("expected error for invalid base64")
 		}

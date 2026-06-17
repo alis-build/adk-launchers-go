@@ -1,4 +1,4 @@
-package agui
+package interrupt
 
 import (
 	"testing"
@@ -10,32 +10,32 @@ import (
 
 func TestResumeEntriesToConfirmationContent(t *testing.T) {
 	t.Run("resolved approved", func(t *testing.T) {
-		content, err := resumeEntriesToConfirmationContent([]types.ResumeEntry{{
+		content, err := EntriesToConfirmationContent([]types.ResumeEntry{{
 			InterruptID: "confirm-1",
 			Status:      types.ResumeStatusResolved,
 			Payload:     map[string]any{"approved": true},
 		}})
 		if err != nil {
-			t.Fatalf("resumeEntriesToConfirmationContent() error = %v", err)
+			t.Fatalf("EntriesToConfirmationContent() error = %v", err)
 		}
 		assertConfirmationPart(t, content, "confirm-1", map[string]any{"confirmed": true})
 	})
 
 	t.Run("resolved denied", func(t *testing.T) {
-		content, err := resumeEntriesToConfirmationContent([]types.ResumeEntry{{
+		content, err := EntriesToConfirmationContent([]types.ResumeEntry{{
 			InterruptID: "confirm-1",
 			Status:      types.ResumeStatusResolved,
 			Payload:     map[string]any{"approved": false},
 		}})
 		if err != nil {
-			t.Fatalf("resumeEntriesToConfirmationContent() error = %v", err)
+			t.Fatalf("EntriesToConfirmationContent() error = %v", err)
 		}
 		assertConfirmationPart(t, content, "confirm-1", map[string]any{"confirmed": false})
 	})
 
 	t.Run("resolved with editedArgs", func(t *testing.T) {
 		edited := map[string]any{"to": "b@c.com"}
-		content, err := resumeEntriesToConfirmationContent([]types.ResumeEntry{{
+		content, err := EntriesToConfirmationContent([]types.ResumeEntry{{
 			InterruptID: "confirm-1",
 			Status:      types.ResumeStatusResolved,
 			Payload: map[string]any{
@@ -44,7 +44,7 @@ func TestResumeEntriesToConfirmationContent(t *testing.T) {
 			},
 		}})
 		if err != nil {
-			t.Fatalf("resumeEntriesToConfirmationContent() error = %v", err)
+			t.Fatalf("EntriesToConfirmationContent() error = %v", err)
 		}
 		assertConfirmationPart(t, content, "confirm-1", map[string]any{
 			"confirmed": true,
@@ -53,18 +53,18 @@ func TestResumeEntriesToConfirmationContent(t *testing.T) {
 	})
 
 	t.Run("cancelled", func(t *testing.T) {
-		content, err := resumeEntriesToConfirmationContent([]types.ResumeEntry{{
+		content, err := EntriesToConfirmationContent([]types.ResumeEntry{{
 			InterruptID: "confirm-2",
 			Status:      types.ResumeStatusCancelled,
 		}})
 		if err != nil {
-			t.Fatalf("resumeEntriesToConfirmationContent() error = %v", err)
+			t.Fatalf("EntriesToConfirmationContent() error = %v", err)
 		}
 		assertConfirmationPart(t, content, "confirm-2", map[string]any{"confirmed": false})
 	})
 
 	t.Run("multiple entries", func(t *testing.T) {
-		content, err := resumeEntriesToConfirmationContent([]types.ResumeEntry{
+		content, err := EntriesToConfirmationContent([]types.ResumeEntry{
 			{
 				InterruptID: "confirm-a",
 				Status:      types.ResumeStatusResolved,
@@ -76,7 +76,7 @@ func TestResumeEntriesToConfirmationContent(t *testing.T) {
 			},
 		})
 		if err != nil {
-			t.Fatalf("resumeEntriesToConfirmationContent() error = %v", err)
+			t.Fatalf("EntriesToConfirmationContent() error = %v", err)
 		}
 		if len(content.Parts) != 2 {
 			t.Fatalf("len(parts) = %d, want 2", len(content.Parts))
@@ -84,14 +84,14 @@ func TestResumeEntriesToConfirmationContent(t *testing.T) {
 	})
 
 	t.Run("empty entries", func(t *testing.T) {
-		_, err := resumeEntriesToConfirmationContent(nil)
+		_, err := EntriesToConfirmationContent(nil)
 		if err == nil {
 			t.Fatal("expected error for empty resume")
 		}
 	})
 
 	t.Run("missing interruptId", func(t *testing.T) {
-		_, err := resumeEntriesToConfirmationContent([]types.ResumeEntry{{
+		_, err := EntriesToConfirmationContent([]types.ResumeEntry{{
 			Status:  types.ResumeStatusCancelled,
 		}})
 		if err == nil {
@@ -100,7 +100,7 @@ func TestResumeEntriesToConfirmationContent(t *testing.T) {
 	})
 
 	t.Run("resolved missing approved", func(t *testing.T) {
-		_, err := resumeEntriesToConfirmationContent([]types.ResumeEntry{{
+		_, err := EntriesToConfirmationContent([]types.ResumeEntry{{
 			InterruptID: "confirm-1",
 			Status:      types.ResumeStatusResolved,
 			Payload:     map[string]any{},

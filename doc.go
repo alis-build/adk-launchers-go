@@ -11,7 +11,8 @@
 // # Subpackages
 //
 //   - [agui] — AG-UI protocol SSE streaming for CopilotKit and other AG-UI clients
-//     (keyword: agui).
+//     (keyword: agui). Supports [agui.WithExecutor] for protocol-level run hooks and
+//     a default [agui.AgentExecutor] that maps ADK events to AG-UI SSE.
 //   - [lro] — HTTP resume callbacks for go.alis.build/lro/v2 long-running operations,
 //     invoked by Cloud Tasks (keyword: lro).
 //   - [scheduler] — A2A scheduler extension HTTP (cron JSON-RPC and execution callback;
