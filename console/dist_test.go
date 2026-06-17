@@ -226,7 +226,7 @@ func TestResolveProdHandler_CustomDist(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	if err := l.spaHandler(rec, httptest.NewRequest(http.MethodGet, "/", nil)); err != nil {
+	if err := l.spaHandler(rec, withTestIdentity(httptest.NewRequest(http.MethodGet, "/", nil))); err != nil {
 		t.Fatalf("spaHandler: %v", err)
 	}
 	if rec.Code != http.StatusOK {

@@ -76,6 +76,34 @@ adk web --port 8080 agui lro scheduler console -service_id=my-service -app_name=
 
 Importing [`web`](./web) (and the scheduler sublauncher) pulls in `go.alis.build/mux`, which requires `ALIS_OS_PROJECT` and `IDENTITY_SERVICE_URL` at process start.
 
+## Authentication and authorization
+
+The launchers **authorize but do not authenticate**. Authentication is expected to have already happened at a trusted upstream (a gateway or BFF) before a request reaches the process; that upstream forwards the caller identity as the `x-alis-identity` header.
+
+To make the forwarded identity available to handlers, `web.NewLauncher` installs `web.DefaultAuthGateway` as the process-wide `go.alis.build/mux` gateway. It reads the identity from the request headers and injects it into the request context so handlers can call `iam.FromContext` / `iam.MustFromContext` to authorize the caller. It performs **no** authentication and does not reject requests that lack an identity — each handler decides whether an identity is required and fails closed when it is missing.
+
+Customize or disable the gateway with `web.NewLauncherWithOptions`:
+
+```go
+// Provide a custom gateway (for example to also forward identity to a downstream gRPC server).
+launchersweb.NewLauncherWithOptions(
+    []launchersweb.Sublauncher{ /* ... */ },
+    launchersweb.WithAuthGateway(myGateway),
+)
+
+// Or disable it entirely and install your own with alismux.AddGateway.
+launchersweb.NewLauncherWithOptions(
+    []launchersweb.Sublauncher{ /* ... */ },
+    launchersweb.WithoutAuthGateway(),
+)
+```
+
+`go.alis.build/mux` supports a single gateway per process, so the web launcher owns that slot.
+
+**Scheduler cron callback.** The Cloud Tasks cron callback (`.../handler`) is privileged — it runs agents and impersonates the cron owner — so it is authenticated in-launcher as the environment service account by default. When a trusted upstream already authenticates that caller (and the endpoint is not directly reachable), opt out with `scheduler.WithoutSystemAuth()`.
+
+**Trust boundary.** Because the launchers no longer authenticate, the `x-alis-identity` header must only ever be set by the trusted upstream. Deployments must ensure the process is not directly reachable and that the header is stripped or overwritten at the edge.
+
 ### Console embed build
 
 The embedded SPA lives in `console/app/dist` (versioned in git). Rebuild with:
@@ -115,9 +143,9 @@ Dev mode (`SPA_DEV_SERVER_URL`) always takes precedence over any custom dist.
 
 ### Backend API contract (custom dist)
 
-If you replace the bundled SPA, your app must call the same host APIs on the **same origin** (so IAM cookies apply). Register sublaunchers before `console` so API routes are not shadowed by the SPA catch-all.
+If you replace the bundled SPA, your app must call the same host APIs on the **same origin**. Register sublaunchers before `console` so API routes are not shadowed by the SPA catch-all.
 
-**Authentication:** Routes marked _(auth)_ require `go.alis.build/mux` IAM (session cookies or `Authorization` bearer). `GET /auth/logout` is handled by the mux identity layer (redirect sign-out), not by package `console`.
+**Authorization:** Routes marked _(auth)_ require a caller identity in the request context (resolved from the upstream `x-alis-identity` header by the web launcher's auth gateway — see [Authentication and authorization](#authentication-and-authorization)) and fail closed with `401` when none is present. `GET /auth/logout` is handled by the `go.alis.build/mux` identity layer (redirect sign-out), not by package `console`.
 
 #### Console (`console` sublauncher)
 

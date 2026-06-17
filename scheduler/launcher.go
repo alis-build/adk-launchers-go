@@ -86,6 +86,23 @@ func WithGRPCRegistrar(reg grpc.ServiceRegistrar) Option {
 	}
 }
 
+// WithoutSystemAuth disables the in-launcher authentication on the cron callback
+// endpoint ([schedulerext.HandlerPath]).
+//
+// By default the launcher registers the cron callback with alismux.SystemPost,
+// which validates the inbound Google ID token and requires the environment
+// service account before running the cron. This endpoint is privileged: it
+// triggers agent execution and impersonates the cron owner. Disable the check
+// only when a trusted upstream already authenticates the caller (and the
+// endpoint is not directly reachable); the launcher then registers the callback
+// with alismux.Post. The cron handler always runs under the configured system
+// identity (see [WithCronIdentity]) regardless of this setting.
+func WithoutSystemAuth() Option {
+	return func(l *schedulerLauncher) {
+		l.disableSystemAuth = true
+	}
+}
+
 // schedulerLauncher implements [Launcher] and mounts scheduler routes on the host mux.
 type schedulerLauncher struct {
 	// flags holds CLI flags for the "scheduler" sublauncher keyword.
@@ -100,6 +117,10 @@ type schedulerLauncher struct {
 	jsonrpcOpts []schedjsonrpc.JSONRPCHandlerOption
 	// grpcRegistrar when set triggers schedulerext.RegisterGRPC in [SetupHostRoutes].
 	grpcRegistrar grpc.ServiceRegistrar
+	// disableSystemAuth drops the in-launcher Google ID token check on the cron
+	// callback endpoint, delegating authentication to a trusted upstream. See
+	// [WithoutSystemAuth].
+	disableSystemAuth bool
 
 	// setupOnce ensures mountHostRoutes runs at most once per launcher instance.
 	setupOnce sync.Once
@@ -211,7 +232,15 @@ func (l *schedulerLauncher) mountHostRoutes(config *adklauncher.Config) error {
 	}
 	schedulerext.RegisterHTTP(muxRegistrar{}, l.service, httpOpts...)
 
-	alismux.SystemPost(schedulerext.HandlerPath, cronHandler(l.service, rt, systemIdentity, &l.cronCfg))
+	// The cron callback is privileged (it runs agents and impersonates the cron
+	// owner). By default it is authenticated in-launcher as the environment
+	// service account; WithoutSystemAuth delegates that to a trusted upstream.
+	handler := cronHandler(l.service, rt, systemIdentity, &l.cronCfg)
+	if l.disableSystemAuth {
+		alismux.Post(schedulerext.HandlerPath, handler)
+	} else {
+		alismux.SystemPost(schedulerext.HandlerPath, handler)
+	}
 	return nil
 }
 
@@ -240,11 +269,19 @@ func (l *schedulerLauncher) registerGRPC() {
 type muxRegistrar struct{}
 
 // Handle registers extension HTTP patterns on the host mux.
-// JSON-RPC POST is authenticated; OPTIONS is unauthenticated (CORS preflight).
+//
+// The launcher authorizes but does not authenticate. The caller identity is
+// expected to already be in the request context (the web launcher's
+// authorization gateway resolves it from the upstream x-alis-identity header),
+// and SchedulerService enforces authorization via iam.MustFromContext + authz.
+//
+// The POST route is guarded with [launchersweb.RequireIdentity] so an
+// identity-less request gets a clean 401 instead of panicking inside
+// iam.MustFromContext. OPTIONS is the CORS preflight and must stay identity-free.
 func (muxRegistrar) Handle(pattern string, handler http.Handler) {
 	switch {
 	case strings.HasPrefix(pattern, "POST "+schedulerext.JSONRPCPath):
-		alismux.AuthenticatedHandleHTTP(pattern, handler)
+		alismux.HandleHTTP(pattern, handler, launchersweb.RequireIdentity)
 	case strings.HasPrefix(pattern, "OPTIONS "+schedulerext.JSONRPCPath):
 		alismux.HandleHTTP(pattern, handler)
 	default:

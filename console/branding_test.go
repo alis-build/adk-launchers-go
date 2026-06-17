@@ -19,7 +19,7 @@ type recordingRegistrar struct {
 	routes map[string]http.Handler
 }
 
-func (r *recordingRegistrar) AuthenticatedGet(pattern string, handler http.Handler) {
+func (r *recordingRegistrar) Get(pattern string, handler http.Handler) {
 	if r.routes == nil {
 		r.routes = make(map[string]http.Handler)
 	}

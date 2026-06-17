@@ -9,11 +9,21 @@ import (
 	"strings"
 	"testing"
 
+	iam "go.alis.build/iam/v3"
 	"google.golang.org/adk/agent"
 	adklauncher "google.golang.org/adk/cmd/launcher"
 	adkweb "google.golang.org/adk/cmd/launcher/web"
 	"google.golang.org/adk/session"
 )
+
+// withTestIdentity injects a caller identity into the request context, mirroring
+// what the web launcher's authorization gateway does from the x-alis-identity
+// header. Console handlers authorize against this identity and fail closed (401)
+// when it is absent.
+func withTestIdentity(req *http.Request) *http.Request {
+	id := &iam.Identity{ID: "1", Email: "tester@example.com", Type: iam.User}
+	return req.WithContext(id.Context(req.Context()))
+}
 
 func testAgent(t *testing.T, name string) agent.Agent {
 	t.Helper()
@@ -101,7 +111,7 @@ func TestSPAHandler_ServesEmbeddedAsset(t *testing.T) {
 		t.Fatalf("resolveProdHandler: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, findUnderscoreAsset(t), nil)
+	req := withTestIdentity(httptest.NewRequest(http.MethodGet, findUnderscoreAsset(t), nil))
 	rec := httptest.NewRecorder()
 	if err := l.spaHandler(rec, req); err != nil {
 		t.Fatalf("spaHandler: %v", err)
@@ -132,7 +142,7 @@ func TestRuntimeConfigHandler_AgentsFromLoader(t *testing.T) {
 	}
 	handler := l.runtimeConfigHandler(&adklauncher.Config{AgentLoader: loader})
 
-	req := httptest.NewRequest(http.MethodGet, "/assets/config/runtime-config.json", nil)
+	req := withTestIdentity(httptest.NewRequest(http.MethodGet, "/assets/config/runtime-config.json", nil))
 	rec := httptest.NewRecorder()
 	if err := handler(rec, req); err != nil {
 		t.Fatalf("handler error: %v", err)

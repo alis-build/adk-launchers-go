@@ -7,7 +7,9 @@
 // The ADK web launcher composes one or more sublaunchers, each activated by a CLI
 // keyword. This package registers the keyword "agui" and mounts AG-UI HTTP routes on
 // the process-wide host mux (go.alis.build/mux) via [HostRouteSetup]. The /run_sse
-// and /threads endpoints require IAM authentication; /capabilities is public.
+// and /threads endpoints require a caller identity (resolved from the upstream
+// x-alis-identity header by the web launcher's authorization gateway) and fail
+// closed when none is present; /capabilities is public.
 //
 // # Agent binding and multi-agent routing
 //
@@ -33,7 +35,9 @@
 // query or body field for the same resolution. Thread metadata display names
 // use each agent's ADK Description() when set (see agentDisplayName).
 // When [WithThreadService] is set, history JSON-RPC is mounted
-// at POST /alis.agui.history.v1.ThreadService for browser clients.
+// at POST /alis.agui.history.v1.ThreadService for browser clients, and native
+// gRPC is available when [WithGRPCRegistrar] registers the same service on the
+// host grpc.Server (for gRPC-Web clients and BFF proxies).
 //
 // At setup time, [SetupHostRoutes] creates a single [adkrun.Runtime]; per-request
 // [adkrun.RunRequest.AppName] selects the agent via AgentLoader.LoadAgent.
@@ -75,6 +79,7 @@
 //   - WithCapabilities — expose GET /capabilities for client discovery (see below).
 //   - WithGenAIPartConverter — customize how [genai.Part] values map to AG-UI events.
 //   - WithThreadService — enable thread metadata tracking, GET /threads listing, and history JSON-RPC.
+//   - WithGRPCRegistrar — register ThreadService on the host grpc.Server during setup (requires WithThreadService).
 //   - WithAppNameResolver — custom app name extraction from RunAgentInput.
 //   - WithHistoryJSONRPCOptions — CORS and other options for the history JSON-RPC handler.
 //   - WithMessagesSnapshotOnRunEnd — emit MESSAGES_SNAPSHOT before RunFinished on every successful run.
@@ -300,8 +305,8 @@
 // returns thread state and message history without starting a new agent run.
 // Used by CopilotKit's useCoAgentState for on-demand state retrieval.
 //
-// Request body: {"threadId": "..."}. Identity is resolved from IAM
-// authentication (same as /run_sse).
+// Request body: {"threadId": "..."}. Identity is read from the request context
+// (same as /run_sse).
 //
 // Response:
 //

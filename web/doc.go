@@ -4,11 +4,36 @@
 // The subrouter is mounted at "/" on the process-wide host mux after all sublaunchers
 // have run setup.
 //
-// Sublaunchers that need host-level features (IAM-authenticated routes, gRPC, and
+// Sublaunchers that need host-level features (identity-aware routes, gRPC, and
 // similar) may optionally implement [HostRouteSetup]. SetupHostRoutes runs before
 // SetupSubrouters so specific host patterns take precedence over the gorilla
 // catch-all. ADK built-in sublaunchers do not implement HostRouteSetup and are
 // unaffected.
+//
+// # Authentication and authorization
+//
+// The launchers authorize but do not authenticate: authentication is expected to
+// have already happened at a trusted upstream (for example a gateway or BFF)
+// before a request reaches the process. That upstream is responsible for
+// forwarding the caller identity as the x-alis-identity header.
+//
+// To make the forwarded identity available to handlers, [NewLauncher] installs
+// [DefaultAuthGateway] as the package-wide go.alis.build/mux gateway. It reads
+// the identity from the request headers and injects it into the request context,
+// so handlers can call iam.FromContext / iam.MustFromContext to authorize the
+// caller. It performs no authentication and does not reject requests that lack an
+// identity; each handler decides whether an identity is required.
+//
+// Hosts that need different behaviour (for example forwarding the identity to a
+// downstream gRPC server, or installing their own gateway) use
+// [NewLauncherWithOptions] with [WithAuthGateway] or [WithoutAuthGateway].
+// go.alis.build/mux supports a single gateway per process, so the web launcher
+// owns that slot.
+//
+// Trust boundary: because the launchers no longer authenticate, the x-alis-identity
+// header must only ever be set by the trusted upstream. Deployments must ensure
+// the process is not directly reachable and that the header is stripped or
+// overwritten at the edge.
 //
 // # Launcher usage
 //
@@ -33,7 +58,7 @@
 // paths (for example unauthenticated local dev) or leave it empty when all routes
 // live on the host mux.
 //
-// Authenticated GET (IAM cookies or bearer token; identity in request context):
+// GET that authorizes the caller (identity injected by the auth gateway):
 //
 //	import (
 //	    "net/http"
@@ -44,26 +69,33 @@
 //	)
 //
 //	func (l *myLauncher) SetupHostRoutes(config *launcher.Config) error {
-//	    hostmux.AuthenticatedGet("/my-agent/status", func(w http.ResponseWriter, r *http.Request) error {
-//	        identity := iam.MustFromContext(r.Context())
-//	        _, err := w.Write([]byte("hello, " + identity.Email))
+//	    hostmux.Get("/my-agent/status", func(w http.ResponseWriter, r *http.Request) error {
+//	        // The auth gateway (DefaultAuthGateway) injects the identity; if a
+//	        // route requires one, read it and fail closed when it is absent.
+//	        identity, err := iam.FromContext(r.Context())
+//	        if err != nil {
+//	            http.Error(w, "unauthorized", http.StatusUnauthorized)
+//	            return nil
+//	        }
+//	        _, err = w.Write([]byte("hello, " + identity.Email))
 //	        return err
 //	    })
 //	    return nil
 //	}
 //
-// Authenticated POST or an existing http.Handler (for example SSE):
+// POST or an existing http.Handler (for example SSE). The auth gateway injects
+// the identity; the handler authorizes:
 //
 //	func (l *myLauncher) SetupHostRoutes(config *launcher.Config) error {
-//	    hostmux.AuthenticatedHandleHTTP("POST /my-agent/run_sse", l.runSSEHandler())
+//	    hostmux.HandleHTTP("POST /my-agent/run_sse", l.runSSEHandler())
 //	    return nil
 //	}
 //
-// CORS preflight for a browser client must stay unauthenticated; register OPTIONS
-// on the host mux without the Authenticated* helpers:
+// CORS preflight for a browser client must stay identity-free; register OPTIONS
+// on the host mux:
 //
 //	func (l *myLauncher) SetupHostRoutes(config *launcher.Config) error {
-//	    hostmux.AuthenticatedHandleHTTP("POST /my-agent/run_sse", l.handler())
+//	    hostmux.HandleHTTP("POST /my-agent/run_sse", l.handler())
 //	    hostmux.Options("/my-agent/run_sse", func(w http.ResponseWriter, r *http.Request) error {
 //	        w.WriteHeader(http.StatusNoContent)
 //	        return nil
@@ -80,21 +112,23 @@
 //	    return nil
 //	}
 //
-// gRPC-Web for browser clients with the same auth middleware as other user routes:
+// gRPC-Web for browser clients (identity injected by the auth gateway, as for
+// other routes):
 //
 //	func (l *myLauncher) SetupHostRoutes(config *launcher.Config) error {
-//	    hostmux.AuthenticatedHandleGRPCWeb(l.grpcWebServer)
+//	    hostmux.HandleGRPCWeb(l.grpcWebServer)
 //	    return nil
 //	}
 //
 // After host setup, SetupSubrouters still runs for gorilla routes. Example split:
-// production uses host mux (auth); local dev uses gorilla only:
+// production uses the host mux (covered by the auth gateway); local dev uses
+// gorilla only:
 //
 //	func (l *myLauncher) SetupHostRoutes(config *launcher.Config) error {
 //	    if !l.requireAuth {
 //	        return nil
 //	    }
-//	    hostmux.AuthenticatedHandleHTTP("POST /my-agent/run_sse", l.handler())
+//	    hostmux.HandleHTTP("POST /my-agent/run_sse", l.handler())
 //	    return nil
 //	}
 //

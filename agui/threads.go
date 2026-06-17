@@ -14,8 +14,8 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
-	pb "go.alis.build/common/alis/agui/history/v1"
 	historyservice "go.alis.build/agui/history/service"
+	pb "go.alis.build/common/alis/agui/history/v1"
 	"go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
 	"google.golang.org/adk/session"
@@ -38,7 +38,7 @@ func (l *aguiLauncher) threadMessagesFunc() alismux.Func {
 
 		identity, identityErr := iam.FromContext(ctx)
 		if identityErr != nil || identity == nil {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return nil
 		}
 		userID := identity.ID
@@ -217,7 +217,7 @@ func (l *aguiLauncher) getThreadFunc() alismux.Func {
 
 		identity, identityErr := iam.FromContext(ctx)
 		if identityErr != nil || identity == nil {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return nil
 		}
 
@@ -253,7 +253,7 @@ func (l *aguiLauncher) deleteThreadFunc() alismux.Func {
 
 		identity, identityErr := iam.FromContext(ctx)
 		if identityErr != nil || identity == nil {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return nil
 		}
 
@@ -285,7 +285,7 @@ func (l *aguiLauncher) listThreadsFunc() alismux.Func {
 
 		identity, identityErr := iam.FromContext(ctx)
 		if identityErr != nil || identity == nil {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return nil
 		}
 

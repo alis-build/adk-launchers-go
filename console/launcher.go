@@ -173,22 +173,32 @@ func (l *consoleLauncher) mountHostRoutes(config *adklauncher.Config) error {
 		}
 	}
 
-	alismux.AuthenticatedGet("/assets/config/runtime-config.json", l.runtimeConfigHandler(config))
-	alismux.AuthenticatedGet("/auth/me", getMe)
-	alismux.AuthenticatedGet("/", l.spaHandler)
+	alismux.Get("/assets/config/runtime-config.json", l.runtimeConfigHandler(config))
+	alismux.Get("/auth/me", getMe)
+	alismux.Get("/", l.spaHandler)
 	return nil
 }
 
 type hostBrandingRegistrar struct{}
 
-func (hostBrandingRegistrar) AuthenticatedGet(pattern string, handler http.Handler) {
-	alismux.AuthenticatedGet(pattern, func(w http.ResponseWriter, r *http.Request) error {
+func (hostBrandingRegistrar) Get(pattern string, handler http.Handler) {
+	alismux.Get(pattern, func(w http.ResponseWriter, r *http.Request) error {
+		if identity, err := iam.FromContext(r.Context()); err != nil || identity == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return nil
+		}
+
 		handler.ServeHTTP(w, r)
 		return nil
 	})
 }
 
 func (l *consoleLauncher) spaHandler(w http.ResponseWriter, r *http.Request) error {
+	if identity, err := iam.FromContext(r.Context()); err != nil || identity == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return nil
+	}
+
 	if l.isLocal() {
 		l.devProxy.ServeHTTP(w, r)
 		return nil
@@ -199,6 +209,11 @@ func (l *consoleLauncher) spaHandler(w http.ResponseWriter, r *http.Request) err
 
 func (l *consoleLauncher) runtimeConfigHandler(config *adklauncher.Config) alismux.Func {
 	return func(w http.ResponseWriter, r *http.Request) error {
+		if identity, err := iam.FromContext(r.Context()); err != nil || identity == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return nil
+		}
+
 		resp := runtimeConfigResponse{
 			GcpProject: os.Getenv("ALIS_OS_PROJECT"),
 		}
@@ -221,7 +236,7 @@ func getMe(w http.ResponseWriter, r *http.Request) error {
 
 	identity, err := iam.FromContext(r.Context())
 	if err != nil || identity == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return nil
 	}
 	return json.NewEncoder(w).Encode(map[string]string{

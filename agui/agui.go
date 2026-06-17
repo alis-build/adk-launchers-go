@@ -29,6 +29,7 @@ import (
 	weblauncher "google.golang.org/adk/cmd/launcher/web"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -103,6 +104,8 @@ type AGUIConfig struct {
 	appNameResolver AppNameResolver
 	// historyJSONRPCOpts are forwarded to history jsonrpc.Register when WithThreadService is set.
 	historyJSONRPCOpts []historyjsonrpc.JSONRPCHandlerOption
+	// grpcRegistrar when set triggers ThreadService.Register in [SetupHostRoutes].
+	grpcRegistrar grpc.ServiceRegistrar
 }
 
 // Option configures an [AGUIConfig] passed to [NewLauncher].
@@ -167,6 +170,22 @@ func WithGenAIPartConverter(converter GenAIPartConverter) Option {
 func WithThreadService(svc *historyservice.ThreadService) Option {
 	return func(c *AGUIConfig) {
 		c.threadService = svc
+	}
+}
+
+// WithGRPCRegistrar registers ThreadService on reg during [SetupHostRoutes].
+//
+// Requires [WithThreadService]. Pass the host's grpc.Server (it implements
+// [grpc.ServiceRegistrar]). The host must mount that server on go.alis.build/mux
+// (for example hostmux.HandleGRPC) and install iam.UnaryInterceptor so caller
+// identity is available to ThreadService methods. Do not also call
+// threadService.Register for the same service instance.
+func WithGRPCRegistrar(reg grpc.ServiceRegistrar) Option {
+	if reg == nil {
+		panic("agui: WithGRPCRegistrar requires a non-nil ServiceRegistrar")
+	}
+	return func(c *AGUIConfig) {
+		c.grpcRegistrar = reg
 	}
 }
 
@@ -291,6 +310,9 @@ func (l *aguiLauncher) SetupSubrouters(_ *mux.Router, _ *launcher.Config) error 
 //	GET  {pathPrefix}/threads/{threadId}/messages     — thread message history (authenticated)
 //	GET  {pathPrefix}/capabilities                    — capability discovery (public, if configured)
 //	OPTIONS for each route above                      — CORS preflight (when WithCORS is set)
+//
+// When [WithThreadService] and [WithGRPCRegistrar] are set, ThreadService is also
+// registered on the host grpc.Server for native gRPC and gRPC-Web clients.
 func (l *aguiLauncher) SetupHostRoutes(config *launcher.Config) error {
 	l.hostSetupOnce.Do(func() {
 		l.hostSetupErr = l.mountHostRoutes(config)
@@ -313,25 +335,26 @@ func (l *aguiLauncher) mountHostRoutes(config *launcher.Config) error {
 	// POST /run_sse — SSE streaming endpoint for agent runs.
 	ssePath := l.config.pathPrefix + "/run_sse"
 	l.registerCORSPreflight(ssePath, "POST")
-	alismux.AuthenticatedPost(ssePath, l.runSSEFunc(), corsMW...)
+	alismux.Post(ssePath, l.runSSEFunc(), corsMW...)
 
 	// GET /threads/{threadId}/messages — thread message history.
 	messagesPath := l.config.pathPrefix + "/threads/{threadId}/messages"
 	l.registerCORSPreflight(messagesPath, "GET")
-	alismux.AuthenticatedGet(messagesPath, l.threadMessagesFunc(), corsMW...)
+	alismux.Get(messagesPath, l.threadMessagesFunc(), corsMW...)
 
 	l.registerHistoryJSONRPC()
+	l.registerGRPC()
 
 	// Thread metadata endpoints (optional, requires WithThreadService).
 	if l.config.threadService != nil {
 		threadPath := l.config.pathPrefix + "/threads/{threadId}"
 		l.registerCORSPreflight(threadPath, "GET, DELETE")
-		alismux.AuthenticatedGet(threadPath, l.getThreadFunc(), corsMW...)
-		alismux.AuthenticatedDelete(threadPath, l.deleteThreadFunc(), corsMW...)
+		alismux.Get(threadPath, l.getThreadFunc(), corsMW...)
+		alismux.Delete(threadPath, l.deleteThreadFunc(), corsMW...)
 
 		listPath := l.config.pathPrefix + "/threads"
 		l.registerCORSPreflight(listPath, "GET")
-		alismux.AuthenticatedGet(listPath, l.listThreadsFunc(), corsMW...)
+		alismux.Get(listPath, l.listThreadsFunc(), corsMW...)
 	}
 
 	// GET /capabilities — capability discovery (optional).
@@ -345,10 +368,32 @@ func (l *aguiLauncher) mountHostRoutes(config *launcher.Config) error {
 	if l.config.enableAgentStateEndpoint {
 		statePath := l.config.pathPrefix + "/agents/state"
 		l.registerCORSPreflight(statePath, "POST")
-		alismux.AuthenticatedPost(statePath, l.agentStateFunc(), corsMW...)
+		alismux.Post(statePath, l.agentStateFunc(), corsMW...)
 	}
 
 	return nil
+}
+
+const threadGRPCServiceName = "alis.agui.history.v1.ThreadService"
+
+// serviceInfoProvider is satisfied by *grpc.Server but not by grpc.ServiceRegistrar,
+// allowing a pre-registration check without importing a concrete type.
+type serviceInfoProvider interface {
+	GetServiceInfo() map[string]grpc.ServiceInfo
+}
+
+// registerGRPC wires ThreadService into grpcRegistrar when [WithGRPCRegistrar] and
+// [WithThreadService] were both configured.
+func (l *aguiLauncher) registerGRPC() {
+	if l.config.grpcRegistrar == nil || l.config.threadService == nil {
+		return
+	}
+	if si, ok := l.config.grpcRegistrar.(serviceInfoProvider); ok {
+		if _, exists := si.GetServiceInfo()[threadGRPCServiceName]; exists {
+			return
+		}
+	}
+	l.config.threadService.Register(l.config.grpcRegistrar)
 }
 
 // UserMessage prints the AG-UI endpoint URLs to the console on startup.
@@ -388,9 +433,9 @@ type agentStateRequest struct {
 
 // agentStateResponse is the JSON response body for POST /agents/state.
 type agentStateResponse struct {
-	ThreadID     string         `json:"threadId"`
-	ThreadExists bool           `json:"threadExists"`
-	State        map[string]any `json:"state"`
+	ThreadID     string          `json:"threadId"`
+	ThreadExists bool            `json:"threadExists"`
+	State        map[string]any  `json:"state"`
 	Messages     []types.Message `json:"messages"`
 }
 
@@ -411,10 +456,12 @@ func (l *aguiLauncher) agentStateFunc() alismux.Func {
 		}
 
 		ctx := r.Context()
-		userID := ""
-		if identity, err := iam.FromContext(ctx); err == nil && identity != nil {
-			userID = identity.ID
+		identity, identityErr := iam.FromContext(ctx)
+		if identityErr != nil || identity == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return nil
 		}
+		userID := identity.ID
 		if userID == "" {
 			http.Error(w, "userID is required", http.StatusUnauthorized)
 			return nil
@@ -774,7 +821,9 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 
 		ctx := r.Context()
 
-		// Populate user from mux IAM identity. Interceptors may override.
+		// Populate user from the mux IAM identity when present. This is
+		// best-effort: interceptors may supply or override the user below, and
+		// the userID is validated after interceptors run.
 		callCtx := &CallContext{User: &User{}}
 		if identity, identityErr := iam.FromContext(ctx); identityErr == nil && identity != nil {
 			callCtx.User.Name = identity.ID
@@ -822,6 +871,9 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		// Re-extract identity from the post-interceptor context so it
 		// reflects any identity changes made by interceptors.
 		if l.config.threadService != nil && state.threadID != "" && userID != "" {
+			// Best-effort: skip the metadata upsert when no identity is present
+			// (for example identity supplied only via callCtx by an interceptor)
+			// rather than failing the already-validated request.
 			if iamIdentity, identityErr := iam.FromContext(ctx); identityErr == nil && iamIdentity != nil {
 				l.upsertThreadMetadata(ctx, iamIdentity, state.threadID, resolvedAppName, &req)
 			}

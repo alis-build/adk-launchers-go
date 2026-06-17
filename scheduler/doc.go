@@ -3,12 +3,26 @@
 //
 // It registers two HTTP surfaces on go.alis.build/mux (via [go.alis.build/adk/launchers/web]):
 //
-//   - JSON-RPC at /alis.a2a.extension.v1.SchedulerService for cron CRUD (authenticated POST + OPTIONS).
+//   - JSON-RPC at /alis.a2a.extension.v1.SchedulerService for cron CRUD (POST + OPTIONS).
 //   - Cloud Tasks callback at /alis.a2a.extension.v1.SchedulerService/handler for cron execution.
 //
 // When Cloud Tasks invokes the handler, this package runs the configured ADK app
 // in-process through [go.alis.build/adk/launchers/internal/adkrun] instead of the
 // stock extension handler that loops back over A2A gRPC.
+//
+// # Authentication and authorization
+//
+// The JSON-RPC surface is registered without authentication: the launcher
+// authorizes but does not authenticate. The caller identity is expected to be in
+// the request context already (the web launcher's authorization gateway resolves
+// it from the upstream x-alis-identity header), and SchedulerService enforces
+// authorization with iam.MustFromContext + authz.
+//
+// The Cloud Tasks callback is different. It is privileged — it runs agents and
+// impersonates the cron owner — so by default it is authenticated in-launcher
+// with alismux.SystemPost, which validates the inbound Google ID token and
+// requires the environment service account. Use [WithoutSystemAuth] to delegate
+// that check to a trusted upstream when the callback is not directly reachable.
 //
 // # Host responsibilities
 //
@@ -49,6 +63,7 @@
 //   - [WithSynchronousExecution] — sync ADK run; 500 on agent failure, 200 on persist failure.
 //   - [WithCronObserver] — lifecycle hooks around in-process execution.
 //   - [WithGRPCRegistrar] — register SchedulerService on the host grpc.Server during setup.
+//   - [WithoutSystemAuth] — delegate cron callback authentication to a trusted upstream.
 //
 // # Example
 //

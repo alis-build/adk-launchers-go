@@ -20,8 +20,12 @@ type AssetResolver interface {
 }
 
 // BrandingRouteRegistrar lets asset resolvers mount handlers before the SPA catch-all.
+//
+// Get registers a route that requires a caller identity in the request context
+// (the launcher authorizes but does not authenticate; the web launcher's
+// authorization gateway injects the identity from the upstream header).
 type BrandingRouteRegistrar interface {
-	AuthenticatedGet(pattern string, handler http.Handler)
+	Get(pattern string, handler http.Handler)
 }
 
 type urlAsset struct {
@@ -70,7 +74,7 @@ func (a embedAsset) Resolve(registrar BrandingRouteRegistrar) (string, error) {
 	}
 
 	publicPath := BrandingURLPrefix + a.relativePath
-	registrar.AuthenticatedGet(publicPath, serveFSFile(a.files, fsPath))
+	registrar.Get(publicPath, serveFSFile(a.files, fsPath))
 	return publicPath, nil
 }
 

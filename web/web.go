@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"go.alis.build/adk/launchers/internal/launcherutils"
+	iam "go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
 	"google.golang.org/adk/cmd/launcher"
 	"google.golang.org/adk/cmd/launcher/universal"
@@ -30,6 +31,77 @@ type webConfig struct {
 	idleTimeout     time.Duration
 	shutdownTimeout time.Duration
 	otelToCloud     bool
+	// authGateway is the package-wide go.alis.build/mux gateway installed before
+	// serving. It is responsible for resolving the upstream caller identity into
+	// the request context so sublauncher handlers can authorize. A nil value
+	// installs no gateway. Defaults to [DefaultAuthGateway].
+	authGateway alismux.Middleware
+}
+
+// Option configures optional [webLauncher] settings applied in [NewLauncher].
+type Option func(*webLauncher)
+
+// WithAuthGateway overrides the package-wide authorization gateway installed
+// before serving.
+//
+// The launchers perform authorization only; they assume authentication already
+// happened upstream. The gateway's job is to translate the upstream-provided
+// identity (for example the x-alis-identity header set by a trusted gateway or
+// BFF) into the request context via iam.Identity.Context so that handlers can
+// call iam.FromContext / iam.MustFromContext. go.alis.build/mux supports a
+// single gateway per process, so a host that also needs to forward identity to
+// a downstream gRPC server should compose that behaviour into the middleware
+// passed here.
+//
+// Passing nil is equivalent to [WithoutAuthGateway].
+func WithAuthGateway(gw alismux.Middleware) Option {
+	return func(l *webLauncher) {
+		l.config.authGateway = gw
+	}
+}
+
+// WithoutAuthGateway disables the package-wide authorization gateway.
+//
+// Use this when the host installs its own gateway with alismux.AddGateway or
+// when identity is resolved per route. Handlers that require an identity still
+// fail closed when none is present in the request context.
+func WithoutAuthGateway() Option {
+	return func(l *webLauncher) {
+		l.config.authGateway = nil
+	}
+}
+
+// DefaultAuthGateway is the authorization gateway installed by [NewLauncher].
+//
+// It reads the caller identity from the request headers (the x-alis-identity
+// header set by a trusted upstream) and injects it into the request context so
+// sublauncher handlers can authorize via iam.FromContext. It performs no
+// authentication: requests without a valid identity header pass through
+// unchanged so that routes using a different scheme (for example the scheduler
+// cron endpoint authenticated as the environment service account) keep working.
+// Each handler remains responsible for rejecting callers that require an
+// identity it cannot find.
+func DefaultAuthGateway(w http.ResponseWriter, r *http.Request, next alismux.Func) error {
+	if identity, err := iam.FromHeader(r); err == nil {
+		r = r.WithContext(identity.Context(r.Context()))
+	}
+	return next(w, r)
+}
+
+// RequireIdentity is a go.alis.build/mux middleware that rejects requests
+// lacking a caller identity in the request context with 401 Unauthorized.
+//
+// Use it on routes whose handlers assume an identity is present (for example
+// handlers that call iam.MustFromContext), so a missing identity yields a clean
+// 401 instead of a panic. The identity is normally injected by the
+// authorization gateway (see [DefaultAuthGateway]) from the upstream
+// x-alis-identity header; this middleware only enforces its presence and never
+// authenticates.
+func RequireIdentity(w http.ResponseWriter, r *http.Request, next alismux.Func) error {
+	if _, err := iam.FromContext(r.Context()); err != nil {
+		return alismux.UnauthorizedErr("identity required")
+	}
+	return next(w, r)
 }
 
 type webLauncher struct {
@@ -145,6 +217,10 @@ func (w *webLauncher) Run(ctx context.Context, config *launcher.Config) error {
 		}
 	}
 
+	if w.config.authGateway != nil {
+		alismux.AddGateway(w.config.authGateway)
+	}
+
 	alismux.HandleHTTP("/", router)
 
 	log.Printf("Starting the web server: %+v", w.config)
@@ -201,8 +277,20 @@ func initTelemetry(ctx context.Context, config *launcher.Config, otelToCloud boo
 // NewLauncher creates a web launcher that serves through go.alis.build/mux and
 // composes one or more Sublaunchers on a shared gorilla/mux router. Sublaunchers
 // may optionally implement HostRouteSetup to register routes on the host mux first.
+//
+// By default it installs [DefaultAuthGateway], which resolves the upstream
+// caller identity into the request context. Use [NewLauncherWithOptions] to
+// customise or disable that gateway.
 func NewLauncher(sublaunchers ...Sublauncher) launcher.SubLauncher {
-	config := &webConfig{}
+	return NewLauncherWithOptions(sublaunchers)
+}
+
+// NewLauncherWithOptions is [NewLauncher] with additional configuration.
+//
+// Options tune host-level behaviour such as the authorization gateway (see
+// [WithAuthGateway] and [WithoutAuthGateway]).
+func NewLauncherWithOptions(sublaunchers []Sublauncher, opts ...Option) launcher.SubLauncher {
+	config := &webConfig{authGateway: DefaultAuthGateway}
 
 	fs := flag.NewFlagSet("web", flag.ContinueOnError)
 	fs.IntVar(&config.port, "port", 8080, "Localhost port for the server")
@@ -212,11 +300,15 @@ func NewLauncher(sublaunchers ...Sublauncher) launcher.SubLauncher {
 	fs.DurationVar(&config.shutdownTimeout, "shutdown-timeout", 15*time.Second, "Server shutdown timeout (i.e. '10s', '2m' - see time.ParseDuration for details) - for waiting for active requests to finish during shutdown")
 	fs.BoolVar(&config.otelToCloud, "otel_to_cloud", false, "Enables/disables OpenTelemetry export to GCP: telemetry.googleapis.com. See adk-go/telemetry package for details about supported options, credentials and environment variables.")
 
-	return &webLauncher{
+	l := &webLauncher{
 		config:       config,
 		flags:        fs,
 		sublaunchers: sublaunchers,
 	}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 // logger is a middleware that logs the HTTP method, request URI, and the time taken to process the request.

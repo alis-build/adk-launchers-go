@@ -13,14 +13,15 @@ type Sublauncher = adkweb.Sublauncher
 
 // HostRouteSetup is an optional extension for sublaunchers that also register routes
 // on the process-wide HTTP mux (go.alis.build/mux) before the gorilla subrouter
-// catch-all is mounted. Use this for authenticated routes, gRPC, or other host-level
+// catch-all is mounted. Use this for identity-aware routes, gRPC, or other host-level
 // features that are not available on the gorilla subrouter alone.
 //
 // Sublaunchers that do not implement HostRouteSetup are unchanged: only
 // SetupSubrouters runs. ADK default sublaunchers do not implement this interface.
 //
 // Do not register the same path in SetupHostRoutes and SetupSubrouters; pick one
-// per URL. See package web documentation for AuthenticatedGet and gRPC examples.
+// per URL. See package web documentation for route and gRPC examples, and for how
+// the authorization gateway makes the caller identity available to handlers.
 type HostRouteSetup interface {
 	SetupHostRoutes(config *launcher.Config) error
 }

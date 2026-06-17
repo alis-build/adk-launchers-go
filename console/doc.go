@@ -78,10 +78,11 @@
 // uses. Routes are registered by sublaunchers on the host mux (go.alis.build/mux);
 // register console last so its GET / catch-all does not shadow API paths below.
 //
-// Authentication: endpoints marked (auth) require IAM via mux (session cookies or
-// Authorization bearer). The SPA uses same-origin fetch with credentials for /auth/me.
-// /auth/logout is served by the mux identity layer (browser redirect), not by
-// package console.
+// Authorization: endpoints marked (auth) require a caller identity in the request
+// context (resolved from the upstream x-alis-identity header by the web launcher's
+// authorization gateway) and fail closed with 401 when none is present. The
+// launcher authorizes but does not authenticate. /auth/logout is served by the mux
+// identity layer (browser redirect), not by package console.
 //
 // ## Console launcher
 //
