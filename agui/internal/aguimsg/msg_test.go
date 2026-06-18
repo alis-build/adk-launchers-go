@@ -1,4 +1,4 @@
-package agui
+package aguimsg
 
 import (
 	"testing"
@@ -11,7 +11,7 @@ func TestTrailingToolMessages_NoTools(t *testing.T) {
 		{ID: "1", Role: types.RoleUser, Content: "hello"},
 		{ID: "2", Role: types.RoleAssistant, Content: "hi"},
 	}
-	if got := trailingToolMessages(msgs); len(got) != 0 {
+	if got := TrailingToolMessages(msgs); len(got) != 0 {
 		t.Errorf("expected 0 trailing tools, got %d", len(got))
 	}
 }
@@ -24,7 +24,7 @@ func TestTrailingToolMessages_TrailingTools(t *testing.T) {
 		}},
 		{ID: "3", Role: types.RoleTool, ToolCallID: "tc1", Content: `{"result":"found"}`},
 	}
-	got := trailingToolMessages(msgs)
+	got := TrailingToolMessages(msgs)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 trailing tool, got %d", len(got))
 	}
@@ -43,7 +43,7 @@ func TestTrailingToolMessages_HistoricalToolsIgnored(t *testing.T) {
 		{ID: "4", Role: types.RoleAssistant, Content: "I found it"},
 		{ID: "5", Role: types.RoleUser, Content: "thanks"},
 	}
-	if got := trailingToolMessages(msgs); len(got) != 0 {
+	if got := TrailingToolMessages(msgs); len(got) != 0 {
 		t.Errorf("expected 0 trailing tools (historical tool followed by user msg), got %d", len(got))
 	}
 }
@@ -54,7 +54,7 @@ func TestTrailingToolMessages_MultipleTrailingTools(t *testing.T) {
 		{ID: "2", Role: types.RoleTool, ToolCallID: "tc1", Content: `"a"`},
 		{ID: "3", Role: types.RoleTool, ToolCallID: "tc2", Content: `"b"`},
 	}
-	got := trailingToolMessages(msgs)
+	got := TrailingToolMessages(msgs)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 trailing tools, got %d", len(got))
 	}
@@ -65,7 +65,7 @@ func TestTrailingToolMessages_ToolWithoutIDIgnored(t *testing.T) {
 		{ID: "1", Role: types.RoleUser, Content: "hi"},
 		{ID: "2", Role: types.RoleTool, Content: "no call id"},
 	}
-	if got := trailingToolMessages(msgs); len(got) != 0 {
+	if got := TrailingToolMessages(msgs); len(got) != 0 {
 		t.Errorf("expected 0 (tool without callID), got %d", len(got))
 	}
 }
@@ -100,8 +100,8 @@ func TestIsToolResultSubmission(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isToolResultSubmission(tt.msgs); got != tt.want {
-				t.Errorf("isToolResultSubmission() = %v, want %v", got, tt.want)
+			if got := IsToolResultSubmission(tt.msgs); got != tt.want {
+				t.Errorf("IsToolResultSubmission() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -143,7 +143,7 @@ func TestContentToResponseMap(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := contentToResponseMap(tt.content)
+			got := ContentToResponseMap(tt.content)
 			if got == nil {
 				t.Fatal("expected non-nil map")
 			}
@@ -151,27 +151,6 @@ func TestContentToResponseMap(t *testing.T) {
 				if v, ok := got[tt.wantKey]; !ok || v != tt.wantVal {
 					t.Errorf("got[%q] = %v, want %v", tt.wantKey, v, tt.wantVal)
 				}
-			}
-		})
-	}
-}
-
-func TestIsPendingProxyResponse(t *testing.T) {
-	tests := []struct {
-		name     string
-		response map[string]any
-		want     bool
-	}{
-		{"nil", nil, false},
-		{"empty", map[string]any{}, false},
-		{"pending", map[string]any{"status": "pending"}, true},
-		{"success", map[string]any{"status": "success"}, false},
-		{"non-string status", map[string]any{"status": 123}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isPendingProxyResponse(tt.response); got != tt.want {
-				t.Errorf("isPendingProxyResponse() = %v, want %v", got, tt.want)
 			}
 		})
 	}

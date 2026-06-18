@@ -6,8 +6,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"go.alis.build/adk/launchers/agui/internal/stream"
 	"google.golang.org/adk/session"
 )
 
@@ -59,23 +59,7 @@ func (l *aguiLauncher) ensureSessionForSnapshot(ctx context.Context, appName, us
 // buildStateSnapshot merges persisted session state with optional request state from
 // RunAgentInput, omitting launcher-internal keys.
 func buildStateSnapshot(sess session.Session, reqState map[string]any) map[string]any {
-	out := make(map[string]any)
-	if sess != nil {
-		for key, val := range sess.State().All() {
-			if !isInternalStateKey(key) {
-				out[key] = val
-			}
-		}
-	}
-	for key, val := range reqState {
-		if !isInternalStateKey(key) {
-			out[key] = val
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return stream.BuildStateSnapshot(sess, reqState, isInternalStateKey)
 }
 
 // buildMessagesSnapshot converts ADK session history to AG-UI messages for
@@ -92,16 +76,4 @@ func (l *aguiLauncher) buildMessagesSnapshot(ctx context.Context, sess session.S
 	return ConvertSessionToMessages(ctx, sess, opts...)
 }
 
-// emitStateSnapshotIfNonEmpty emits a StateSnapshotEvent when snapshot has keys.
-func emitStateSnapshotIfNonEmpty(e *emitter, snapshot map[string]any) {
-	if len(snapshot) > 0 {
-		e.emit(events.NewStateSnapshotEvent(snapshot))
-	}
-}
-
-// emitMessagesSnapshotIfNonEmpty emits a MessagesSnapshotEvent when messages exist.
-func emitMessagesSnapshotIfNonEmpty(e *emitter, messages []types.Message) {
-	if len(messages) > 0 {
-		e.emit(events.NewMessagesSnapshotEvent(messages))
-	}
-}
+// emitStateSnapshotIfNonEmpty and emitMessagesSnapshotIfNonEmpty are defined in stream.go.
