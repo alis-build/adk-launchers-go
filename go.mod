@@ -2,8 +2,10 @@ module go.alis.build/adk/launchers
 
 go 1.26.1
 
+replace google.golang.org/adk => github.com/google/adk-go v1.4.1-0.20260618110228-b304aafa8b9f
+
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260616191755-66a92b75ac63
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260617132514-63fc8900f3a5
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	go.alis.build/a2a/extension/scheduler v1.2.4
@@ -14,7 +16,7 @@ require (
 	go.alis.build/lro/v2 v2.8.0
 	go.alis.build/mux v0.4.9
 	google.golang.org/adk v1.4.0
-	google.golang.org/genai v1.60.0
+	google.golang.org/genai v1.61.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )
