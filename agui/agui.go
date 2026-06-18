@@ -813,7 +813,9 @@ func (l *aguiLauncher) runSSEFunc() alismux.Func {
 		}
 		state.threadID = req.ThreadID
 		if state.threadID == "" {
-			state.threadID = uuid.New().String()
+			// TODO: We remove hyphens due to a bug with vertexai user provided IDs not accepting IDs with hyphens.
+			// We should remove this once the bug is fixed. See https://github.com/googleapis/google-cloud-go/issues/14656
+			state.threadID = strings.ReplaceAll(uuid.New().String(), "-", "")
 		}
 
 		// ADK session ID maps 1:1 with AG-UI threadID for conversation continuity.
