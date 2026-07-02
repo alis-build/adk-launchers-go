@@ -1,7 +1,12 @@
-// Package adkrun runs ADK agents in-process from launchers (scheduler cron ticks, etc.).
+// Package adkrun runs ADK agents in-process from launchers (scheduler cron ticks,
+// eval inference, AG-UI runs, etc.).
 //
-// Construct a [Runtime] with [NewRuntime] and [launcher.Config], then call [Runtime.RunSSE]
-// and range over the returned event iterator.
+// Construct a [Runtime] with [NewRuntime] and [launcher.Config], then call
+// [Runtime.RunSSE] and range over the returned event iterator. Use
+// [Runtime.RunSSEWithExtraPlugins] when a single run needs additional ADK plugins
+// (for example eval request interceptors) without changing the launcher-wide
+// plugin list. Multi-turn callers should use [Runtime.MergeExtraPlugins] once and
+// pass the result to [Runtime.RunSSEWithPluginConfig] on each turn.
 package adkrun
 
 import (
@@ -14,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/cmd/launcher"
+	"google.golang.org/adk/v2/plugin"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
@@ -94,10 +100,52 @@ func (rt *Runtime) AppName() string {
 	return rt.appName
 }
 
+// LauncherConfig returns the launcher configuration backing this runtime.
+// Callers must treat the returned value as read-only; mutating shared services
+// or plugin lists affects all concurrent runs on this runtime.
+func (rt *Runtime) LauncherConfig() *launcher.Config {
+	return rt.launcherCfg
+}
+
 // RunSSE executes an agent turn and returns the session id plus an iterator of ADK
 // session events. Callers range over events until the iterator completes or returns
 // an error; set [RunRequest.Streaming] to receive partial model tokens.
 func (rt *Runtime) RunSSE(ctx context.Context, req RunRequest) (string, iter.Seq2[*Event, error], error) {
+	return rt.runSSE(ctx, req, rt.launcherCfg.PluginConfig)
+}
+
+// MergeExtraPlugins returns a plugin config with extraPlugins appended to the
+// launcher plugin list. Multi-turn eval inference should call this once per run
+// and reuse the result with [Runtime.RunSSEWithPluginConfig].
+func (rt *Runtime) MergeExtraPlugins(extraPlugins ...*plugin.Plugin) runner.PluginConfig {
+	base := rt.launcherCfg.PluginConfig
+	if len(extraPlugins) == 0 {
+		return base
+	}
+	merged := make([]*plugin.Plugin, 0, len(base.Plugins)+len(extraPlugins))
+	merged = append(merged, base.Plugins...)
+	merged = append(merged, extraPlugins...)
+	return runner.PluginConfig{
+		Plugins:      merged,
+		CloseTimeout: base.CloseTimeout,
+	}
+}
+
+// RunSSEWithPluginConfig is like [Runtime.RunSSE] but uses the supplied plugin
+// config instead of the launcher default. Prefer this over repeated calls to
+// [Runtime.RunSSEWithExtraPlugins] when the same extra plugins apply to every turn.
+func (rt *Runtime) RunSSEWithPluginConfig(ctx context.Context, req RunRequest, pluginConfig runner.PluginConfig) (string, iter.Seq2[*Event, error], error) {
+	return rt.runSSE(ctx, req, pluginConfig)
+}
+
+// RunSSEWithExtraPlugins is like [Runtime.RunSSE] but merges extraPlugins onto
+// the launcher plugin list for this run only. Plugin order is launcher plugins
+// first, then extraPlugins. Returns the same errors as [Runtime.RunSSE].
+func (rt *Runtime) RunSSEWithExtraPlugins(ctx context.Context, req RunRequest, extraPlugins ...*plugin.Plugin) (string, iter.Seq2[*Event, error], error) {
+	return rt.runSSE(ctx, req, rt.MergeExtraPlugins(extraPlugins...))
+}
+
+func (rt *Runtime) runSSE(ctx context.Context, req RunRequest, pluginConfig runner.PluginConfig) (string, iter.Seq2[*Event, error], error) {
 	if strings.TrimSpace(req.UserID) == "" {
 		return "", nil, fmt.Errorf("adkrun: user id is required")
 	}
@@ -116,7 +164,6 @@ func (rt *Runtime) RunSSE(ctx context.Context, req RunRequest) (string, iter.Seq
 	sessionService := rt.launcherCfg.SessionService
 	memoryService := rt.launcherCfg.MemoryService
 	artifactService := rt.launcherCfg.ArtifactService
-	pluginConfig := rt.launcherCfg.PluginConfig
 
 	sessionID := req.SessionID
 	if sessionID == "" {

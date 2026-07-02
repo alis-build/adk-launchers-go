@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	_ "go.alis.build/adk/launchers/internal/testenv"
 	"go.alis.build/adk/launchers/internal/launcherutils"
 	iam "go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
@@ -23,7 +24,7 @@ import (
 	"google.golang.org/adk/v2/telemetry"
 )
 
-// webConfig contains parameters for launching web server
+// webConfig holds HTTP server and auth gateway settings for the web launcher.
 type webConfig struct {
 	port            int
 	writeTimeout    time.Duration
@@ -104,6 +105,7 @@ func RequireIdentity(w http.ResponseWriter, r *http.Request, next alismux.Func) 
 	return next(w, r)
 }
 
+// webLauncher composes ADK sublaunchers and serves them through go.alis.build/mux.
 type webLauncher struct {
 	flags        *flag.FlagSet
 	config       *webConfig
@@ -221,7 +223,9 @@ func (w *webLauncher) Run(ctx context.Context, config *launcher.Config) error {
 		alismux.AddGateway(w.config.authGateway)
 	}
 
-	alismux.HandleHTTP("/", router)
+	if err := mountGorillaOnHostMux(router); err != nil {
+		return fmt.Errorf("gorilla host mount failed: %w", err)
+	}
 
 	log.Printf("Starting the web server: %+v", w.config)
 	log.Println()
@@ -263,7 +267,7 @@ func (w *webLauncher) Run(ctx context.Context, config *launcher.Config) error {
 	}
 }
 
-// initTelemetry initializes telemetry and sets the global OTel providers.
+// initTelemetry initializes OpenTelemetry providers for the web server process.
 func initTelemetry(ctx context.Context, config *launcher.Config, otelToCloud bool) (*telemetry.Providers, error) {
 	opts := append(config.TelemetryOptions, telemetry.WithOtelToCloud(otelToCloud))
 	telemetryProviders, err := telemetry.New(ctx, opts...)
@@ -311,7 +315,7 @@ func NewLauncherWithOptions(sublaunchers []Sublauncher, opts ...Option) launcher
 	return l
 }
 
-// logger is a middleware that logs the HTTP method, request URI, and the time taken to process the request.
+// logger logs method, URI, and elapsed time for each gorilla subrouter request.
 func logger(inner http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -320,13 +324,14 @@ func logger(inner http.Handler) http.Handler {
 	})
 }
 
-// buildRouter returns the ADK sublauncher router.
+// buildRouter returns the shared gorilla/mux router used by all sublaunchers.
 func buildRouter() *mux.Router {
 	router := mux.NewRouter().StrictSlash(true)
 	router.Use(logger)
 	return router
 }
 
+// buildHTTPServer constructs the host HTTP server with timeouts and HTTP/2 support.
 func buildHTTPServer(addr string, cfg *webConfig) *http.Server {
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)

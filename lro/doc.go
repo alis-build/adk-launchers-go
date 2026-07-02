@@ -27,8 +27,10 @@
 // # HTTP routes
 //
 // Routes are registered via Client.RegisterHTTP on an inner http.ServeMux, then
-// mounted under an optional path prefix (default "/"). The
-// primary callback pattern is:
+// mounted under an optional path prefix (default "/") at
+// {path_prefix}/resume-operation/. The gorilla mount uses that resume-operation
+// prefix so launchersweb can expose POST routes on go.alis.build/mux without
+// colliding with the host gRPC fallback. The primary callback pattern is:
 //
 //	{path_prefix}/resume-operation/{operation_name}
 //

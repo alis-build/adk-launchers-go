@@ -17,6 +17,10 @@
 //     invoked by Cloud Tasks (keyword: lro).
 //   - [scheduler] — A2A scheduler extension HTTP (cron JSON-RPC and execution callback;
 //     in-process ADK cron execution; keyword: scheduler).
+//   - [console] — Embedded Vue operator console SPA, runtime config, and /auth/me
+//     (keyword: console; register last in web.NewLauncher).
+//   - [evals] — Dev evaluation HTTP API and adk-python evaluation engine parity
+//     (eval sets, run eval, metrics-info; keyword: evals).
 //
 // Shared implementation helpers live under internal/launcherutils and are not part of
 // the public import path.
@@ -30,6 +34,8 @@
 //
 //	import (
 //	    "go.alis.build/adk/launchers/agui"
+//	    "go.alis.build/adk/launchers/console"
+//	    "go.alis.build/adk/launchers/evals"
 //	    "go.alis.build/adk/launchers/lro"
 //	    "go.alis.build/adk/launchers/scheduler"
 //	    launchersweb "go.alis.build/adk/launchers/web"
@@ -41,9 +47,11 @@
 //	    agui.NewLauncher("my-agent"),
 //	    lro.NewLauncher(lro.WithServiceID("my-service")),
 //	    scheduler.NewLauncher("my-agent", schedSvc),
+//	    evals.NewLauncher(evals.WithAgentsDir("./agents")),
+//	    console.NewLauncher(),
 //	)
 //
 // At runtime, enable sublaunchers by keyword on the adk web command line:
 //
-//	adk web --port 8080 agui lro scheduler -service_id=my-service -app_name=my-agent
+//	adk web --port 8080 agui lro scheduler evals console -agents_dir=./agents
 package launchers

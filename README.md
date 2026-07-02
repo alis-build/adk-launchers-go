@@ -2,7 +2,7 @@
 
 Go modules that extend [Google ADK](https://google.golang.org/adk) with optional **web sublaunchers**. Each sublauncher plugs into `google.golang.org/adk/v2/cmd/launcher/web` and adds HTTP routes or protocols on top of the standard ADK web server.
 
-Use this repository when you need extra capabilities beyond the core ADK launchers—for example streaming to AG-UI frontends, resuming long-running operations from Cloud Tasks, or running scheduled agent prompts in-process.
+Use this repository when you need extra capabilities beyond the core ADK launchers—for example streaming to AG-UI frontends, resuming long-running operations from Cloud Tasks, running scheduled agent prompts in-process, or serving the dev evaluation API for adk-web.
 
 ## Packages
 
@@ -13,6 +13,7 @@ Use this repository when you need extra capabilities beyond the core ADK launche
 | [`lro`](./lro)                         | `lro`       | HTTP resume routes for [go.alis.build/lro/v2](https://pkg.go.dev/go.alis.build/lro/v2) long-running operations                                                                                      |
 | [`scheduler`](./scheduler)             | `scheduler` | [A2A scheduler](https://pkg.go.dev/go.alis.build/a2a/extension/scheduler) cron JSON-RPC and Cloud Tasks callback (in-process ADK runner)                                                            |
 | [`console`](./console)                 | `console`   | Embedded Vue operator console SPA, runtime config, and `/auth/me` (register **last** in `web.NewLauncher`)                                                                                          |
+| [`evals`](./evals)                     | `evals`     | Dev evaluation HTTP API (eval sets, run eval, metrics-info) with full adk-python evaluation engine parity                                                                                            |
 
 ## Quick start
 
@@ -24,6 +25,7 @@ import (
 
     "go.alis.build/adk/launchers/agui"
     "go.alis.build/adk/launchers/console"
+    "go.alis.build/adk/launchers/evals"
     "go.alis.build/adk/launchers/lro"
     "go.alis.build/adk/launchers/scheduler"
     launchersweb "go.alis.build/adk/launchers/web"
@@ -57,6 +59,7 @@ web := launchersweb.NewLauncher(
         }),
         scheduler.WithGRPCRegistrar(grpcServer),
     ),
+    evals.NewLauncher(evals.WithAgentsDir("./agents")),
     console.NewLauncher(console.WithBranding(console.Branding{
         Title:       "My Console",
         DisplayName: "My Console",
@@ -71,7 +74,7 @@ hostmux.HandleGRPC(grpcServer)
 At runtime, activate sublaunchers by keyword on the `adk web` command line, for example:
 
 ```bash
-adk web --port 8080 agui lro scheduler console -service_id=my-service -app_name=my-agent
+adk web --port 8080 agui lro scheduler evals console -service_id=my-service -app_name=my-agent -agents_dir=./agents
 ```
 
 Importing [`web`](./web) (and the scheduler sublauncher) pulls in `go.alis.build/mux`, which requires `ALIS_OS_PROJECT` and `IDENTITY_SERVICE_URL` at process start.
@@ -189,6 +192,31 @@ Methods used by the bundled app:
 
 Params are protojson-compatible camelCase. See [`agui/doc.go`](agui/doc.go) and [`scheduler/doc.go`](scheduler/doc.go) for full route and option details.
 
+#### Evals (`evals` sublauncher)
+
+Requires `evals` on the `adk web` command line. Local storage needs `-agents_dir=./agents` or [evals.WithAgentsDir](./evals). GCS storage: `-eval_storage_uri=gs://bucket` or [evals.WithEvalStorageURI](./evals).
+
+This sublauncher is separate from [`console`](./console): it serves the dev evaluation API for adk-web, not the operator console SPA. Routes do not enforce caller identity; restrict access at a trusted upstream.
+
+All routes are under `/api/dev/apps/{appName}/...` by default (match webui `-api_server_address=/api`). Override with `-path_prefix` or [evals.WithPathPrefix](./evals). adk-web uses the legacy underscore paths (`eval_sets`, `run_eval`, etc.); canonical hyphen paths are also registered.
+
+| Method | Path (legacy) | Description |
+| ------ | ------------- | ----------- |
+| GET | `/api/dev/apps/{app}/eval_sets` | List eval set IDs |
+| POST | `/api/dev/apps/{app}/eval-sets` | Create eval set |
+| GET | `/api/dev/apps/{app}/eval_sets/{id}` | Get eval set |
+| DELETE | `/api/dev/apps/{app}/eval_sets/{id}` | Delete eval set |
+| GET | `/api/dev/apps/{app}/eval-sets/{id}/eval-cases` | List eval case IDs (canonical) |
+| GET | `/api/dev/apps/{app}/eval_sets/{id}/evals` | List eval case IDs (legacy) |
+| GET/PUT/DELETE | `/api/dev/apps/{app}/eval_sets/{id}/evals/{caseId}` | CRUD eval case |
+| POST | `/api/dev/apps/{app}/eval_sets/{id}/add_session` | Session → eval case |
+| POST | `/api/dev/apps/{app}/eval_sets/{id}/run_eval` | Run inference + evaluate |
+| GET | `/api/dev/apps/{app}/eval_results` | List result IDs |
+| GET | `/api/dev/apps/{app}/eval_results/{resultId}` | Get eval result |
+| GET | `/api/dev/apps/{app}/metrics-info` | Registered metric metadata |
+
+See [`evals/doc.go`](evals/doc.go) for routes and storage options.
+
 #### AG-UI architecture
 
 The `agui` sublauncher splits each `/run_sse` request into two layers:
@@ -213,9 +241,9 @@ agui.NewLauncher("my-agent",
 
 [`WithGenAIPartConverter`](./agui/agui.go) still works without `WithExecutor` (merged into the default config). When `WithExecutor` is set, the factory owns all executor settings including the part converter. See [`agui/doc.go`](agui/doc.go) for configure, decorate, and replace patterns.
 
-#### Local Vite dev proxies
+#### Local Vite dev proxies (console only)
 
-When running `cd console/app && pnpm dev`, Vite proxies these paths to `AGENT_HOST` (default `http://localhost:8080`): `/agui`, `/auth`, `/alis.agui.history.v1.ThreadService`, `/alis.a2a.extension.v1.SchedulerService`, `/assets/config/runtime-config.json`.
+When running `cd console/app && pnpm dev`, Vite proxies console-related paths to `AGENT_HOST` (default `http://localhost:8080`): `/agui`, `/auth`, `/alis.agui.history.v1.ThreadService`, `/alis.a2a.extension.v1.SchedulerService`, `/assets/config/runtime-config.json`. Eval routes (`/api/dev/...`) are served by the [`evals`](./evals) sublauncher on the agent host and are not part of the console Vite proxy; adk-web calls them directly.
 
 ## Testing
 
@@ -223,7 +251,11 @@ When running `cd console/app && pnpm dev`, Vite proxies these paths to `AGENT_HO
 ALIS_OS_PROJECT=test IDENTITY_SERVICE_URL=http://localhost go test ./...
 ```
 
-Packages that import `go.alis.build/mux` (including [`agui`](./agui) and [`scheduler`](./scheduler)) require `ALIS_OS_PROJECT` and `IDENTITY_SERVICE_URL` at test time.
+Packages that import `go.alis.build/mux` (including [`agui`](./agui), [`scheduler`](./scheduler), and [`evals`](./evals)) require `ALIS_OS_PROJECT` and `IDENTITY_SERVICE_URL` at test time.
+
+## Contributing
+
+While the module is below **v1.0.0**, open pull requests and land work on the **`v0`** branch. After v1.0.0, use **`main`** for ongoing development.
 
 ## Requirements
 

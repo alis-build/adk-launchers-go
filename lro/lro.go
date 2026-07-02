@@ -196,7 +196,8 @@ func (l *lroLauncher) mountLROHTTP(router *mux.Router, client *lro.Client) error
 	if l.config.pathPrefix != "" && l.config.pathPrefix != "/" {
 		subrouter = router.PathPrefix(l.config.pathPrefix).Subrouter()
 	}
-	// Catch-all under the prefix delegates to the lro/v2 ServeMux.
-	subrouter.PathPrefix("/").Handler(inner)
+	// Mount only resume-operation paths so the web launcher can mirror POST routes
+	// on go.alis.build/mux without colliding with the gRPC POST / fallback.
+	subrouter.PathPrefix(resumeOperationPathPrefix).Handler(inner)
 	return nil
 }

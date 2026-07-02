@@ -1,8 +1,21 @@
 // Package web provides an ADK web launcher built on go.alis.build/mux.
 //
 // ADK sublaunchers register routes on a shared gorilla/mux subrouter via [Sublauncher].
-// The subrouter is mounted at "/" on the process-wide host mux after all sublaunchers
-// have run setup.
+// After setup, the router is mounted on the process-wide host mux with an
+// unmethoded "/" catch-all (GET /ui/, DELETE /api/..., etc.) plus POST prefix
+// patterns discovered from the gorilla route tree so REST POST requests reach
+// gorilla instead of the gRPC fallback (POST /). Unmethoded "/" avoids
+// conflicting with method-specific host routes registered via HostRouteSetup.
+//
+// # Gorilla host mount
+//
+// [mountGorillaOnHostMux] registers the shared gorilla router on the host mux
+// in two layers: an unmethoded "/" catch-all for GET, DELETE, and other
+// non-POST traffic, plus method-specific "POST {path}" patterns derived from
+// the gorilla route tree. POST patterns are more specific than the gRPC fallback
+// (POST /) so REST POST handlers reach gorilla while native gRPC keeps POST /.
+// Sublaunchers that mount only a subtree (for example lro resume-operation
+// routes) avoid registering a broad POST / catch-all on gorilla.
 //
 // Sublaunchers that need host-level features (identity-aware routes, gRPC, and
 // similar) may optionally implement [HostRouteSetup]. SetupHostRoutes runs before

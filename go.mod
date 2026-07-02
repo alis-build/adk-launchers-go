@@ -31,8 +31,11 @@ require (
 	cloud.google.com/go/monitoring v1.29.0 // indirect
 	cloud.google.com/go/scheduler v1.16.0 // indirect
 	cloud.google.com/go/spanner v1.92.0 // indirect
+	cloud.google.com/go/storage v1.58.0 // indirect
 	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.6.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.33.0 // indirect
+	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.54.0 // indirect
+	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.54.0 // indirect
 	github.com/a2aproject/a2a-go/v2 v2.3.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

@@ -1,0 +1,24 @@
+{
+  "evalSetId": "golden_response_match",
+  "evalCases": [
+    {
+      "evalId": "rouge_case",
+      "conversation": [
+        {
+          "userContent": {
+            "parts": [{ "text": "This is a test query." }],
+            "role": "user"
+          },
+          "finalResponse": {
+            "parts": [{ "text": "This is a test reference." }],
+            "role": "model"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "golden_app",
+        "userId": "user"
+      }
+    }
+  ]
+}
