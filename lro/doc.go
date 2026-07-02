@@ -6,7 +6,7 @@
 //
 // The ADK web launcher composes one or more sublaunchers, each activated by a CLI
 // keyword. This package registers the keyword "lro" and mounts LRO resume routes on
-// the shared gorilla/mux router started by google.golang.org/adk/cmd/launcher/web.
+// the shared gorilla/mux router started by google.golang.org/adk/v2/cmd/launcher/web.
 //
 // # Client resolution
 //

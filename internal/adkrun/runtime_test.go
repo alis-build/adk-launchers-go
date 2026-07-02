@@ -1,14 +1,15 @@
 package adkrun
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"iter"
 	"testing"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/cmd/launcher"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/cmd/launcher"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -266,6 +267,153 @@ func TestRunUserMessage_emptyPrompt(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunSSE_resumeReusesInvocationID(t *testing.T) {
+	const (
+		callID   = "confirm-1"
+		pauseInv = "e-pause"
+	)
+	rt, svc, ctx := newResumeTestRuntime(t)
+	seedConfirmationPause(t, svc, ctx, rt.AppName(), "user-1", "sess-1", callID, pauseInv)
+
+	resumeMsg := confirmationResumeMessage(callID, map[string]any{"confirmed": true})
+	invIDs := drainInvocationIDs(t, rt, ctx, "user-1", "sess-1", resumeMsg)
+
+	if !invIDs[pauseInv] {
+		t.Fatalf("expected agent event with invocationId %q, got %v", pauseInv, invIDs)
+	}
+	for id := range invIDs {
+		if id != pauseInv {
+			t.Fatalf("expected only %q invocation ids, also saw %q", pauseInv, id)
+		}
+	}
+}
+
+func TestRunSSE_resumeMismatchMintsNewInvocationID(t *testing.T) {
+	const (
+		callID   = "confirm-1"
+		pauseInv = "e-pause"
+	)
+	rt, svc, ctx := newResumeTestRuntime(t)
+	seedConfirmationPause(t, svc, ctx, rt.AppName(), "user-1", "sess-1", callID, pauseInv)
+
+	resumeMsg := confirmationResumeMessage("wrong-id", map[string]any{"confirmed": true})
+	invIDs := drainInvocationIDs(t, rt, ctx, "user-1", "sess-1", resumeMsg)
+
+	if len(invIDs) == 0 {
+		t.Fatal("expected at least one event with an invocation id")
+	}
+	if invIDs[pauseInv] {
+		t.Fatalf("expected a fresh invocation id, reused paused id %q", pauseInv)
+	}
+	for id := range invIDs {
+		if id == "" {
+			t.Fatal("expected non-empty invocation id on agent events")
+		}
+	}
+}
+
+func newResumeTestRuntime(t *testing.T) (*Runtime, session.Service, context.Context) {
+	t.Helper()
+	ctx := t.Context()
+	svc := session.InMemoryService()
+	appName := "resume-agent"
+
+	a, err := agent.New(agent.Config{
+		Name: appName,
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				got := ctx.InvocationID()
+				if got == "" {
+					t.Error("agent InvocationID() is empty")
+				}
+				ev := session.NewEvent(ctx, got)
+				ev.Author = appName
+				ev.Content = genai.NewContentFromText("resumed", genai.RoleModel)
+				yield(ev, nil)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	rt, err := NewRuntime(&launcher.Config{
+		AgentLoader:    agent.NewSingleLoader(a),
+		SessionService: svc,
+	}, appName)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	return rt, svc, ctx
+}
+
+func seedConfirmationPause(t *testing.T, svc session.Service, ctx context.Context, appName, userID, sessionID, callID, pauseInv string) {
+	t.Helper()
+	createResp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName: appName, UserID: userID, SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	pauseEv := session.NewEvent(ctx, pauseInv)
+	pauseEv.Content = &genai.Content{
+		Role: string(genai.RoleModel),
+		Parts: []*genai.Part{{
+			FunctionCall: &genai.FunctionCall{
+				ID:   callID,
+				Name: "adk_request_confirmation",
+				Args: map[string]any{
+					"toolConfirmation": map[string]any{"hint": "approve?"},
+				},
+			},
+		}},
+	}
+	if err := svc.AppendEvent(ctx, createResp.Session, pauseEv); err != nil {
+		t.Fatalf("AppendEvent pause: %v", err)
+	}
+}
+
+func confirmationResumeMessage(callID string, response map[string]any) Content {
+	return Content{
+		Role: string(genai.RoleUser),
+		Parts: []*Part{{
+			FunctionResponse: &genai.FunctionResponse{
+				ID:       callID,
+				Name:     "adk_request_confirmation",
+				Response: response,
+			},
+		}},
+	}
+}
+
+func drainInvocationIDs(t *testing.T, rt *Runtime, ctx context.Context, userID, sessionID string, msg Content) map[string]bool {
+	t.Helper()
+	gotSessionID, events, err := rt.RunSSE(ctx, RunRequest{
+		UserID:     userID,
+		SessionID:  sessionID,
+		NewMessage: msg,
+	})
+	if err != nil {
+		t.Fatalf("RunSSE resume: %v", err)
+	}
+	if gotSessionID != sessionID {
+		t.Fatalf("sessionID = %q, want %q", gotSessionID, sessionID)
+	}
+
+	invIDs := make(map[string]bool)
+	for ev, err := range events {
+		if err != nil {
+			t.Fatalf("event error: %v", err)
+		}
+		if ev == nil || ev.InvocationID == "" {
+			continue
+		}
+		invIDs[ev.InvocationID] = true
+	}
+	return invIDs
 }
 
 func TestRunUserMessage_midStreamError(t *testing.T) {

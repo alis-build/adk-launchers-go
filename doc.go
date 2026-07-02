@@ -3,7 +3,7 @@
 // endpoints and protocols. Import the subpackages you need; this package has no
 // API of its own.
 //
-// Each sublauncher implements [google.golang.org/adk/cmd/launcher/web.Sublauncher],
+// Each sublauncher implements [google.golang.org/adk/v2/cmd/launcher/web.Sublauncher],
 // registers a CLI keyword, and mounts routes on the shared gorilla/mux router
 // started by adk web. Compose one or more sublaunchers when building your agent
 // server's web launcher.
@@ -26,14 +26,14 @@
 //
 // # Usage
 //
-// Import subpackages and pass them to [google.golang.org/adk/cmd/launcher/web.NewLauncher]:
+// Import subpackages and pass them to [google.golang.org/adk/v2/cmd/launcher/web.NewLauncher]:
 //
 //	import (
 //	    "go.alis.build/adk/launchers/agui"
 //	    "go.alis.build/adk/launchers/lro"
 //	    "go.alis.build/adk/launchers/scheduler"
 //	    launchersweb "go.alis.build/adk/launchers/web"
-//	    weblauncher "google.golang.org/adk/cmd/launcher/web"
+//	    weblauncher "google.golang.org/adk/v2/cmd/launcher/web"
 //	)
 //
 //	web := launchersweb.NewLauncher(

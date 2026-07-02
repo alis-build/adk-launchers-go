@@ -12,10 +12,10 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/cmd/launcher"
-	"google.golang.org/adk/runner"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/cmd/launcher"
+	"google.golang.org/adk/v2/runner"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -49,11 +49,14 @@ type RunRequest struct {
 	SaveInputBlobsAsArtifacts bool `json:"saveInputBlobsAsArtifacts,omitempty"`
 	// StateDelta merges into the session state before the run (ADK runner.WithStateDelta).
 	StateDelta map[string]any `json:"stateDelta,omitempty"`
-	// FunctionCallEventID resumes or continues a pending function call.
-	// Not yet applied by the in-process runner; reserved for future ADK support.
+	// FunctionCallEventID identifies the event whose function call this request answers.
+	// Accepted for ADK REST API parity; the in-process runner ignores this field and
+	// resolves resume context from session history plus FunctionResponse ids in NewMessage.
 	FunctionCallEventID string `json:"functionCallEventId,omitempty"`
-	// InvocationID correlates the run with a prior invocation.
-	// Not yet applied by the in-process runner; reserved for future ADK support.
+	// InvocationID correlates the run with a prior invocation for API/logging parity.
+	// The in-process runner does not read this field; ADK v2 reuses the paused
+	// invocation id automatically when NewMessage carries FunctionResponse parts whose
+	// ids match FunctionCall entries already stored on the session.
 	InvocationID string `json:"invocationId,omitempty"`
 }
 
@@ -159,16 +162,10 @@ func (rt *Runtime) RunSSE(ctx context.Context, req RunRequest) (string, iter.Seq
 		opts = append(opts, runner.WithStateDelta(req.StateDelta))
 	}
 
-	// TODO(adk-invocation-resume): When google.golang.org/adk/runner exposes invocation
-	// resume (e.g. runner.WithInvocationID), pass req.InvocationID into
-	// icontext.NewInvocationContext so confirmation resume continues the same ADK
-	// invocation per https://adk.dev/tools-custom/confirmation/ and
-	// https://adk.dev/runtime/resume/. Today runner.Run always allocates a new
-	// e-<uuid> invocation even when req.InvocationID is set.
-	if req.InvocationID != "" {
-		// Reserved for future wiring; stored on RunRequest for launcher/clients now.
-		_ = req.InvocationID
-	}
+	// HITL resume: ADK v2 runner resolves the invocation id from session history
+	// and FunctionResponse ids in NewMessage (see https://adk.dev/tools-custom/confirmation/).
+	// RunRequest.InvocationID and FunctionCallEventID are accepted for API parity only
+	// and are not passed through to the runner.
 
 	msg := req.NewMessage
 	msg.Parts = slices.Clone(req.NewMessage.Parts)

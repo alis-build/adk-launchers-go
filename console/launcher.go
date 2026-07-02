@@ -15,8 +15,8 @@ import (
 	launchersweb "go.alis.build/adk/launchers/web"
 	"go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
-	adklauncher "google.golang.org/adk/cmd/launcher"
-	adkweb "google.golang.org/adk/cmd/launcher/web"
+	adklauncher "google.golang.org/adk/v2/cmd/launcher"
+	adkweb "google.golang.org/adk/v2/cmd/launcher/web"
 )
 
 // Branding configures shell-level console chrome (not per-agent metadata).

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
-	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -92,7 +92,7 @@ func TestResumeEntriesToConfirmationContent(t *testing.T) {
 
 	t.Run("missing interruptId", func(t *testing.T) {
 		_, err := EntriesToConfirmationContent([]types.ResumeEntry{{
-			Status:  types.ResumeStatusCancelled,
+			Status: types.ResumeStatusCancelled,
 		}})
 		if err == nil {
 			t.Fatal("expected error for missing interruptId")

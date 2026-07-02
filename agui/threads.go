@@ -18,7 +18,7 @@ import (
 	pb "go.alis.build/common/alis/agui/history/v1"
 	"go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"

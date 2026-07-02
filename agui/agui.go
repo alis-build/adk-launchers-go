@@ -22,9 +22,9 @@ import (
 	historyservice "go.alis.build/agui/history/service"
 	"go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
-	"google.golang.org/adk/cmd/launcher"
-	weblauncher "google.golang.org/adk/cmd/launcher/web"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/cmd/launcher"
+	weblauncher "google.golang.org/adk/v2/cmd/launcher/web"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/grpc"
 )
 

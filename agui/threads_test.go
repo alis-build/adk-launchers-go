@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"go.alis.build/iam/v3"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -173,10 +173,10 @@ func TestThreadMessages_HappyPath(t *testing.T) {
 	l, svc := setupThreadTestLauncher(t)
 	ctx := context.Background()
 
-	ev1 := session.NewEvent("ev1")
+	ev1 := session.NewEvent(t.Context(), "ev1")
 	ev1.Content = genai.NewContentFromText("Hello", genai.RoleUser)
 
-	ev2 := session.NewEvent("ev2")
+	ev2 := session.NewEvent(t.Context(), "ev2")
 	ev2.Content = genai.NewContentFromText("Hi there!", genai.RoleModel)
 
 	createSessionWithEvents(t, ctx, svc, "user-1", "thread-1", []*session.Event{ev1, ev2}, nil)
@@ -209,13 +209,13 @@ func TestThreadMessages_Limit(t *testing.T) {
 	l, svc := setupThreadTestLauncher(t)
 	ctx := context.Background()
 
-	ev1 := session.NewEvent("ev1")
+	ev1 := session.NewEvent(t.Context(), "ev1")
 	ev1.Content = genai.NewContentFromText("msg1", genai.RoleUser)
 
-	ev2 := session.NewEvent("ev2")
+	ev2 := session.NewEvent(t.Context(), "ev2")
 	ev2.Content = genai.NewContentFromText("msg2", genai.RoleModel)
 
-	ev3 := session.NewEvent("ev3")
+	ev3 := session.NewEvent(t.Context(), "ev3")
 	ev3.Content = genai.NewContentFromText("msg3", genai.RoleUser)
 
 	createSessionWithEvents(t, ctx, svc, "user-1", "thread-1", []*session.Event{ev1, ev2, ev3}, nil)
@@ -241,7 +241,7 @@ func TestThreadMessages_SSE(t *testing.T) {
 	l, svc := setupThreadTestLauncher(t)
 	ctx := context.Background()
 
-	ev1 := session.NewEvent("ev1")
+	ev1 := session.NewEvent(t.Context(), "ev1")
 	ev1.Content = genai.NewContentFromText("Hello", genai.RoleUser)
 
 	createSessionWithEvents(t, ctx, svc, "user-1", "thread-1", []*session.Event{ev1}, map[string]any{"key": "value"})
@@ -263,7 +263,7 @@ func TestThreadMessages_SSE_EmptyState(t *testing.T) {
 	l, svc := setupThreadTestLauncher(t)
 	ctx := context.Background()
 
-	ev1 := session.NewEvent("ev1")
+	ev1 := session.NewEvent(t.Context(), "ev1")
 	ev1.Content = genai.NewContentFromText("Hello", genai.RoleUser)
 
 	createSessionWithEvents(t, ctx, svc, "user-1", "thread-1", []*session.Event{ev1}, nil)
@@ -282,7 +282,7 @@ func TestThreadMessages_SSE_FiltersInternalState(t *testing.T) {
 	l, svc := setupThreadTestLauncher(t)
 	ctx := context.Background()
 
-	ev1 := session.NewEvent("ev1")
+	ev1 := session.NewEvent(t.Context(), "ev1")
 	ev1.Content = genai.NewContentFromText("Hello", genai.RoleUser)
 
 	createSessionWithEvents(t, ctx, svc, "user-1", "thread-1", []*session.Event{ev1}, map[string]any{

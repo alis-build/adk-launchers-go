@@ -7,83 +7,12 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"go.alis.build/adk/launchers/agui/internal/interrupt"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/adk/v2/session"
 )
 
 // pendingInterruptsStateKey is the ADK session state key used to persist open
 // AG-UI interrupts between runs on the same thread.
 const pendingInterruptsStateKey = "_agui_pending_interrupts"
-
-// invocationIDFromClientState reads state.adk.invocationId from RunAgentInput.state.
-func invocationIDFromClientState(state any) string {
-	stateMap, ok := state.(map[string]any)
-	if !ok || stateMap == nil {
-		return ""
-	}
-	adkMeta, ok := stateMap["adk"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	id, _ := adkMeta["invocationId"].(string)
-	return id
-}
-
-// confirmationInvocationIndex builds a confirmationCallID → invocationID map
-// from session events in a single pass.
-func confirmationInvocationIndex(sess session.Session) map[string]string {
-	if sess == nil {
-		return nil
-	}
-	out := make(map[string]string)
-	for ev := range sess.Events().All() {
-		if ev == nil || ev.Content == nil {
-			continue
-		}
-		for _, part := range ev.Content.Parts {
-			if part == nil || part.FunctionCall == nil {
-				continue
-			}
-			if part.FunctionCall.Name != toolconfirmation.FunctionCallName {
-				continue
-			}
-			if part.FunctionCall.ID != "" && ev.InvocationID != "" {
-				out[part.FunctionCall.ID] = ev.InvocationID
-			}
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// resolveInvocationIDForResume picks an ADK invocation id for resume runs.
-// Priority: pending record → client state → session event index.
-func resolveInvocationIDForResume(pending []interrupt.Record, entries []types.ResumeEntry, clientState any, sess session.Session) string {
-	if id := interrupt.InvocationIDFromPending(pending, entries); id != "" {
-		return id
-	}
-	if id := invocationIDFromClientState(clientState); id != "" {
-		return id
-	}
-	if sess == nil {
-		return ""
-	}
-	idx := confirmationInvocationIndex(sess)
-	if idx == nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if entry.InterruptID == "" {
-			continue
-		}
-		if id, ok := idx[entry.InterruptID]; ok && id != "" {
-			return id
-		}
-	}
-	return ""
-}
 
 // getSession loads an ADK session by app/user/session id.
 func (l *aguiLauncher) getSession(ctx context.Context, appName, userID, sessionID string) (session.Session, error) {
@@ -131,7 +60,7 @@ func (l *aguiLauncher) writePendingInterruptsState(ctx context.Context, appName,
 	if sess == nil {
 		return nil
 	}
-	ev := session.NewEvent("")
+	ev := session.NewEvent(ctx, "")
 	ev.Author = "agui"
 	ev.Actions.StateDelta = map[string]any{
 		pendingInterruptsStateKey: records,

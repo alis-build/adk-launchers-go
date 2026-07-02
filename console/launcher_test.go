@@ -10,10 +10,10 @@ import (
 	"testing"
 
 	iam "go.alis.build/iam/v3"
-	"google.golang.org/adk/agent"
-	adklauncher "google.golang.org/adk/cmd/launcher"
-	adkweb "google.golang.org/adk/cmd/launcher/web"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	adklauncher "google.golang.org/adk/v2/cmd/launcher"
+	adkweb "google.golang.org/adk/v2/cmd/launcher/web"
+	"google.golang.org/adk/v2/session"
 )
 
 // withTestIdentity injects a caller identity into the request context, mirroring

@@ -11,8 +11,8 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -57,7 +57,7 @@ func TestProcessEvent_TextStreaming(t *testing.T) {
 	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	// Partial event should emit TextMessageStart + TextMessageContent.
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Content = genai.NewContentFromText("Hello", genai.RoleModel)
 	ev.Partial = true
 
@@ -80,7 +80,7 @@ func TestProcessEvent_TextStreaming(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	e2 := newEmitter(context.Background(), rec2, sse.NewSSEWriter())
 
-	ev2 := session.NewEvent("inv1")
+	ev2 := session.NewEvent(t.Context(), "inv1")
 	ev2.Content = genai.NewContentFromText(" world", genai.RoleModel)
 	ev2.Partial = true
 
@@ -103,7 +103,7 @@ func TestProcessEvent_TextStreaming_FinalSkipped(t *testing.T) {
 	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	// Non-partial (final) text event should be skipped.
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Content = genai.NewContentFromText("final", genai.RoleModel)
 	ev.Partial = false
 
@@ -122,7 +122,7 @@ func TestProcessEvent_ReasoningPhase(t *testing.T) {
 	e, rec := newTestEmitter()
 	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Content = &genai.Content{
 		Role:  string(genai.RoleModel),
 		Parts: []*genai.Part{{Text: "thinking...", Thought: true}},
@@ -154,7 +154,7 @@ func TestProcessEvent_ReasoningToText_ClosesReasoning(t *testing.T) {
 
 	// First: open a reasoning phase.
 	e1, _ := newTestEmitter()
-	ev1 := session.NewEvent("inv1")
+	ev1 := session.NewEvent(t.Context(), "inv1")
 	ev1.Content = &genai.Content{
 		Role:  string(genai.RoleModel),
 		Parts: []*genai.Part{{Text: "thinking", Thought: true}},
@@ -169,7 +169,7 @@ func TestProcessEvent_ReasoningToText_ClosesReasoning(t *testing.T) {
 
 	// Second: text part should close reasoning first.
 	e2, rec2 := newTestEmitter()
-	ev2 := session.NewEvent("inv1")
+	ev2 := session.NewEvent(t.Context(), "inv1")
 	ev2.Content = genai.NewContentFromText("answer", genai.RoleModel)
 	ev2.Partial = true
 	if _, err := l.processEvent(e2, ev2, state, nil); err != nil {
@@ -196,8 +196,8 @@ func TestProcessEvent_ReasoningToText_ClosesReasoning(t *testing.T) {
 	}
 }
 
-func partialFunctionCallEvent(toolCallID, toolCallName string, args map[string]any) *session.Event {
-	ev := session.NewEvent("inv-partial")
+func partialFunctionCallEvent(ctx context.Context, toolCallID, toolCallName string, args map[string]any) *session.Event {
+	ev := session.NewEvent(ctx, "inv-partial")
 	ev.Partial = true
 	ev.Content = &genai.Content{
 		Role: string(genai.RoleModel),
@@ -212,8 +212,8 @@ func partialFunctionCallEvent(toolCallID, toolCallName string, args map[string]a
 	return ev
 }
 
-func confirmationInterruptEvent(confirmID, hint, originalID, originalName string, originalArgs map[string]any) *session.Event {
-	ev := session.NewEvent("inv-confirm")
+func confirmationInterruptEvent(ctx context.Context, confirmID, hint, originalID, originalName string, originalArgs map[string]any) *session.Event {
+	ev := session.NewEvent(ctx, "inv-confirm")
 	ev.Content = &genai.Content{
 		Role: string(genai.RoleModel),
 		Parts: []*genai.Part{{
@@ -259,7 +259,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 				t.Helper()
 				args := map[string]any{"city": "London"}
 				for range 3 {
-					if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", args), state, nil); err != nil {
+					if _, err := l.processEvent(e, partialFunctionCallEvent(t.Context(), "fc-1", "get_weather", args), state, nil); err != nil {
 						return err
 					}
 				}
@@ -272,10 +272,10 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 			wantStarts:      map[string]int{"fc-1": 2},
 			run: func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error {
 				t.Helper()
-				if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", map[string]any{"city": "London"}), state, nil); err != nil {
+				if _, err := l.processEvent(e, partialFunctionCallEvent(t.Context(), "fc-1", "get_weather", map[string]any{"city": "London"}), state, nil); err != nil {
 					return err
 				}
-				if _, err := l.processEvent(e, partialFunctionCallEvent("fc-1", "get_weather", map[string]any{"city": "Paris"}), state, nil); err != nil {
+				if _, err := l.processEvent(e, partialFunctionCallEvent(t.Context(), "fc-1", "get_weather", map[string]any{"city": "Paris"}), state, nil); err != nil {
 					return err
 				}
 				return nil
@@ -285,7 +285,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 			name: "empty toolCallId rejected",
 			run: func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error {
 				t.Helper()
-				_, err := l.processEvent(e, partialFunctionCallEvent("", "get_weather", map[string]any{"city": "London"}), state, nil)
+				_, err := l.processEvent(e, partialFunctionCallEvent(t.Context(), "", "get_weather", map[string]any{"city": "London"}), state, nil)
 				if err == nil {
 					return fmt.Errorf("processEvent() error = nil, want missing toolCallId error")
 				}
@@ -300,7 +300,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 			run: func(t *testing.T, l *aguiLauncher, e *emitter, state *streamState) error {
 				t.Helper()
 				for range 3 {
-					done, err := l.processEvent(e, partialFunctionCallEvent(originalToolID, "fetch_support_ticket", ticketArgs), state, nil)
+					done, err := l.processEvent(e, partialFunctionCallEvent(t.Context(), originalToolID, "fetch_support_ticket", ticketArgs), state, nil)
 					if err != nil {
 						return err
 					}
@@ -309,6 +309,7 @@ func TestProcessEvent_ToolCallLifecycleDedupe(t *testing.T) {
 					}
 				}
 				done, err := l.processEvent(e, confirmationInterruptEvent(
+					t.Context(),
 					confirmID,
 					"Please confirm if you want to fetch the support ticket",
 					originalToolID,
@@ -362,7 +363,7 @@ func TestProcessEvent_FunctionCall(t *testing.T) {
 	e, rec := newTestEmitter()
 	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Content = &genai.Content{
 		Role: string(genai.RoleModel),
 		Parts: []*genai.Part{{
@@ -404,7 +405,7 @@ func TestProcessEvent_FunctionResponse(t *testing.T) {
 	e, rec := newTestEmitter()
 	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Content = &genai.Content{
 		Role: string(genai.RoleModel),
 		Parts: []*genai.Part{{
@@ -439,7 +440,7 @@ func TestProcessEvent_ConfirmationInterrupt_ClosesOpenStep(t *testing.T) {
 		CurrentStepAuthor: "sub-agent",
 	}
 
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Content = &genai.Content{
 		Role: string(genai.RoleModel),
 		Parts: []*genai.Part{{
@@ -488,7 +489,7 @@ func TestProcessEvent_ConfirmationInterrupt(t *testing.T) {
 	e, rec := newTestEmitter()
 	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.InvocationID = "e-test-invocation"
 	ev.Content = &genai.Content{
 		Role: string(genai.RoleModel),
@@ -617,7 +618,7 @@ func TestProcessEvent_ConfirmationInterrupt_TypedHint(t *testing.T) {
 	e, rec := newTestEmitter()
 	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Content = &genai.Content{
 		Role: string(genai.RoleModel),
 		Parts: []*genai.Part{{
@@ -663,7 +664,7 @@ func TestProcessEvent_StateDelta(t *testing.T) {
 	e, rec := newTestEmitter()
 	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Actions.StateDelta["count"] = 42
 	ev.Actions.StateDelta["nested/key"] = "value"
 
@@ -686,7 +687,7 @@ func TestProcessEvent_TurnComplete(t *testing.T) {
 
 	// Open a text message.
 	e1, _ := newTestEmitter()
-	ev1 := session.NewEvent("inv1")
+	ev1 := session.NewEvent(t.Context(), "inv1")
 	ev1.Content = genai.NewContentFromText("hi", genai.RoleModel)
 	ev1.Partial = true
 	_, _ = l.processEvent(e1, ev1, state, nil)
@@ -700,7 +701,7 @@ func TestProcessEvent_TurnComplete(t *testing.T) {
 
 	// Turn complete should close everything.
 	e2, rec2 := newTestEmitter()
-	ev2 := session.NewEvent("inv1")
+	ev2 := session.NewEvent(t.Context(), "inv1")
 	ev2.TurnComplete = true
 	if _, err := l.processEvent(e2, ev2, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
@@ -743,7 +744,7 @@ func TestProcessEvent_StepEvents(t *testing.T) {
 	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
 	// Sub-agent event should emit StepStarted.
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Author = "sub-agent-1"
 	ev.Content = genai.NewContentFromText("sub response", genai.RoleModel)
 	ev.Partial = true
@@ -762,7 +763,7 @@ func TestProcessEvent_StepEvents(t *testing.T) {
 
 	// Root agent event should close the step without opening a new one.
 	e2, rec2 := newTestEmitter()
-	ev2 := session.NewEvent("inv1")
+	ev2 := session.NewEvent(t.Context(), "inv1")
 	ev2.Author = "test-app"
 	ev2.Content = genai.NewContentFromText("root response", genai.RoleModel)
 	ev2.Partial = true
@@ -786,7 +787,7 @@ func TestProcessEvent_GenAIPartConverter(t *testing.T) {
 		e, rec := newTestEmitter()
 		state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.Content = genai.NewContentFromText("text", genai.RoleModel)
 		ev.Partial = true
 
@@ -811,7 +812,7 @@ func TestProcessEvent_GenAIPartConverter(t *testing.T) {
 		e, rec := newTestEmitter()
 		state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.Content = genai.NewContentFromText("text", genai.RoleModel)
 		ev.Partial = true
 
@@ -860,7 +861,7 @@ func TestProcessEvent_ConfirmationInterrupt_EmitsSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	ev0 := session.NewEvent("inv0")
+	ev0 := session.NewEvent(t.Context(), "inv0")
 	ev0.Content = genai.NewContentFromText("Hello", genai.RoleUser)
 	if err := svc.AppendEvent(ctx, createResp.Session, ev0); err != nil {
 		t.Fatalf("AppendEvent() error = %v", err)
@@ -874,7 +875,7 @@ func TestProcessEvent_ConfirmationInterrupt_EmitsSnapshots(t *testing.T) {
 		ReqState:    map[string]any{"ui": "panel"},
 	}
 
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Content = &genai.Content{
 		Role: string(genai.RoleModel),
 		Parts: []*genai.Part{{
@@ -953,7 +954,7 @@ func TestInterrupt_PersistFailure_NoDoubleTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	ev0 := session.NewEvent("inv0")
+	ev0 := session.NewEvent(t.Context(), "inv0")
 	ev0.Content = genai.NewContentFromText("Hello", genai.RoleUser)
 	if err := svc.AppendEvent(ctx, createResp.Session, ev0); err != nil {
 		t.Fatalf("AppendEvent() error = %v", err)
@@ -968,7 +969,7 @@ func TestInterrupt_PersistFailure_NoDoubleTerminal(t *testing.T) {
 	}
 
 	// Process a confirmation event → emitInterrupt emits RunFinished with interrupt outcome.
-	ev := session.NewEvent("inv1")
+	ev := session.NewEvent(t.Context(), "inv1")
 	ev.Content = &genai.Content{
 		Role: string(genai.RoleModel),
 		Parts: []*genai.Part{{

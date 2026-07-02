@@ -65,7 +65,7 @@
 //
 //	    "go.alis.build/iam/v3"
 //	    hostmux "go.alis.build/mux"
-//	    "google.golang.org/adk/cmd/launcher"
+//	    "google.golang.org/adk/v2/cmd/launcher"
 //	)
 //
 //	func (l *myLauncher) SetupHostRoutes(config *launcher.Config) error {

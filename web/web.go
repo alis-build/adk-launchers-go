@@ -16,11 +16,11 @@ import (
 	"go.alis.build/adk/launchers/internal/launcherutils"
 	iam "go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
-	"google.golang.org/adk/cmd/launcher"
-	"google.golang.org/adk/cmd/launcher/universal"
-	adkweb "google.golang.org/adk/cmd/launcher/web"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/telemetry"
+	"google.golang.org/adk/v2/cmd/launcher"
+	"google.golang.org/adk/v2/cmd/launcher/universal"
+	adkweb "google.golang.org/adk/v2/cmd/launcher/web"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/telemetry"
 )
 
 // webConfig contains parameters for launching web server

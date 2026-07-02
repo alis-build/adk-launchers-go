@@ -14,8 +14,8 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"go.alis.build/adk/launchers/agui/internal/interrupt"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -43,11 +43,11 @@ type PredictStateMapping struct {
 
 // Processor maps ADK session events to AG-UI protocol events.
 type Processor struct {
-	DefaultPartConverter    PartConverter
-	LoadSessionForSnapshot  func(ctx context.Context, appName, userID, sessionID string) (session.Session, bool, error)
-	BuildMessagesSnapshot   func(ctx context.Context, sess session.Session) ([]types.Message, error)
-	IsInternalStateKey      func(key string) bool
-	BuildStateSnapshot      func(sess session.Session, reqState map[string]any) map[string]any
+	DefaultPartConverter   PartConverter
+	LoadSessionForSnapshot func(ctx context.Context, appName, userID, sessionID string) (session.Session, bool, error)
+	BuildMessagesSnapshot  func(ctx context.Context, sess session.Session) ([]types.Message, error)
+	IsInternalStateKey     func(key string) bool
+	BuildStateSnapshot     func(sess session.Session, reqState map[string]any) map[string]any
 }
 
 // eventSink is the legacy internal name used within this package.

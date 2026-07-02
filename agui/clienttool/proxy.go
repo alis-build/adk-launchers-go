@@ -3,8 +3,8 @@ package clienttool
 import (
 	"fmt"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
 
@@ -54,7 +54,7 @@ func (t *proxyTool) Declaration() *genai.FunctionDeclaration {
 
 // Run implements the runnable tool interface. It returns immediately with a
 // pending status — the actual execution happens on the AG-UI client.
-func (t *proxyTool) Run(_ agent.ToolContext, _ any) (map[string]any, error) {
+func (t *proxyTool) Run(_ agent.Context, _ any) (map[string]any, error) {
 	return map[string]any{
 		"status":  "pending",
 		"message": "Tool execution delegated to the AG-UI client.",
@@ -65,7 +65,7 @@ func (t *proxyTool) Run(_ agent.ToolContext, _ any) (map[string]any, error) {
 // This method satisfies the internal RequestProcessor interface via Go's
 // structural typing — ADK discovers it at runtime without needing an
 // explicit import of the internal package.
-func (t *proxyTool) ProcessRequest(_ agent.ToolContext, req *model.LLMRequest) error {
+func (t *proxyTool) ProcessRequest(_ agent.Context, req *model.LLMRequest) error {
 	if req.Tools == nil {
 		req.Tools = make(map[string]any)
 	}

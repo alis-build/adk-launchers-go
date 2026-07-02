@@ -11,9 +11,9 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"go.alis.build/adk/launchers/internal/adkrun"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/cmd/launcher"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/cmd/launcher"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -156,7 +156,7 @@ func TestDefaultExecutor_BeforeExecuteCallbackAbort(t *testing.T) {
 func TestDefaultExecutor_AfterEventCallbackAbort(t *testing.T) {
 	rt, svc := testExecutorRuntimeWithEvents(t, func(agent.InvocationContext) iter.Seq2[*session.Event, error] {
 		return func(yield func(*session.Event, error) bool) {
-			ev := session.NewEvent("inv1")
+			ev := session.NewEvent(t.Context(), "inv1")
 			ev.Content = genai.NewContentFromText("hi", genai.RoleModel)
 			ev.Partial = true
 			yield(ev, nil)

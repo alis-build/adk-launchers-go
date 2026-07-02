@@ -282,8 +282,9 @@
 //	resume: [{ interruptId: "<confirmation-call-id>", status: "resolved", payload: { approved: true } }]
 //
 // Interrupt metadata.adk.invocationId and resume state.adk.invocationId carry the
-// ADK invocation id for future same-invocation resume; RunRequest.InvocationID
-// is set on resume runs but not yet passed to runner.Run (see adkrun TODO).
+// ADK invocation id for client correlation. Same-invocation resume is handled by
+// ADK v2 runner: FunctionResponse ids in the resume message must match the
+// confirmation FunctionCall id stored on the session (see interrupt.EntriesToConfirmationContent).
 //
 // Resume validation runs after RunStarted (protocol errors become RunError on
 // the SSE stream). The server enforces AG-UI contract rules when pending state

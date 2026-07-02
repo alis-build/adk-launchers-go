@@ -9,8 +9,8 @@ import (
 	"github.com/gorilla/mux"
 	"go.alis.build/adk/launchers/internal/launcherutils"
 	lro "go.alis.build/lro/v2"
-	"google.golang.org/adk/cmd/launcher"
-	"google.golang.org/adk/cmd/launcher/web"
+	"google.golang.org/adk/v2/cmd/launcher"
+	"google.golang.org/adk/v2/cmd/launcher/web"
 )
 
 // resumeOperationPathPrefix is the path segment registered by lro/v2 RegisterHTTP,

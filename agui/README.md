@@ -37,6 +37,8 @@ Extension points:
 | ------- | ---- |
 | `internal/aguimsg` | Inbound AG-UI → genai messages |
 | `internal/interrupt` | HITL resume and validation |
+
+HITL resume sends AG-UI `resume` entries through `internal/interrupt.EntriesToConfirmationContent`, then `adkrun.RunSSE`. ADK v2 reuses the paused invocation when the resulting `FunctionResponse.id` matches the confirmation call on the session; `RunRequest.invocationId` is not used by the in-process runner.
 | `internal/stream` | Outbound ADK → AG-UI event mapping |
 
 These are not public import paths; use the root `agui` package.

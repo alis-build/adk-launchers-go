@@ -7,7 +7,7 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -15,7 +15,7 @@ var _ session.Session = (*mockSession)(nil)
 
 func TestConvertSessionToMessages_TextMessage(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.Content = genai.NewContentFromText("Hello, world!", genai.RoleModel)
 		s.events = append(s.events, ev)
 	})
@@ -38,7 +38,7 @@ func TestConvertSessionToMessages_TextMessage(t *testing.T) {
 
 func TestConvertSessionToMessages_UserMessage(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.Content = genai.NewContentFromText("Hi there", genai.RoleUser)
 		s.events = append(s.events, ev)
 	})
@@ -57,7 +57,7 @@ func TestConvertSessionToMessages_UserMessage(t *testing.T) {
 
 func TestConvertSessionToMessages_FunctionCall(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.Content = &genai.Content{
 			Role: string(genai.RoleModel),
 			Parts: []*genai.Part{{
@@ -98,7 +98,7 @@ func TestConvertSessionToMessages_FunctionCall(t *testing.T) {
 
 func TestConvertSessionToMessages_FunctionResponse(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.Content = &genai.Content{
 			Role: string(genai.RoleModel),
 			Parts: []*genai.Part{{
@@ -129,7 +129,7 @@ func TestConvertSessionToMessages_FunctionResponse(t *testing.T) {
 
 func TestConvertSessionToMessages_Thought(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.Content = &genai.Content{
 			Role: string(genai.RoleModel),
 			Parts: []*genai.Part{
@@ -170,12 +170,12 @@ func TestConvertSessionToMessages_Thought(t *testing.T) {
 
 func TestConvertSessionToMessages_SkipsPartialEvents(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
-		partial := session.NewEvent("inv1")
+		partial := session.NewEvent(t.Context(), "inv1")
 		partial.Content = genai.NewContentFromText("partial delta", genai.RoleModel)
 		partial.Partial = true
 		s.events = append(s.events, partial)
 
-		final := session.NewEvent("inv1")
+		final := session.NewEvent(t.Context(), "inv1")
 		final.Content = genai.NewContentFromText("full text", genai.RoleModel)
 		s.events = append(s.events, final)
 	})
@@ -196,12 +196,12 @@ func TestConvertSessionToMessages_SkipsPartialEvents(t *testing.T) {
 func TestConvertSessionToMessages_WithAfter(t *testing.T) {
 	now := time.Now()
 	sess := buildSession(func(s *mockSession) {
-		old := session.NewEvent("inv1")
+		old := session.NewEvent(t.Context(), "inv1")
 		old.Content = genai.NewContentFromText("old message", genai.RoleModel)
 		old.Timestamp = now.Add(-10 * time.Minute)
 		s.events = append(s.events, old)
 
-		recent := session.NewEvent("inv2")
+		recent := session.NewEvent(t.Context(), "inv2")
 		recent.Content = genai.NewContentFromText("recent message", genai.RoleModel)
 		recent.Timestamp = now.Add(-1 * time.Minute)
 		s.events = append(s.events, recent)
@@ -225,7 +225,7 @@ func TestConvertSessionToMessages_WithAfter(t *testing.T) {
 func TestConvertSessionToMessages_WithLimit(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
 		for i := 0; i < 5; i++ {
-			ev := session.NewEvent("inv1")
+			ev := session.NewEvent(t.Context(), "inv1")
 			ev.Content = genai.NewContentFromText("msg", genai.RoleModel)
 			s.events = append(s.events, ev)
 		}
@@ -244,7 +244,7 @@ func TestConvertSessionToMessages_WithLimit(t *testing.T) {
 
 func TestConvertSessionToMessages_WithPartConverter(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.Content = &genai.Content{
 			Role: string(genai.RoleModel),
 			Parts: []*genai.Part{{
@@ -297,7 +297,7 @@ func TestConvertSessionToMessages_WithPartConverter(t *testing.T) {
 
 func TestConvertSessionToMessages_MultipleToolCalls(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.Content = &genai.Content{
 			Role: string(genai.RoleModel),
 			Parts: []*genai.Part{
@@ -334,7 +334,7 @@ func TestConvertSessionToMessages_EmptySession(t *testing.T) {
 
 func TestConvertSessionToMessages_MessageIDs(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.ID = "evt-abc"
 		ev.Content = &genai.Content{
 			Role: string(genai.RoleModel),
@@ -363,7 +363,7 @@ func TestConvertSessionToMessages_MessageIDs(t *testing.T) {
 
 func TestConvertSessionToMessages_TextBeforeFunctionCall(t *testing.T) {
 	sess := buildSession(func(s *mockSession) {
-		ev := session.NewEvent("inv1")
+		ev := session.NewEvent(t.Context(), "inv1")
 		ev.ID = "evt-1"
 		ev.Content = &genai.Content{
 			Role: string(genai.RoleModel),

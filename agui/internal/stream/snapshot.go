@@ -5,7 +5,7 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 )
 
 // BuildStateSnapshot merges persisted session state with optional request state,

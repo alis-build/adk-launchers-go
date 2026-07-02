@@ -15,7 +15,7 @@ import (
 	"go.alis.build/adk/launchers/agui/internal/interrupt"
 	"go.alis.build/adk/launchers/agui/internal/stream"
 	"go.alis.build/adk/launchers/internal/adkrun"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -431,8 +431,9 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 		//   - StateDelta: merges client-provided state and client tool definitions into the
 		//     ADK session. Client tools are injected under clienttool.StateKey so the
 		//     clienttool.Toolset can discover them at agent invocation time.
-		//   - InvocationID: set only on resume runs. It tells ADK which paused invocation
-		//     to continue, so the confirmation FunctionResponse is routed to the right turn.
+		//   - NewMessage: on HITL resume, carries FunctionResponse parts whose ids match
+		//     the confirmation call stored on the session; ADK v2 runner reuses the paused
+		//     invocation id from session history automatically.
 		runReq := adkrun.RunRequest{
 			AppName:                   appName,
 			UserID:                    userID,
@@ -449,15 +450,6 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 				runReq.StateDelta = make(map[string]any)
 			}
 			runReq.StateDelta[clienttool.StateKey] = req.Tools
-		}
-		if isResumeRun {
-			var resumeSess session.Session
-			if resumeSess, err = l.getSession(ctx, appName, userID, sessionID); err != nil {
-				log.Printf("agui: resume: session.Get for invocation id: %v", err)
-			}
-			if invID := resolveInvocationIDForResume(pending, req.Resume, req.State, resumeSess); invID != "" {
-				runReq.InvocationID = invID
-			}
 		}
 
 		partConv := d.partConverter()

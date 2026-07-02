@@ -1,8 +1,8 @@
 package web
 
 import (
-	"google.golang.org/adk/cmd/launcher"
-	adkweb "google.golang.org/adk/cmd/launcher/web"
+	"google.golang.org/adk/v2/cmd/launcher"
+	adkweb "google.golang.org/adk/v2/cmd/launcher/web"
 )
 
 // Sublauncher is the ADK web sublauncher contract. Implementations register HTTP
