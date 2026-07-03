@@ -1,5 +1,7 @@
 .vscode/
 !.vscode/settings.json
+.claude/
+.cursor/
 .idea/
 .DS_Store
 !console/app/dist

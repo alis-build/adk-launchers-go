@@ -221,7 +221,9 @@ func (w *webLauncher) Run(ctx context.Context, config *launcher.Config) error {
 		alismux.AddGateway(w.config.authGateway)
 	}
 
-	alismux.HandleHTTP("/", router)
+	if err := mountGorillaOnHostMux(router); err != nil {
+		return fmt.Errorf("gorilla host mount failed: %w", err)
+	}
 
 	log.Printf("Starting the web server: %+v", w.config)
 	log.Println()
