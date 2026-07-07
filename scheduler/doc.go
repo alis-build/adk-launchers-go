@@ -50,6 +50,8 @@
 //  2. Impersonates the cron owner for ADK runs (user id + cron email).
 //  3. Optionally runs initial_prompt once for new recurring crons, then prompt.
 //  4. Persists thread (threads/{session_id}), last_run_time, and archives TYPE_AT crons.
+//     Failed runs persist last_failure_time and last_failure_message; TYPE_AT failures
+//     are archived so they do not remain active without a backing Cloud Task.
 //
 // Default HTTP behavior matches the stock extension: return 200 immediately and run
 // asynchronously. [WithSynchronousExecution] blocks until the ADK run completes;

@@ -10,7 +10,7 @@ require (
 	go.alis.build/agui/history v0.1.4
 	go.alis.build/agui/scheduler v0.1.0
 	go.alis.build/alog v0.1.0
-	go.alis.build/common v1.1.7
+	go.alis.build/common v1.1.8
 	go.alis.build/iam/v3 v3.7.0
 	go.alis.build/lro/v2 v2.8.0
 	go.alis.build/mux v0.4.9

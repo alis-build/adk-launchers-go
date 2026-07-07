@@ -149,8 +149,8 @@ go.alis.build/agui/scheduler v0.1.0 h1:dm0cg9+XfpkdfHvFMRm5c+YgLX2BO0Oe+HeKyaJAU
 go.alis.build/agui/scheduler v0.1.0/go.mod h1:pPChTG10XeMhJOYJosfSypRBl7Pt9UbVVSwzZL784WE=
 go.alis.build/alog v0.1.0 h1:XiNnZ6EXEcKbKmABNLxDicipg0nezX6FocdhgIYkMX4=
 go.alis.build/alog v0.1.0/go.mod h1:PY1zq0HD5NnBkqZT+krUndhUTVhPtraieCM1DqxmPeQ=
-go.alis.build/common v1.1.7 h1:sxMYwa/lyf44rhaPQCHXzwqfLiyq7GPEkZfea6wTfgQ=
-go.alis.build/common v1.1.7/go.mod h1:PwCtHaSYYR8bN1Dk0eRao+aaCPnapxBwgG0GZyzaaXg=
+go.alis.build/common v1.1.8 h1:bmclRobVWEo+1yKz7Yodjg7hp1ORZp+z4yL0xBRzb5o=
+go.alis.build/common v1.1.8/go.mod h1:PwCtHaSYYR8bN1Dk0eRao+aaCPnapxBwgG0GZyzaaXg=
 go.alis.build/iam/v3 v3.7.0 h1:uDW03n4+en6Zlsm4V9cUrBrntAGiEUu5NXbmDE53pgU=
 go.alis.build/iam/v3 v3.7.0/go.mod h1:h3zOJW0Z9Zu9QS0elcf75kFoIin5dFVGY71cXI8PAO0=
 go.alis.build/lro/v2 v2.8.0 h1:2qle0B6XlI7Co7mtRK3dVMFF0qbKpRxOm55GHr1ykZA=

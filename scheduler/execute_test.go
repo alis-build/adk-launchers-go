@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	pb "go.alis.build/common/alis/agui/scheduler/v1"
 	"go.alis.build/adk/launchers/internal/adkrun"
@@ -218,11 +220,256 @@ func TestSmoke_executeCron_typeAtArchives(t *testing.T) {
 		t.Fatalf("state = %v", svc.update.GetCron().GetState())
 	}
 	paths := svc.update.GetUpdateMask().GetPaths()
-	for _, want := range []string{"state", "archive_time"} {
+	for _, want := range []string{"state", "archive_time", "last_failure_time", "last_failure_message"} {
 		if !slices.Contains(paths, want) {
 			t.Fatalf("update mask missing %q: %v", want, paths)
 		}
 	}
+	if svc.update.GetCron().GetLastFailureTime() != nil {
+		t.Fatal("expected last_failure_time cleared on success")
+	}
+	if svc.update.GetCron().GetLastFailureMessage() != "" {
+		t.Fatalf("expected last_failure_message cleared on success, got %q", svc.update.GetCron().GetLastFailureMessage())
+	}
+}
+
+func TestSmoke_executeCron_successClearsPriorFailure(t *testing.T) {
+	svc := &fakeScheduler{
+		cron: &pb.Cron{
+			Name:   "crons/recover",
+			Owner:  "users/alice",
+			Prompt: "tick",
+			Type:   pb.Cron_TYPE_CRON,
+		},
+	}
+	runner := &fakeRunner{nextSess: "sess-recover"}
+
+	if err := executeCron(context.Background(), svc, runner, testCronConfig(), svc.cron, "alice"); err != nil {
+		t.Fatalf("executeCron: %v", err)
+	}
+	// Success must mask failure fields so SchedulerService Prune clears any prior values.
+	paths := svc.update.GetUpdateMask().GetPaths()
+	for _, want := range []string{"last_failure_time", "last_failure_message"} {
+		if !slices.Contains(paths, want) {
+			t.Fatalf("update mask missing %q: %v", want, paths)
+		}
+	}
+	if svc.update.GetCron().GetLastFailureTime() != nil {
+		t.Fatal("update must not set last_failure_time on success; clearing is via Prune")
+	}
+	if svc.update.GetCron().GetLastFailureMessage() != "" {
+		t.Fatal("update must not set last_failure_message on success; clearing is via Prune")
+	}
+}
+
+func TestSmoke_executeCron_typeAtFailureArchivesWithError(t *testing.T) {
+	svc := &fakeScheduler{
+		cron: &pb.Cron{
+			Name:   "crons/once-fail",
+			Owner:  "users/alice",
+			Prompt: "run once",
+			Type:   pb.Cron_TYPE_AT,
+		},
+	}
+	runner := &fakeRunner{runErr: errors.New("agent callback failed")}
+
+	err := executeCron(context.Background(), svc, runner, testCronConfig(), svc.cron, "alice")
+	if err == nil {
+		t.Fatal("expected executeCron error")
+	}
+	if svc.update == nil {
+		t.Fatal("expected UpdateCron after failed TYPE_AT run")
+	}
+	if svc.update.GetCron().GetState() != pb.Cron_STATE_ARCHIVED {
+		t.Fatalf("state = %v", svc.update.GetCron().GetState())
+	}
+	if svc.update.GetCron().GetLastFailureTime() == nil {
+		t.Fatal("expected last_failure_time")
+	}
+	if svc.update.GetCron().GetLastFailureMessage() == "" {
+		t.Fatal("expected last_failure_message")
+	}
+	if svc.update.GetCron().GetLastRunTime() != nil {
+		t.Fatal("expected no last_run_time on failed run")
+	}
+	paths := svc.update.GetUpdateMask().GetPaths()
+	for _, want := range []string{"state", "archive_time", "last_failure_time", "last_failure_message"} {
+		if !slices.Contains(paths, want) {
+			t.Fatalf("update mask missing %q: %v", want, paths)
+		}
+	}
+}
+
+func TestSmoke_executeCron_typeCronFailureStaysActive(t *testing.T) {
+	svc := &fakeScheduler{
+		cron: &pb.Cron{
+			Name:   "crons/recurring-fail",
+			Owner:  "users/alice",
+			Prompt: "tick",
+			Type:   pb.Cron_TYPE_CRON,
+		},
+	}
+	runner := &fakeRunner{runErr: errors.New("agent failed")}
+
+	err := executeCron(context.Background(), svc, runner, testCronConfig(), svc.cron, "alice")
+	if err == nil {
+		t.Fatal("expected executeCron error")
+	}
+	if svc.update == nil {
+		t.Fatal("expected UpdateCron after failed TYPE_CRON run")
+	}
+	// Recurring failure updates only failure fields via the field mask; the
+	// partial Cron message must leave State at its zero value (STATE_UNSPECIFIED)
+	// so nothing outside the mask can accidentally clobber the stored state.
+	if got := svc.update.GetCron().GetState(); got != pb.Cron_STATE_UNSPECIFIED {
+		t.Fatalf("state = %v, want STATE_UNSPECIFIED in partial update", got)
+	}
+	if svc.update.GetCron().GetArchiveTime() != nil {
+		t.Fatal("expected no archive_time on recurring failure")
+	}
+	if svc.update.GetCron().GetLastFailureTime() == nil {
+		t.Fatal("expected last_failure_time")
+	}
+	paths := svc.update.GetUpdateMask().GetPaths()
+	for _, want := range []string{"last_failure_time", "last_failure_message"} {
+		if !slices.Contains(paths, want) {
+			t.Fatalf("update mask missing %q: %v", want, paths)
+		}
+	}
+	if slices.Contains(paths, "state") || slices.Contains(paths, "archive_time") {
+		t.Fatalf("recurring failure should not archive: %v", paths)
+	}
+}
+
+// Configuration errors (empty/unknown app name) must not archive a TYPE_AT cron
+// even though the schedule is one-shot: the agent is misconfigured, not the
+// schedule, and archival would hide the failure from operators after a redeploy.
+func TestSmoke_executeCron_validateFailureDoesNotArchiveTypeAt(t *testing.T) {
+	svc := &fakeScheduler{
+		cron: &pb.Cron{
+			Name:   "crons/misconfigured",
+			Owner:  "users/alice",
+			Prompt: "run once",
+			Type:   pb.Cron_TYPE_AT,
+		},
+	}
+	runner := &fakeRunner{}
+	cfg := testCronConfig()
+	cfg.defaultAppName = "" // force ValidateCronAppName to reject with "app name is required"
+
+	err := executeCron(context.Background(), svc, runner, cfg, svc.cron, "alice")
+	if err == nil {
+		t.Fatal("expected executeCron error for missing app name")
+	}
+	if len(runner.runs) != 0 {
+		t.Fatalf("expected agent not to run, got %#v", runner.runs)
+	}
+	if svc.update == nil {
+		t.Fatal("expected UpdateCron to record the validation failure")
+	}
+	if svc.update.GetCron().GetState() == pb.Cron_STATE_ARCHIVED {
+		t.Fatal("TYPE_AT must not be archived on a validation/config error")
+	}
+	if svc.update.GetCron().GetArchiveTime() != nil {
+		t.Fatal("expected no archive_time on validation failure")
+	}
+	if svc.update.GetCron().GetLastFailureTime() == nil {
+		t.Fatal("expected last_failure_time")
+	}
+	if svc.update.GetCron().GetLastFailureMessage() == "" {
+		t.Fatal("expected last_failure_message")
+	}
+	paths := svc.update.GetUpdateMask().GetPaths()
+	if slices.Contains(paths, "state") || slices.Contains(paths, "archive_time") {
+		t.Fatalf("validation failure must not touch state/archive_time mask: %v", paths)
+	}
+}
+
+// A failure to persist a run failure must be surfaced to the CronObserver so
+// operators can distinguish "agent failed but we recorded it" from "agent
+// failed and we also lost the record".
+func TestSmoke_executeCron_persistFailureVisibleToObserver(t *testing.T) {
+	agentErr := errors.New("agent boom")
+	svc := &fakeScheduler{
+		cron: &pb.Cron{
+			Name:   "crons/persist-fail-on-failure",
+			Owner:  "users/alice",
+			Prompt: "tick",
+			Type:   pb.Cron_TYPE_CRON,
+		},
+		updateErr: status.Error(codes.Unavailable, "spanner transient"),
+	}
+	runner := &fakeRunner{runErr: agentErr}
+
+	var observedErr error
+	cfg := testCronConfig()
+	cfg.observer = &testObserver{onFinished: func(_ context.Context, _ *pb.Cron, err error) {
+		observedErr = err
+	}}
+
+	err := executeCron(context.Background(), svc, runner, cfg, svc.cron, "alice")
+	if err == nil {
+		t.Fatal("expected executeCron error")
+	}
+	if !errors.Is(err, agentErr) {
+		t.Fatalf("returned err = %v, want wraps %v", err, agentErr)
+	}
+	if observedErr == nil {
+		t.Fatal("observer should see combined error")
+	}
+	if !errors.Is(observedErr, agentErr) {
+		t.Fatalf("observer err = %v, want wraps agent err %v", observedErr, agentErr)
+	}
+	if !strings.Contains(observedErr.Error(), "persist cron failure") {
+		t.Fatalf("observer err = %q, want to include persist failure", observedErr.Error())
+	}
+}
+
+func TestTruncateCronFailureMessage(t *testing.T) {
+	t.Run("short passthrough", func(t *testing.T) {
+		got := truncateCronFailureMessage("boom")
+		if got != "boom" {
+			t.Fatalf("got %q, want %q", got, "boom")
+		}
+	})
+	t.Run("trims whitespace", func(t *testing.T) {
+		got := truncateCronFailureMessage("   boom \n")
+		if got != "boom" {
+			t.Fatalf("got %q, want %q", got, "boom")
+		}
+	})
+	t.Run("empty after trim", func(t *testing.T) {
+		if got := truncateCronFailureMessage("   \t\n"); got != "" {
+			t.Fatalf("got %q, want empty", got)
+		}
+	})
+	t.Run("long ascii truncated", func(t *testing.T) {
+		in := strings.Repeat("a", maxCronFailureMessageLen+50)
+		got := truncateCronFailureMessage(in)
+		if len(got) != maxCronFailureMessageLen {
+			t.Fatalf("len = %d, want %d", len(got), maxCronFailureMessageLen)
+		}
+		if !utf8.ValidString(got) {
+			t.Fatal("truncated string is not valid UTF-8")
+		}
+	})
+	t.Run("multi-byte rune boundary", func(t *testing.T) {
+		// "€" is 3 bytes in UTF-8. Fill the buffer with € so the naive byte
+		// cut at maxCronFailureMessageLen lands mid-rune.
+		euro := "€"
+		count := (maxCronFailureMessageLen / len(euro)) + 5
+		in := strings.Repeat(euro, count)
+		got := truncateCronFailureMessage(in)
+		if len(got) > maxCronFailureMessageLen {
+			t.Fatalf("len = %d, exceeds cap %d", len(got), maxCronFailureMessageLen)
+		}
+		if !utf8.ValidString(got) {
+			t.Fatalf("truncated string is not valid UTF-8: bytes=%x", []byte(got))
+		}
+		if len(got)%len(euro) != 0 {
+			t.Fatalf("length %d not aligned to %d-byte rune boundary", len(got), len(euro))
+		}
+	})
 }
 
 func TestCronHandler_sync_smoke(t *testing.T) {
@@ -489,8 +736,23 @@ func TestExecuteCron_beforeRunErrorAbortsAndSkipsSubsequent(t *testing.T) {
 	if !slices.Equal(log, want) {
 		t.Fatalf("chain = %v, want %v", log, want)
 	}
-	if svc.update != nil {
-		t.Fatal("expected no UpdateCron when BeforeRun aborts")
+	// A BeforeRun abort is still a run failure and must be recorded on the cron
+	// via last_failure_time / last_failure_message so operators can see it,
+	// without touching state/archive_time (TYPE_CRON must remain active).
+	if svc.update == nil {
+		t.Fatal("expected UpdateCron to record the BeforeRun-abort failure")
+	}
+	if svc.update.GetCron().GetLastFailureTime() == nil {
+		t.Fatal("expected last_failure_time")
+	}
+	paths := svc.update.GetUpdateMask().GetPaths()
+	for _, want := range []string{"last_failure_time", "last_failure_message"} {
+		if !slices.Contains(paths, want) {
+			t.Fatalf("update mask missing %q: %v", want, paths)
+		}
+	}
+	if slices.Contains(paths, "state") || slices.Contains(paths, "archive_time") {
+		t.Fatalf("recurring failure must not archive: %v", paths)
 	}
 }
 

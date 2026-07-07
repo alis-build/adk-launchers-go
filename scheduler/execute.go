@@ -3,9 +3,11 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"go.alis.build/alog"
 	pb "go.alis.build/common/alis/agui/scheduler/v1"
@@ -89,6 +91,12 @@ func cronHandler(
 // Behavior matches the stock extension handler: initial_prompt seeding for TYPE_CRON,
 // session reuse via thread, and TYPE_AT archival after a successful run.
 //
+// On failure, last_failure_time and last_failure_message are persisted. TYPE_AT jobs
+// are also archived so they do not remain STATE_ACTIVE without a backing Cloud Task.
+// TYPE_CRON jobs stay active so the next schedule tick can retry. Successful runs
+// include last_failure_time and last_failure_message in the update mask so
+// SchedulerService Prune clears any prior failure metadata.
+//
 // Returns a non-nil error only for agent failures. UpdateCron failures are logged
 // and reported to the [CronObserver] but do not cause a returned error, preventing
 // Cloud Tasks from retrying an already-completed agent run.
@@ -112,7 +120,10 @@ func executeCron(
 
 	appName := threadmeta.ResolveCronAppName(cron.GetAgentId(), cfg.defaultAppName)
 	if err := threadmeta.ValidateCronAppName(cfg.launcherCfg, appName); err != nil {
-		runErr = err
+		// Configuration error: do not archive TYPE_AT. The agent is misconfigured,
+		// not the schedule, and archival would make the failure invisible to any
+		// operator who redeploys with the fix.
+		runErr = errors.Join(err, persistCronFailure(ctx, svc, cron, err, false))
 		return runErr
 	}
 
@@ -132,6 +143,7 @@ func executeCron(
 		id, err := runCronPrompt(ctx, promptCall.with(sessionID, cron.GetInitialPrompt(), CronRunInitial))
 		if err != nil {
 			runErr = fmt.Errorf("initial run: %w", err)
+			runErr = errors.Join(runErr, persistCronFailure(ctx, svc, cron, runErr, true))
 			return runErr
 		}
 		sessionID = mergeSessionID(sessionID, id)
@@ -140,6 +152,7 @@ func executeCron(
 	id, err := runCronPrompt(ctx, promptCall.with(sessionID, cron.GetPrompt(), CronRunScheduled))
 	if err != nil {
 		runErr = fmt.Errorf("run: %w", err)
+		runErr = errors.Join(runErr, persistCronFailure(ctx, svc, cron, runErr, true))
 		return runErr
 	}
 	sessionID = mergeSessionID(sessionID, id)
@@ -151,7 +164,10 @@ func executeCron(
 		Thread:      threadResource,
 		LastRunTime: now,
 	}
-	paths := []string{"last_run_time"}
+	// Include last_failure_time and last_failure_message in the mask (with unset
+	// values on the update) so SchedulerService clears any prior failure metadata
+	// on a successful run.
+	paths := []string{"last_run_time", "last_failure_time", "last_failure_message"}
 	if cron.GetThread() != threadResource && threadResource != "" {
 		paths = append(paths, "thread")
 	}
@@ -177,6 +193,77 @@ func executeCron(
 		alog.Errorf(ctx, "scheduler: update cron %s after successful run: %v", cron.GetName(), err)
 	}
 	return nil
+}
+
+const maxCronFailureMessageLen = 2048
+
+// persistCronFailure records the last failure on the cron resource and returns
+// any error from the underlying UpdateCron so callers can surface it (e.g. via
+// [errors.Join] with the run error) to observers.
+//
+// When archiveTerminal is true and the cron is TYPE_AT, the cron is also archived
+// because a Cloud Task has already fired against a one-shot schedule that will
+// not fire again. Pass false for pre-run configuration errors, where archival
+// would silently hide the misconfiguration from operators after a redeploy.
+//
+// A nil runErr is a no-op.
+func persistCronFailure(ctx context.Context, svc pb.SchedulerServiceServer, cron *pb.Cron, runErr error, archiveTerminal bool) error {
+	if runErr == nil {
+		return nil
+	}
+
+	now := timestamppb.Now()
+	update := &pb.Cron{
+		Name:            cron.GetName(),
+		LastFailureTime: now,
+	}
+	paths := []string{"last_failure_time", "last_failure_message"}
+	if msg, ok := cronFailureMessage(runErr); ok {
+		update.LastFailureMessage = &msg
+	}
+	if archiveTerminal && cron.GetType() == pb.Cron_TYPE_AT {
+		update.State = pb.Cron_STATE_ARCHIVED
+		update.ArchiveTime = now
+		paths = append(paths, "state", "archive_time")
+	}
+
+	if _, err := svc.UpdateCron(ctx, &pb.UpdateCronRequest{
+		Cron:       update,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
+	}); err != nil {
+		alog.Errorf(ctx, "scheduler: update cron %s after failed run: %v", cron.GetName(), err)
+		return fmt.Errorf("persist cron failure: %w", err)
+	}
+	return nil
+}
+
+// cronFailureMessage returns the truncated, UTF-8-safe error string suitable for
+// persistence in Cron.last_failure_message. The second return is false when the
+// message is empty after trimming, so callers can leave the field unset rather
+// than storing a present-but-empty string.
+func cronFailureMessage(runErr error) (string, bool) {
+	msg := truncateCronFailureMessage(runErr.Error())
+	if msg == "" {
+		return "", false
+	}
+	return msg, true
+}
+
+// truncateCronFailureMessage trims whitespace and caps the message at
+// maxCronFailureMessageLen bytes, backing up to the previous rune boundary so
+// the returned string is always valid UTF-8. Otherwise a multi-byte rune split
+// mid-sequence would produce an invalid UTF-8 payload that the proto/RPC layer
+// would reject when writing the update.
+func truncateCronFailureMessage(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if len(msg) <= maxCronFailureMessageLen {
+		return msg
+	}
+	end := maxCronFailureMessageLen
+	for end > 0 && !utf8.RuneStart(msg[end]) {
+		end--
+	}
+	return msg[:end]
 }
 
 // cronPromptCall bundles the tick-scoped inputs to runCronPrompt so the two
