@@ -244,31 +244,6 @@ func TestRunSSE_partsNotMutated(t *testing.T) {
 	}
 }
 
-func TestRunUserMessage_happyPath(t *testing.T) {
-	rt := testRuntime(t)
-
-	sessionID, err := rt.RunUserMessage(t.Context(), "user-1", "", "hello")
-	if err != nil {
-		t.Fatalf("RunUserMessage: %v", err)
-	}
-	if sessionID == "" {
-		t.Fatal("expected non-empty sessionID")
-	}
-}
-
-func TestRunUserMessage_emptyPrompt(t *testing.T) {
-	rt := testRuntime(t)
-
-	for _, prompt := range []string{"", "   "} {
-		t.Run(fmt.Sprintf("prompt=%q", prompt), func(t *testing.T) {
-			_, err := rt.RunUserMessage(t.Context(), "user-1", "", prompt)
-			if err == nil {
-				t.Fatalf("expected error for prompt %q", prompt)
-			}
-		})
-	}
-}
-
 func TestRunSSE_resumeReusesInvocationID(t *testing.T) {
 	const (
 		callID   = "confirm-1"
@@ -416,8 +391,10 @@ func drainInvocationIDs(t *testing.T, rt *Runtime, ctx context.Context, userID, 
 	return invIDs
 }
 
-func TestRunUserMessage_midStreamError(t *testing.T) {
-	// Create an agent that yields an error mid-stream.
+func TestRunSSE_midStreamError(t *testing.T) {
+	// Create an agent that yields an error mid-stream, then confirm RunSSE
+	// surfaces the failure through the event iterator (runtimeAdapter, which
+	// wraps RunSSE, relies on this behavior in the scheduler).
 	a, err := agent.New(agent.Config{
 		Name: "err-agent",
 		Run: func(agent.InvocationContext) iter.Seq2[*session.Event, error] {
@@ -438,8 +415,21 @@ func TestRunUserMessage_midStreamError(t *testing.T) {
 		t.Fatalf("NewRuntime: %v", err)
 	}
 
-	_, err = rt.RunUserMessage(t.Context(), "user-1", "", "hello")
-	if err == nil {
-		t.Fatal("expected error from mid-stream failure")
+	_, events, err := rt.RunSSE(t.Context(), RunRequest{
+		UserID:     "user-1",
+		NewMessage: UserTextMessage("hello"),
+	})
+	if err != nil {
+		t.Fatalf("RunSSE setup: %v", err)
+	}
+	var seenErr error
+	for _, evErr := range events {
+		if evErr != nil {
+			seenErr = evErr
+			break
+		}
+	}
+	if seenErr == nil {
+		t.Fatal("expected mid-stream error from event iterator")
 	}
 }

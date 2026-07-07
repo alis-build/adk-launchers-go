@@ -66,7 +66,7 @@ export default defineConfig({
         target: process.env.AGENT_HOST ?? 'http://localhost:8080',
         changeOrigin: true,
       },
-      '/alis.a2a.extension.v1.SchedulerService': {
+      '/alis.agui.scheduler.v1.SchedulerService': {
         target: process.env.AGENT_HOST ?? 'http://localhost:8080',
         changeOrigin: true,
       },

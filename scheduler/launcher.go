@@ -8,9 +8,10 @@ import (
 	"sync"
 
 	"github.com/gorilla/mux"
-	schedulerext "go.alis.build/a2a/extension/scheduler"
-	schedjsonrpc "go.alis.build/a2a/extension/scheduler/jsonrpc"
-	schedulerservice "go.alis.build/a2a/extension/scheduler/service"
+	historyservice "go.alis.build/agui/history/service"
+	schedulerext "go.alis.build/agui/scheduler"
+	schedjsonrpc "go.alis.build/agui/scheduler/jsonrpc"
+	schedulerservice "go.alis.build/agui/scheduler/service"
 	"go.alis.build/adk/launchers/internal/adkrun"
 	"go.alis.build/adk/launchers/internal/launcherutils"
 	launchersweb "go.alis.build/adk/launchers/web"
@@ -67,6 +68,54 @@ func WithSynchronousExecution(sync bool) Option {
 func WithCronObserver(observer CronObserver) Option {
 	return func(l *schedulerLauncher) {
 		l.cronCfg.observer = observer
+	}
+}
+
+// WithCronRunInterceptor registers a [CronRunInterceptor] around each ADK
+// invocation inside executeCron. Nil values are ignored.
+//
+// May be called multiple times; interceptors are invoked in the order they
+// were registered. See [CronRunInterceptor] for the ordering, mutation, and
+// error contract, and for the concurrency requirement.
+func WithCronRunInterceptor(interceptor CronRunInterceptor) Option {
+	return func(l *schedulerLauncher) {
+		if interceptor != nil {
+			l.cronCfg.runInterceptors = append(l.cronCfg.runInterceptors, interceptor)
+		}
+	}
+}
+
+// WithCronRunInterceptors registers multiple [CronRunInterceptor] values in
+// order. Nil entries are skipped.
+//
+// Interceptors added via successive calls to [WithCronRunInterceptor] and
+// [WithCronRunInterceptors] compose into a single chain; the final ordering
+// matches the order of option application. See [CronRunInterceptor] for
+// ordering, mutation, and error semantics.
+func WithCronRunInterceptors(interceptors ...CronRunInterceptor) Option {
+	return func(l *schedulerLauncher) {
+		for _, ic := range interceptors {
+			if ic != nil {
+				l.cronCfg.runInterceptors = append(l.cronCfg.runInterceptors, ic)
+			}
+		}
+	}
+}
+
+// WithThreadService enables thread metadata upserts on cron runs so scheduled
+// runs appear alongside interactive /run_sse runs in the AGUI history listing.
+// When set, the cron handler calls CreateOrUpdateThread before and after each
+// ADK invocation (best-effort: failures are logged, not returned).
+//
+// Pass the same *historyservice.ThreadService instance as
+// [go.alis.build/adk/launchers/agui.WithThreadService]. If a different instance
+// is passed, scheduled and interactive runs will write to independent service
+// state and will not coexist in the history listing.
+//
+// A nil svc disables the upsert (equivalent to not setting the option).
+func WithThreadService(svc *historyservice.ThreadService) Option {
+	return func(l *schedulerLauncher) {
+		l.cronCfg.threadService = svc
 	}
 }
 
@@ -223,10 +272,12 @@ func (l *schedulerLauncher) mountHostRoutes(config *adklauncher.Config) error {
 		return fmt.Errorf("scheduler: %w", err)
 	}
 
+	l.cronCfg.defaultAppName = l.appName
+	l.cronCfg.launcherCfg = config
+
 	l.registerGRPC()
 
-	// WithoutHandler skips the stock A2A loopback handler; we mount our ADK handler below.
-	httpOpts := []schedulerext.HTTPOption{schedulerext.WithoutHandler()}
+	httpOpts := make([]schedulerext.HTTPOption, 0, len(l.jsonrpcOpts)+1)
 	if len(l.jsonrpcOpts) > 0 {
 		httpOpts = append(httpOpts, schedulerext.WithJSONRPCOptions(l.jsonrpcOpts...))
 	}
@@ -235,7 +286,7 @@ func (l *schedulerLauncher) mountHostRoutes(config *adklauncher.Config) error {
 	// The cron callback is privileged (it runs agents and impersonates the cron
 	// owner). By default it is authenticated in-launcher as the environment
 	// service account; WithoutSystemAuth delegates that to a trusted upstream.
-	handler := cronHandler(l.service, rt, systemIdentity, &l.cronCfg)
+	handler := cronHandler(l.service, &runtimeAdapter{rt: rt}, systemIdentity, &l.cronCfg)
 	if l.disableSystemAuth {
 		alismux.Post(schedulerext.HandlerPath, handler)
 	} else {
@@ -244,7 +295,7 @@ func (l *schedulerLauncher) mountHostRoutes(config *adklauncher.Config) error {
 	return nil
 }
 
-const schedulerGRPCServiceName = "alis.a2a.extension.scheduler.v1.SchedulerService"
+const schedulerGRPCServiceName = "alis.agui.scheduler.v1.SchedulerService"
 
 // serviceInfoProvider is satisfied by *grpc.Server but not by grpc.ServiceRegistrar,
 // allowing a pre-registration check without importing a concrete type.

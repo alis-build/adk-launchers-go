@@ -5,7 +5,7 @@
  */
 
 export const HISTORY_JSONRPC_PATH = '/alis.agui.history.v1.ThreadService'
-export const SCHEDULER_JSONRPC_PATH = '/alis.a2a.extension.v1.SchedulerService'
+export const SCHEDULER_JSONRPC_PATH = '/alis.agui.scheduler.v1.SchedulerService'
 
 export interface JsonRpcError {
   code: number

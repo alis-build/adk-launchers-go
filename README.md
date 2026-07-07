@@ -11,7 +11,7 @@ Use this repository when you need extra capabilities beyond the core ADK launche
 | [`agui`](./agui)                       | `agui`      | [AG-UI](https://docs.ag-ui.com) SSE endpoint for CopilotKit and other AG-UI clients; optional [AgentExecutor](https://pkg.go.dev/go.alis.build/adk/launchers/agui#AgentExecutor) via `WithExecutor` |
 | [`agui/clienttool`](./agui/clienttool) | —           | Dynamic `tool.Toolset` for AG-UI client-side tools (agent opt-in, used with `agui`)                                                                                                                 |
 | [`lro`](./lro)                         | `lro`       | HTTP resume routes for [go.alis.build/lro/v2](https://pkg.go.dev/go.alis.build/lro/v2) long-running operations                                                                                      |
-| [`scheduler`](./scheduler)             | `scheduler` | [A2A scheduler](https://pkg.go.dev/go.alis.build/a2a/extension/scheduler) cron JSON-RPC and Cloud Tasks callback (in-process ADK runner)                                                            |
+| [`scheduler`](./scheduler)             | `scheduler` | [AG-UI scheduler](https://pkg.go.dev/go.alis.build/agui/scheduler) cron JSON-RPC and Cloud Tasks callback (in-process ADK runner)                                                            |
 | [`console`](./console)                 | `console`   | Embedded Vue operator console SPA, runtime config, and `/auth/me` (register **last** in `web.NewLauncher`)                                                                                          |
 | [`evals`](./evals)                     | `evals`     | Dev evaluation HTTP API (eval sets, run eval, metrics-info) with full adk-python evaluation engine parity                                                                                            |
 
@@ -21,7 +21,7 @@ Import the sublaunchers you need and pass them to [`web.NewLauncher`](./web):
 
 ```go
 import (
-    schedulerservice "go.alis.build/a2a/extension/scheduler/service"
+    schedulerservice "go.alis.build/agui/scheduler/service"
 
     "go.alis.build/adk/launchers/agui"
     "go.alis.build/adk/launchers/console"
@@ -183,7 +183,7 @@ Methods used by the bundled app:
 
 #### Scheduler (`scheduler` sublauncher)
 
-`POST /alis.a2a.extension.v1.SchedulerService` — JSON-RPC 2.0 (same envelope). Methods used by `/automation`:
+`POST /alis.agui.scheduler.v1.SchedulerService` — JSON-RPC 2.0 (same envelope). Methods used by `/automation`:
 
 - **ListCrons** — `params`: `{pageSize?, pageToken?}`
 - **CreateCron** — `params`: `{cron: {...}}` (prompt, expr, timezone, type, at, …)
@@ -191,6 +191,15 @@ Methods used by the bundled app:
 - **RunCron** — `params`: `{id: "<cron-id>"}`
 
 Params are protojson-compatible camelCase. See [`agui/doc.go`](agui/doc.go) and [`scheduler/doc.go`](scheduler/doc.go) for full route and option details.
+
+> **Migrating from the A2A scheduler?** The `scheduler` sublauncher now targets [`go.alis.build/agui/scheduler`](https://pkg.go.dev/go.alis.build/agui/scheduler). Update:
+>
+> - Proto import: `go.alis.build/common/alis/agui/scheduler/v1` (was `.../a2a/extension/scheduler/v1`).
+> - gRPC service and JSON-RPC / Cloud Tasks paths: `alis.agui.scheduler.v1.SchedulerService` (was `alis.a2a.extension.v1.SchedulerService`). Repoint Cloud Tasks `TargetUrl` to `/alis.agui.scheduler.v1.SchedulerService/handler`.
+> - Cron session model: `context_id` → `thread` (`threads/{thread_id}`).
+> - The stock A2A loopback handler is dropped; cron ticks now run the ADK app in-process.
+>
+> See [`scheduler/doc.go`](scheduler/doc.go) for the full migration notes and new options (`agent_id`, `metadata`, `WithThreadService`, `WithCronRunInterceptor`).
 
 #### Evals (`evals` sublauncher)
 
@@ -243,7 +252,7 @@ agui.NewLauncher("my-agent",
 
 #### Local Vite dev proxies (console only)
 
-When running `cd console/app && pnpm dev`, Vite proxies console-related paths to `AGENT_HOST` (default `http://localhost:8080`): `/agui`, `/auth`, `/alis.agui.history.v1.ThreadService`, `/alis.a2a.extension.v1.SchedulerService`, `/assets/config/runtime-config.json`. Eval routes (`/api/dev/...`) are served by the [`evals`](./evals) sublauncher on the agent host and are not part of the console Vite proxy; adk-web calls them directly.
+When running `cd console/app && pnpm dev`, Vite proxies console-related paths to `AGENT_HOST` (default `http://localhost:8080`): `/agui`, `/auth`, `/alis.agui.history.v1.ThreadService`, `/alis.agui.scheduler.v1.SchedulerService`, `/assets/config/runtime-config.json`. Eval routes (`/api/dev/...`) are served by the [`evals`](./evals) sublauncher on the agent host and are not part of the console Vite proxy; adk-web calls them directly.
 
 ## Testing
 

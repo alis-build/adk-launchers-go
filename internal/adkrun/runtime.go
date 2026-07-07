@@ -219,26 +219,3 @@ func (rt *Runtime) runSSE(ctx context.Context, req RunRequest, pluginConfig runn
 	return sessionID, r.Run(ctx, req.UserID, sessionID, &msg, runCfg, opts...), nil
 }
 
-// RunUserMessage runs the agent with a user text prompt and drains all events.
-//
-// sessionID is the ADK session to continue; when empty a new UUID is generated and returned.
-// The returned sessionID should be persisted (e.g. in cron.context_id) for subsequent runs.
-func (rt *Runtime) RunUserMessage(ctx context.Context, userID, sessionID, prompt string) (string, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return "", fmt.Errorf("adkrun: prompt is required")
-	}
-	sessionID, events, err := rt.RunSSE(ctx, RunRequest{
-		UserID:     userID,
-		SessionID:  sessionID,
-		NewMessage: UserTextMessage(prompt),
-	})
-	if err != nil {
-		return "", err
-	}
-	for _, err := range events {
-		if err != nil {
-			return "", fmt.Errorf("adkrun: run agent: %w", err)
-		}
-	}
-	return sessionID, nil
-}

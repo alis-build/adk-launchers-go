@@ -159,7 +159,7 @@
 //
 // ## Scheduler JSON-RPC (scheduler sublauncher)
 //
-//	POST /alis.a2a.extension.v1.SchedulerService  (auth)  JSON-RPC 2.0
+//	POST /alis.agui.scheduler.v1.SchedulerService  (auth)  JSON-RPC 2.0
 //
 // Methods used by the bundled SPA (/automation page):
 //
@@ -168,7 +168,7 @@
 //   - DeleteCron — params: {"name":"crons/<id>"}
 //   - RunCron — params: {"id":"<cron-id>"}
 //
-// Params use protojson-compatible camelCase. See go.alis.build/a2a/extension/scheduler.
+// Params use protojson-compatible camelCase. See go.alis.build/agui/scheduler.
 //
 // ## Typical launcher composition
 //
@@ -176,7 +176,7 @@
 //
 // For local Vite dev, proxy these paths to the agent host (see console/app/vite.config.ts):
 // /agui, /auth, /alis.agui.history.v1.ThreadService,
-// /alis.a2a.extension.v1.SchedulerService, /assets/config/runtime-config.json.
+// /alis.agui.scheduler.v1.SchedulerService, /assets/config/runtime-config.json.
 //
 // # Embedded SPA build
 //

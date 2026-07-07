@@ -15,8 +15,8 @@
 //     a default [agui.AgentExecutor] that maps ADK events to AG-UI SSE.
 //   - [lro] — HTTP resume callbacks for go.alis.build/lro/v2 long-running operations,
 //     invoked by Cloud Tasks (keyword: lro).
-//   - [scheduler] — A2A scheduler extension HTTP (cron JSON-RPC and execution callback;
-//     in-process ADK cron execution; keyword: scheduler).
+//   - [scheduler] — AG-UI scheduler HTTP (cron JSON-RPC and Cloud Tasks execution
+//     callback; in-process ADK cron execution; keyword: scheduler).
 //   - [console] — Embedded Vue operator console SPA, runtime config, and /auth/me
 //     (keyword: console; register last in web.NewLauncher).
 //   - [evals] — Dev evaluation HTTP API and adk-python evaluation engine parity

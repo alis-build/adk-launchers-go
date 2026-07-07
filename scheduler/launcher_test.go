@@ -3,7 +3,7 @@ package scheduler
 import (
 	"testing"
 
-	schedulerservice "go.alis.build/a2a/extension/scheduler/service"
+	schedulerservice "go.alis.build/agui/scheduler/service"
 	"google.golang.org/grpc"
 )
 
