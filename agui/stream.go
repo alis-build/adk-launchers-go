@@ -142,17 +142,27 @@ func emitToolCallLifecycle(e *emitter, state *streamState, toolCallID, toolCallN
 // interrupt was emitted) and the caller should stop processing events.
 func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *streamState) (bool, error) {
 	// Emit step events when the active sub-agent changes.
-	// Root agent (state.rootAppName) doesn't get step events.
-	if ev.Author != "" && ev.Author != state.currentStepAuthor {
+	// Root agent (state.rootAppName) doesn't get step events: normalize its
+	// author to "" so consecutive root partials do not repeatedly trip the
+	// author-change block. ev.Author is still passed to STEP_STARTED and
+	// TEXT_MESSAGE_START.name unchanged so the wire carries the raw label.
+	//
+	// Close any open text message before switching authors so the next
+	// partial opens a fresh TEXT_MESSAGE_START with the new author's name
+	// (do not rely on ADK turn boundaries between sub-agents).
+	stepAuthor := ev.Author
+	if stepAuthor == state.rootAppName {
+		stepAuthor = ""
+	}
+	if ev.Author != "" && stepAuthor != state.currentStepAuthor {
+		closeTextMessage(e, state)
 		if state.currentStepAuthor != "" {
 			e.emit(events.NewStepFinishedEvent(state.currentStepAuthor))
 		}
-		if ev.Author != state.rootAppName {
+		if stepAuthor != "" {
 			e.emit(events.NewStepStartedEvent(ev.Author))
-			state.currentStepAuthor = ev.Author
-		} else {
-			state.currentStepAuthor = ""
 		}
+		state.currentStepAuthor = stepAuthor
 	}
 
 	if ev.Content != nil {
@@ -226,7 +236,9 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 
 				if state.currentTextMessageID == "" {
 					state.currentTextMessageID = events.GenerateMessageID()
-					e.emit(events.NewTextMessageStartEvent(state.currentTextMessageID, events.WithRole("assistant")))
+					// Emit via the local shim so the optional "name" field lands
+					// on the wire until the AG-UI Go SDK supports it natively.
+					e.emit(newTextMessageStartEvent(state.currentTextMessageID, "assistant", ev.Author))
 				}
 				e.emit(events.NewTextMessageContentEvent(state.currentTextMessageID, part.Text))
 				continue

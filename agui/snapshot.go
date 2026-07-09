@@ -89,6 +89,9 @@ func (l *aguiLauncher) buildMessagesSnapshot(ctx context.Context, sess session.S
 	if l.config.genAIPartConverter != nil {
 		opts = append(opts, WithPartConverter(l.config.genAIPartConverter))
 	}
+	if appName := strings.TrimSpace(sess.AppName()); appName != "" {
+		opts = append(opts, WithRootAppName(appName))
+	}
 	return ConvertSessionToMessages(ctx, sess, opts...)
 }
 
