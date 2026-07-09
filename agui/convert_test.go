@@ -392,6 +392,125 @@ func TestConvertSessionToMessages_TextBeforeFunctionCall(t *testing.T) {
 	}
 }
 
+func TestConvertSessionToMessages_SubAgentAuthorName(t *testing.T) {
+	sess := buildSession(func(s *mockSession) {
+		ev := session.NewEvent(t.Context(), "inv1")
+		ev.Author = "sub-agent"
+		ev.Content = genai.NewContentFromText("from sub-agent", genai.RoleModel)
+		s.events = append(s.events, ev)
+	})
+
+	msgs, err := ConvertSessionToMessages(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Name != "sub-agent" {
+		t.Errorf("Name = %q, want sub-agent", msgs[0].Name)
+	}
+}
+
+func TestConvertSessionToMessages_RootAuthorName(t *testing.T) {
+	const rootApp = "my-root-app"
+	sess := buildSession(func(s *mockSession) {
+		ev := session.NewEvent(t.Context(), "inv1")
+		ev.Author = rootApp
+		ev.Content = genai.NewContentFromText("from root", genai.RoleModel)
+		s.events = append(s.events, ev)
+	})
+
+	msgs, err := ConvertSessionToMessages(context.Background(), sess, WithRootAppName(rootApp))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Name != rootApp {
+		t.Errorf("Name = %q, want %q", msgs[0].Name, rootApp)
+	}
+}
+
+func TestConvertSessionToMessages_BlankAuthorName(t *testing.T) {
+	sess := buildSession(func(s *mockSession) {
+		ev := session.NewEvent(t.Context(), "inv1")
+		ev.Author = "   "
+		ev.Content = genai.NewContentFromText("no author", genai.RoleModel)
+		s.events = append(s.events, ev)
+	})
+
+	msgs, err := ConvertSessionToMessages(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Name != "" {
+		t.Errorf("Name = %q, want empty", msgs[0].Name)
+	}
+}
+
+func TestConvertSessionToMessages_FunctionCallAuthorName(t *testing.T) {
+	sess := buildSession(func(s *mockSession) {
+		ev := session.NewEvent(t.Context(), "inv1")
+		ev.Author = "tool-agent"
+		ev.Content = &genai.Content{
+			Role: string(genai.RoleModel),
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "call-1",
+					Name: "get_weather",
+					Args: map[string]any{"location": "NYC"},
+				},
+			}},
+		}
+		s.events = append(s.events, ev)
+	})
+
+	msgs, err := ConvertSessionToMessages(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Name != "tool-agent" {
+		t.Errorf("Name = %q, want tool-agent", msgs[0].Name)
+	}
+}
+
+func TestConvertSessionToMessages_PartConverterAuthorName(t *testing.T) {
+	sess := buildSession(func(s *mockSession) {
+		ev := session.NewEvent(t.Context(), "inv1")
+		ev.Author = "converter-agent"
+		ev.Content = &genai.Content{
+			Role: string(genai.RoleModel),
+			Parts: []*genai.Part{{Text: "custom part"}},
+		}
+		s.events = append(s.events, ev)
+	})
+
+	converter := func(_ context.Context, _ *session.Event, _ *genai.Part) ([]events.Event, error) {
+		return []events.Event{
+			events.NewTextMessageContentEvent("msg-1", "converted text"),
+		}, nil
+	}
+
+	msgs, err := ConvertSessionToMessages(context.Background(), sess, WithPartConverter(converter))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Name != "converter-agent" {
+		t.Errorf("Name = %q, want converter-agent", msgs[0].Name)
+	}
+}
+
 func buildSession(setup func(*mockSession)) session.Session {
 	s := &mockSession{id: "test-session"}
 	setup(s)

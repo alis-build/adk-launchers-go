@@ -221,9 +221,20 @@
 // [ConvertSessionToMessages] converts stored ADK session events into AG-UI
 // [types.Message] values for MESSAGES_SNAPSHOT payloads or direct JSON responses.
 // It skips partial (in-flight) events and supports cursor pagination via
-// [WithConvertAfter] and [WithConvertLimit]. This function does not require the
-// sublauncher to be running; use it from custom HTTP handlers or tooling that need
-// AG-UI-shaped history without a live SSE run.
+// [WithConvertAfter] and [WithConvertLimit]. Assistant messages and tool-call
+// batches set [types.Message].Name from the ADK event Author field (root and
+// sub-agent names included). [WithRootAppName] records the resolved app name for
+// a future omit-root policy; v1 always includes author when present.
+//
+// Live SSE text streaming emits optional name on TEXT_MESSAGE_START from ev.Author
+// via a temporary emit-only shim in [internal/stream] (stream.TextMessageStartEvent)
+// until the Go AG-UI SDK adds Name on events.TextMessageStartEvent. Follow-up:
+// upstream PR to ag-ui/sdks/community/go/pkg/core/events/message_events.go — not
+// opened by this launcher. When author changes mid-stream, open text is closed
+// before step events so each partial sequence gets a fresh START with the new name.
+//
+// This function does not require the sublauncher to be running; use it from custom
+// HTTP handlers or tooling that need AG-UI-shaped history without a live SSE run.
 //
 // # Thread message history
 //

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
@@ -17,6 +18,8 @@ type convertConfig struct {
 	partConverter GenAIPartConverter
 	after         time.Time
 	limit         int
+	// rootAppName is reserved for a future "omit root name" author policy.
+	rootAppName string
 }
 
 // ConvertOption configures [ConvertSessionToMessages].
@@ -47,6 +50,16 @@ func WithConvertAfter(t time.Time) ConvertOption {
 // A value of 0 means no limit.
 func WithConvertLimit(n int) ConvertOption {
 	return func(c *convertConfig) { c.limit = n }
+}
+
+// WithRootAppName records the resolved ADK app name for conversion. Reserved for
+// a future policy that omits name on root-agent messages; v1 always includes author.
+func WithRootAppName(name string) ConvertOption {
+	return func(c *convertConfig) { c.rootAppName = strings.TrimSpace(name) }
+}
+
+func messageSenderName(author string) string {
+	return strings.TrimSpace(author)
 }
 
 // ConvertSessionToMessages converts ADK session events into AG-UI [types.Message]
@@ -101,6 +114,7 @@ func ConvertSessionToMessages(ctx context.Context, sess session.Session, opts ..
 // Multiple parts in one event are folded into fewer messages (text buffer, tool call batch).
 func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([]types.Message, error) {
 	role := mapContentRole(ev.Content.Role)
+	senderName := messageSenderName(ev.Author)
 
 	// A single ADK event can contain multiple genai.Parts (e.g. text followed
 	// by a function call, or parallel function calls). Buffers merge consecutive
@@ -128,7 +142,7 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 				return nil, err
 			}
 			if converted != nil {
-				msgs := foldEventsToMessages(ev.ID, partIndex, converted)
+				msgs := foldEventsToMessages(ev.ID, partIndex, senderName, converted)
 				messages = append(messages, msgs...)
 				partIndex += len(msgs)
 				continue
@@ -154,6 +168,7 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 					ID:      messageID(ev.ID, partIndex),
 					Role:    role,
 					Content: textBuf,
+					Name:    senderName,
 				})
 				partIndex++
 				textBuf = ""
@@ -199,6 +214,7 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 			ID:        messageID(ev.ID, partIndex),
 			Role:      role,
 			ToolCalls: toolCalls,
+			Name:      senderName,
 		})
 		partIndex++
 	}
@@ -208,6 +224,7 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 			ID:      messageID(ev.ID, partIndex),
 			Role:    role,
 			Content: textBuf,
+			Name:    senderName,
 		})
 		partIndex++
 	}
@@ -230,9 +247,10 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 // and return streaming events, but history needs complete messages. Only event
 // types that carry displayable content are folded; lifecycle events (Start/End)
 // are ignored since they have no meaning in a static message list.
-func foldEventsToMessages(eventID string, startIndex int, evts []events.Event) []types.Message {
+func foldEventsToMessages(eventID string, startIndex int, author string, evts []events.Event) []types.Message {
 	var messages []types.Message
 	idx := startIndex
+	senderName := messageSenderName(author)
 
 	for _, evt := range evts {
 		switch e := evt.(type) {
@@ -250,6 +268,7 @@ func foldEventsToMessages(eventID string, startIndex int, evts []events.Event) [
 				ID:      messageID(eventID, idx),
 				Role:    types.RoleAssistant,
 				Content: e.Delta,
+				Name:    senderName,
 			})
 			idx++
 		}

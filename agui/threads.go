@@ -105,6 +105,7 @@ func (l *aguiLauncher) threadMessagesFunc() alismux.Func {
 		if limit > 0 {
 			opts = append(opts, WithConvertLimit(limit))
 		}
+		opts = append(opts, WithRootAppName(appName))
 
 		messages, convertErr := ConvertSessionToMessages(ctx, getResp.Session, opts...)
 		if convertErr != nil {

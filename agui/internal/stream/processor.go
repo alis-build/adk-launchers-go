@@ -193,17 +193,25 @@ func emitToolCallLifecycle(sink eventSink, state *State, toolCallID, toolCallNam
 // interrupt was emitted) and the caller should stop processing events.
 func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State, partConverter PartConverter) (bool, error) {
 	// Emit step events when the active sub-agent changes.
-	// Root agent (state.RootAppName) doesn't get step events.
-	if ev.Author != "" && ev.Author != state.CurrentStepAuthor {
+	// Root agent (state.RootAppName) doesn't get step events: normalize its author
+	// to "" so consecutive root partials do not repeatedly trip the author-change
+	// block. ev.Author is still passed to STEP_STARTED and TEXT_MESSAGE_START.name
+	// unchanged so the wire carries the raw author label.
+	// Close any open text message first so the next partial opens a fresh
+	// TEXT_MESSAGE_START with the new author's name (do not rely on ADK turn boundaries).
+	stepAuthor := ev.Author
+	if stepAuthor == state.RootAppName {
+		stepAuthor = ""
+	}
+	if ev.Author != "" && stepAuthor != state.CurrentStepAuthor {
+		closeTextMessage(sink, state)
 		if state.CurrentStepAuthor != "" {
 			sink.Emit(events.NewStepFinishedEvent(state.CurrentStepAuthor))
 		}
-		if ev.Author != state.RootAppName {
+		if stepAuthor != "" {
 			sink.Emit(events.NewStepStartedEvent(ev.Author))
-			state.CurrentStepAuthor = ev.Author
-		} else {
-			state.CurrentStepAuthor = ""
 		}
+		state.CurrentStepAuthor = stepAuthor
 	}
 
 	if ev.Content != nil {
@@ -280,7 +288,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 
 				if state.CurrentTextMessageID == "" {
 					state.CurrentTextMessageID = events.GenerateMessageID()
-					sink.Emit(events.NewTextMessageStartEvent(state.CurrentTextMessageID, events.WithRole("assistant")))
+					sink.Emit(NewTextMessageStartEvent(state.CurrentTextMessageID, "assistant", ev.Author))
 				}
 				sink.Emit(events.NewTextMessageContentEvent(state.CurrentTextMessageID, part.Text))
 				continue

@@ -773,8 +773,202 @@ func TestProcessEvent_StepEvents(t *testing.T) {
 	}
 
 	evts2 := parseSSEEvents(rec2.Body.String())
-	if evts2[0].Type != events.EventTypeStepFinished {
-		t.Errorf("event[0].Type = %v, want STEP_FINISHED", evts2[0].Type)
+	if len(evts2) < 2 {
+		t.Fatalf("got %d events, want at least 2 (TEXT_MESSAGE_END then STEP_FINISHED)", len(evts2))
+	}
+	if evts2[0].Type != events.EventTypeTextMessageEnd {
+		t.Errorf("event[0].Type = %v, want TEXT_MESSAGE_END", evts2[0].Type)
+	}
+	if evts2[1].Type != events.EventTypeStepFinished {
+		t.Errorf("event[1].Type = %v, want STEP_FINISHED", evts2[1].Type)
+	}
+}
+
+func TestProcessEvent_TextMessageStart_IncludesAuthorName(t *testing.T) {
+	l := newTestLauncher("test-app")
+	e, rec := newTestEmitter()
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	ev := session.NewEvent(t.Context(), "inv1")
+	ev.Author = "sub-agent-a"
+	ev.Content = genai.NewContentFromText("Hello", genai.RoleModel)
+	ev.Partial = true
+
+	if _, err := l.processEvent(e, ev, state, nil); err != nil {
+		t.Fatalf("processEvent() error = %v", err)
+	}
+
+	evts := parseSSEEvents(rec.Body.String())
+	var start *sseEvent
+	for i := range evts {
+		if evts[i].Type == events.EventTypeTextMessageStart {
+			start = &evts[i]
+			break
+		}
+	}
+	if start == nil {
+		t.Fatalf("expected TEXT_MESSAGE_START among %#v", evts)
+	}
+	if start.str("name") != "sub-agent-a" {
+		t.Errorf("TEXT_MESSAGE_START.name = %q, want sub-agent-a", start.str("name"))
+	}
+}
+
+func TestProcessEvent_TextMessageStart_IncludesRootAuthorName(t *testing.T) {
+	const rootApp = "test-app"
+	l := newTestLauncher(rootApp)
+	e, rec := newTestEmitter()
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: rootApp}
+
+	ev := session.NewEvent(t.Context(), "inv1")
+	ev.Author = rootApp
+	ev.Content = genai.NewContentFromText("Hello", genai.RoleModel)
+	ev.Partial = true
+
+	if _, err := l.processEvent(e, ev, state, nil); err != nil {
+		t.Fatalf("processEvent() error = %v", err)
+	}
+
+	evts := parseSSEEvents(rec.Body.String())
+	var start *sseEvent
+	for i := range evts {
+		if evts[i].Type == events.EventTypeTextMessageStart {
+			start = &evts[i]
+			break
+		}
+	}
+	if start == nil {
+		t.Fatalf("expected TEXT_MESSAGE_START among %#v", evts)
+	}
+	if start.str("name") != rootApp {
+		t.Errorf("TEXT_MESSAGE_START.name = %q, want %q", start.str("name"), rootApp)
+	}
+	for _, evt := range evts {
+		if evt.Type == events.EventTypeStepStarted {
+			t.Errorf("root author should not emit STEP_STARTED, got %#v", evt)
+		}
+	}
+}
+
+func TestProcessEvent_TextStreaming_RootAuthorSet(t *testing.T) {
+	const rootApp = "test-app"
+	l := newTestLauncher(rootApp)
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: rootApp}
+
+	// First root partial: should emit TEXT_MESSAGE_START + TEXT_MESSAGE_CONTENT.
+	e1, rec1 := newTestEmitter()
+	ev1 := session.NewEvent(t.Context(), "inv1")
+	ev1.Author = rootApp
+	ev1.Content = genai.NewContentFromText("Hello", genai.RoleModel)
+	ev1.Partial = true
+	if _, err := l.processEvent(e1, ev1, state, nil); err != nil {
+		t.Fatalf("processEvent() error = %v", err)
+	}
+
+	evts1 := parseSSEEvents(rec1.Body.String())
+	if len(evts1) != 2 {
+		t.Fatalf("first partial: got %d events %#v, want 2 (START + CONTENT)", len(evts1), evts1)
+	}
+	if evts1[0].Type != events.EventTypeTextMessageStart {
+		t.Errorf("first partial evt[0].Type = %v, want TEXT_MESSAGE_START", evts1[0].Type)
+	}
+	if evts1[1].Type != events.EventTypeTextMessageContent {
+		t.Errorf("first partial evt[1].Type = %v, want TEXT_MESSAGE_CONTENT", evts1[1].Type)
+	}
+	firstMsgID := evts1[0].str("messageId")
+
+	// Second root partial with Author still set: must NOT close/reopen the message.
+	e2, rec2 := newTestEmitter()
+	ev2 := session.NewEvent(t.Context(), "inv1")
+	ev2.Author = rootApp
+	ev2.Content = genai.NewContentFromText(" world", genai.RoleModel)
+	ev2.Partial = true
+	if _, err := l.processEvent(e2, ev2, state, nil); err != nil {
+		t.Fatalf("processEvent() error = %v", err)
+	}
+
+	evts2 := parseSSEEvents(rec2.Body.String())
+	if len(evts2) != 1 {
+		t.Fatalf("second partial: got %d events %#v, want 1 (CONTENT only)", len(evts2), evts2)
+	}
+	if evts2[0].Type != events.EventTypeTextMessageContent {
+		t.Errorf("second partial evt[0].Type = %v, want TEXT_MESSAGE_CONTENT", evts2[0].Type)
+	}
+	if evts2[0].str("messageId") != firstMsgID {
+		t.Errorf("second partial reused messageId = %q, want %q", evts2[0].str("messageId"), firstMsgID)
+	}
+}
+
+func TestProcessEvent_AuthorSwitchMidStream_ClosesAndReopensText(t *testing.T) {
+	l := newTestLauncher("test-app")
+	e, rec := newTestEmitter()
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	ev1 := session.NewEvent(t.Context(), "inv1")
+	ev1.Author = "sub-agent-a"
+	ev1.Content = genai.NewContentFromText("Hello", genai.RoleModel)
+	ev1.Partial = true
+	if _, err := l.processEvent(e, ev1, state, nil); err != nil {
+		t.Fatalf("processEvent() error = %v", err)
+	}
+
+	evts1 := parseSSEEvents(rec.Body.String())
+	var firstStart *sseEvent
+	for i := range evts1 {
+		if evts1[i].Type == events.EventTypeTextMessageStart {
+			firstStart = &evts1[i]
+			break
+		}
+	}
+	if firstStart == nil {
+		t.Fatalf("expected TEXT_MESSAGE_START, got %#v", evts1)
+	}
+	firstMsgID := firstStart.str("messageId")
+	if firstMsgID == "" {
+		t.Fatal("first TEXT_MESSAGE_START missing messageId")
+	}
+	if firstStart.str("name") != "sub-agent-a" {
+		t.Errorf("first start name = %q, want sub-agent-a", firstStart.str("name"))
+	}
+
+	e2, rec2 := newTestEmitter()
+	ev2 := session.NewEvent(t.Context(), "inv1")
+	ev2.Author = "sub-agent-b"
+	ev2.Content = genai.NewContentFromText(" from B", genai.RoleModel)
+	ev2.Partial = true
+	if _, err := l.processEvent(e2, ev2, state, nil); err != nil {
+		t.Fatalf("processEvent() error = %v", err)
+	}
+
+	evts2 := parseSSEEvents(rec2.Body.String())
+	var starts []sseEvent
+	for _, evt := range evts2 {
+		if evt.Type == events.EventTypeTextMessageStart {
+			starts = append(starts, evt)
+		}
+	}
+	if len(starts) != 1 {
+		t.Fatalf("got %d TEXT_MESSAGE_START events after author switch, want 1", len(starts))
+	}
+	secondMsgID := starts[0].str("messageId")
+	if secondMsgID == "" {
+		t.Fatal("second TEXT_MESSAGE_START missing messageId")
+	}
+	if secondMsgID == firstMsgID {
+		t.Errorf("author switch reused messageId %q", firstMsgID)
+	}
+	if starts[0].str("name") != "sub-agent-b" {
+		t.Errorf("second start name = %q, want sub-agent-b", starts[0].str("name"))
+	}
+
+	var ends int
+	for _, evt := range evts2 {
+		if evt.Type == events.EventTypeTextMessageEnd {
+			ends++
+		}
+	}
+	if ends != 1 {
+		t.Errorf("got %d TEXT_MESSAGE_END after author switch, want 1", ends)
 	}
 }
 
