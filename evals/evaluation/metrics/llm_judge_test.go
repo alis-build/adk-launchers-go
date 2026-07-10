@@ -669,3 +669,135 @@ func TestPerTurnSimulatorPersonaPromptShape(t *testing.T) {
 		}
 	}
 }
+
+// Single-turn rubric evaluators must populate OverallRubricScores so
+// downstream service.computeMetricResults can surface Details.RubricScores on
+// the overall EvalMetricResult. Guards against the wire-side rubric: []
+// regression.
+func TestRubricEvaluatorPopulatesOverallRubricScoresSingleInvocation(t *testing.T) {
+	rubrics := []models.Rubric{rubric("r1", "be helpful")}
+	fake := &fakeJudge{responses: []string{
+		"Property: be helpful\nRationale: ok\nVerdict: yes\n",
+	}}
+	reg := NewDefaultRegistry()
+	reg.SetConfig(RegistryConfig{JudgeClient: fake})
+	ev, err := reg.GetEvaluator(rubricMetric(models.MetricRubricBasedFinalResponseQualityV1, 0.5, rubrics))
+	if err != nil {
+		t.Fatalf("GetEvaluator: %v", err)
+	}
+	actual := models.Invocation{
+		UserContent:   genai.NewContentFromText("hi", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("hi!", genai.RoleModel),
+	}
+	expected := models.Invocation{FinalResponse: genai.NewContentFromText("hi!", genai.RoleModel)}
+	result, err := ev.EvaluateInvocations(context.Background(), []models.Invocation{actual}, []models.Invocation{expected}, nil)
+	if err != nil {
+		t.Fatalf("EvaluateInvocations: %v", err)
+	}
+	if len(result.OverallRubricScores) != 1 {
+		t.Fatalf("OverallRubricScores = %+v, want 1 entry", result.OverallRubricScores)
+	}
+	got := result.OverallRubricScores[0]
+	if got.RubricID != "r1" || got.Score == nil || *got.Score != 1.0 {
+		t.Fatalf("overall rubric = %+v", got)
+	}
+	if got.Rationale == nil || !strings.Contains(*got.Rationale, "aggregated score") {
+		t.Fatalf("overall rationale = %+v", got.Rationale)
+	}
+}
+
+// Two invocations scoring the same rubric 1.0 and 0.0 must aggregate to 0.5
+// on the overall slot. Confirms the mean-across-invocations semantics.
+func TestRubricEvaluatorAggregatesOverallRubricScoresMean(t *testing.T) {
+	rubrics := []models.Rubric{rubric("r1", "be helpful")}
+	fake := &fakeJudge{responses: []string{
+		"Property: be helpful\nRationale: ok\nVerdict: yes\n",
+		"Property: be helpful\nRationale: nope\nVerdict: no\n",
+	}}
+	reg := NewDefaultRegistry()
+	reg.SetConfig(RegistryConfig{JudgeClient: fake})
+	ev, err := reg.GetEvaluator(rubricMetric(models.MetricRubricBasedFinalResponseQualityV1, 0.4, rubrics))
+	if err != nil {
+		t.Fatalf("GetEvaluator: %v", err)
+	}
+	mkInv := func(text string) models.Invocation {
+		return models.Invocation{
+			UserContent:   genai.NewContentFromText("q", genai.RoleUser),
+			FinalResponse: genai.NewContentFromText(text, genai.RoleModel),
+		}
+	}
+	actual := []models.Invocation{mkInv("first"), mkInv("second")}
+	expected := []models.Invocation{
+		{FinalResponse: genai.NewContentFromText("first", genai.RoleModel)},
+		{FinalResponse: genai.NewContentFromText("second", genai.RoleModel)},
+	}
+	result, err := ev.EvaluateInvocations(context.Background(), actual, expected, nil)
+	if err != nil {
+		t.Fatalf("EvaluateInvocations: %v", err)
+	}
+	if len(result.OverallRubricScores) != 1 {
+		t.Fatalf("OverallRubricScores = %+v", result.OverallRubricScores)
+	}
+	got := result.OverallRubricScores[0]
+	if got.Score == nil || math.Abs(*got.Score-0.5) > 1e-9 {
+		t.Fatalf("overall r1 mean = %+v, want 0.5", got.Score)
+	}
+}
+
+// aggregatePerInvocationRubrics preserves first-seen rubric ordering across
+// invocations. Deterministic ordering matters because downstream renderers
+// (e.g. the wire mapper in go.alis.build/evals) rely on stable indexing to
+// correlate rubric entries across runs.
+func TestAggregatePerInvocationRubricsOrdering(t *testing.T) {
+	one := 1.0
+	zero := 0.0
+	per := []PerInvocationResult{
+		{RubricScores: []models.RubricScore{
+			{RubricID: "r2", Score: &one},
+			{RubricID: "r1", Score: &zero},
+		}},
+		{RubricScores: []models.RubricScore{
+			{RubricID: "r3", Score: &one},
+			{RubricID: "r1", Score: &one},
+		}},
+	}
+	got := aggregatePerInvocationRubrics(per)
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	wantOrder := []string{"r2", "r1", "r3"}
+	for i, id := range wantOrder {
+		if got[i].RubricID != id {
+			t.Fatalf("order[%d] = %q, want %q (full: %+v)", i, got[i].RubricID, id, got)
+		}
+	}
+}
+
+// Nil per-invocation rubric scores must be skipped so an unparseable verdict
+// doesn't crash the aggregator, dilute the mean, or introduce zero-count
+// divide-by-zero paths.
+func TestAggregatePerInvocationRubricsSkipsNilScores(t *testing.T) {
+	one := 1.0
+	per := []PerInvocationResult{
+		{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one}}},
+		{RubricScores: []models.RubricScore{{RubricID: "r1", Score: nil}}},
+		{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one}}},
+	}
+	got := aggregatePerInvocationRubrics(per)
+	if len(got) != 1 || got[0].RubricID != "r1" {
+		t.Fatalf("got = %+v", got)
+	}
+	if got[0].Score == nil || *got[0].Score != 1.0 {
+		t.Fatalf("nil should have been skipped; score = %+v", got[0].Score)
+	}
+
+	// A rubric with only nil scores across all invocations must drop out of
+	// the overall list entirely rather than surfacing a nil-score entry.
+	perAllNil := []PerInvocationResult{
+		{RubricScores: []models.RubricScore{{RubricID: "r1", Score: nil}}},
+		{RubricScores: []models.RubricScore{{RubricID: "r1", Score: nil}}},
+	}
+	if out := aggregatePerInvocationRubrics(perAllNil); out != nil {
+		t.Fatalf("all-nil case returned %+v, want nil", out)
+	}
+}

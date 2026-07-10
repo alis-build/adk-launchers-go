@@ -112,6 +112,7 @@ func (e *llmJudgeEvaluator) EvaluateInvocations(
 		OverallScore:         overall,
 		OverallEvalStatus:    status,
 		PerInvocationResults: per,
+		OverallRubricScores:  aggregatePerInvocationRubrics(per),
 	}, nil
 }
 
@@ -395,6 +396,53 @@ func (e *multiTurnRubricEvaluator) EvaluateInvocations(
 		PerInvocationResults: per,
 		OverallRubricScores:  overallRubrics,
 	}, nil
+}
+
+// aggregatePerInvocationRubrics collapses per-invocation RubricScores into an
+// overall slot keyed by RubricID for the single-turn rubric evaluators
+// (final_response and tool_use). Scores are the arithmetic mean across
+// invocations where the rubric appears; a nil per-invocation score is
+// skipped. Rubric IDs preserve first-seen ordering across invocations, then
+// first-seen ordering within each invocation. Returns nil when no scored
+// rubric appears in any invocation.
+//
+// This backs [EvaluationResult.OverallRubricScores], which downstream
+// consumers (see local_eval_service.computeMetricResults) surface via
+// EvalMetricResult.Details.RubricScores on the overall metric result.
+// Without it, wire-side rubric arrays render empty even when the per-turn
+// judge scored every rubric.
+func aggregatePerInvocationRubrics(per []PerInvocationResult) []models.RubricScore {
+	order := make([]string, 0)
+	sums := make(map[string]float64)
+	counts := make(map[string]int)
+	for _, p := range per {
+		for _, r := range p.RubricScores {
+			if r.Score == nil {
+				continue
+			}
+			if _, seen := sums[r.RubricID]; !seen {
+				order = append(order, r.RubricID)
+			}
+			sums[r.RubricID] += *r.Score
+			counts[r.RubricID]++
+		}
+	}
+	if len(order) == 0 {
+		return nil
+	}
+	agg := "This is an aggregated score derived from individual entries. Please refer to individual entries in each invocation for actual rationale from the model."
+	out := make([]models.RubricScore, 0, len(order))
+	for _, id := range order {
+		mean := sums[id] / float64(counts[id])
+		m := mean
+		r := agg
+		out = append(out, models.RubricScore{
+			RubricID:  id,
+			Score:     &m,
+			Rationale: &r,
+		})
+	}
+	return out
 }
 
 // aggregateOverallRubrics copies per-invocation rubric scores into the overall
