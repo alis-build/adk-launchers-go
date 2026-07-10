@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	cloud.google.com/go/storage v1.63.0
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260706214105-ff60085fd16f
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260710001500-bfb13c0759f7
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	go.alis.build/agui/history v0.1.4
@@ -15,7 +15,7 @@ require (
 	go.alis.build/lro/v2 v2.8.0
 	go.alis.build/mux v0.4.9
 	google.golang.org/adk/v2 v2.0.0
-	google.golang.org/api v0.287.1
+	google.golang.org/api v0.288.0
 	google.golang.org/genai v1.63.0
 	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11

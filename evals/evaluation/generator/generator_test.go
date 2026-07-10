@@ -2,7 +2,6 @@ package generator
 
 import (
 	"context"
-	"encoding/json"
 	"iter"
 	"strings"
 	"testing"
@@ -46,13 +45,9 @@ func TestGetAppDetailsByInvocationID(t *testing.T) {
 	ev.CustomMetadata = map[string]any{llmRequestIDKey: requestID}
 
 	details := GetAppDetailsByInvocationID([]*session.Event{ev}, interceptor)
-	raw := details["inv1"]
-	if len(raw) == 0 {
+	appDetails := details["inv1"]
+	if appDetails == nil {
 		t.Fatalf("details missing for inv1")
-	}
-	var appDetails models.AppDetails
-	if err := json.Unmarshal(raw, &appDetails); err != nil {
-		t.Fatalf("unmarshal: %v", err)
 	}
 	agentDetails := appDetails.AgentDetails["test-agent"]
 	if agentDetails.Instructions != "Be helpful" {

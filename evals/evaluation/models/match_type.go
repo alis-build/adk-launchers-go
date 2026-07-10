@@ -77,3 +77,9 @@ func (c jsonCriterion) AsHallucinations() (HallucinationsCriterion, bool) {
 	v, ok := c.value.(HallucinationsCriterion)
 	return v, ok
 }
+
+// AsUserSimulator returns the LLM-backed user simulator criterion when present.
+func (c jsonCriterion) AsUserSimulator() (LlmBackedUserSimulatorCriterion, bool) {
+	v, ok := c.value.(LlmBackedUserSimulatorCriterion)
+	return v, ok
+}

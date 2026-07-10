@@ -15,6 +15,7 @@ type Rubric struct {
 
 // RubricScore holds the score for a rubric assessment.
 type RubricScore struct {
-	RubricID string   `json:"rubricId"`
-	Score    *float64 `json:"score,omitempty"`
+	RubricID  string   `json:"rubricId"`
+	Rationale *string  `json:"rationale,omitempty"`
+	Score     *float64 `json:"score,omitempty"`
 }

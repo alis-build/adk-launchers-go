@@ -1,7 +1,6 @@
 package generator
 
 import (
-	"encoding/json"
 	"strings"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
@@ -10,14 +9,14 @@ import (
 )
 
 // GetAppDetailsByInvocationID builds AppDetails maps from intercepted model requests.
-func GetAppDetailsByInvocationID(events []*session.Event, interceptor *RequestInterceptor) map[string]json.RawMessage {
+func GetAppDetailsByInvocationID(events []*session.Event, interceptor *RequestInterceptor) map[string]*models.AppDetails {
 	if interceptor == nil {
 		return nil
 	}
 	grouped := CollectEventsByInvocationID(events)
-	out := make(map[string]json.RawMessage, len(grouped))
+	out := make(map[string]*models.AppDetails, len(grouped))
 	for invocationID, invEvents := range grouped {
-		details := models.AppDetails{AgentDetails: map[string]models.AgentDetails{}}
+		details := &models.AppDetails{AgentDetails: map[string]models.AgentDetails{}}
 		for _, event := range invEvents {
 			if event == nil || strings.EqualFold(event.Author, userAuthor) {
 				continue
@@ -33,18 +32,20 @@ func GetAppDetailsByInvocationID(events []*session.Event, interceptor *RequestIn
 			if _, ok := details.AgentDetails[agentName]; ok {
 				continue
 			}
-			toolsJSON, _ := json.Marshal(llmRequest.Config.Tools)
+			var tools []*genai.Tool
+			if llmRequest.Config != nil {
+				tools = llmRequest.Config.Tools
+			}
 			details.AgentDetails[agentName] = models.AgentDetails{
 				Name:             agentName,
 				Instructions:     systemInstructionText(llmRequest.Config),
-				ToolDeclarations: toolsJSON,
+				ToolDeclarations: tools,
 			}
 		}
-		raw, err := json.Marshal(details)
-		if err != nil {
+		if len(details.AgentDetails) == 0 {
 			continue
 		}
-		out[invocationID] = raw
+		out[invocationID] = details
 	}
 	return out
 }

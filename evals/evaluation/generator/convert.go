@@ -2,7 +2,6 @@
 package generator
 
 import (
-	"encoding/json"
 	"strings"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
@@ -16,7 +15,7 @@ const (
 )
 
 // ConvertEventsToEvalInvocations maps session events to golden/eval invocations.
-func ConvertEventsToEvalInvocations(events []*session.Event, appDetailsByInvocation map[string]json.RawMessage) []models.Invocation {
+func ConvertEventsToEvalInvocations(events []*session.Event, appDetailsByInvocation map[string]*models.AppDetails) []models.Invocation {
 	grouped := CollectEventsByInvocationID(events)
 	invocations := make([]models.Invocation, 0, len(grouped))
 	for _, invocationID := range invocationOrder(events) {
@@ -56,12 +55,12 @@ func invocationOrder(events []*session.Event) []string {
 }
 
 // convertInvocationEvents projects session events into one eval Invocation.
-func convertInvocationEvents(invocationID string, events []*session.Event, appDetailsByInvocation map[string]json.RawMessage) models.Invocation {
+func convertInvocationEvents(invocationID string, events []*session.Event, appDetailsByInvocation map[string]*models.AppDetails) models.Invocation {
 	var userContent *genai.Content
 	var finalResponse *genai.Content
 	var finalEvent *session.Event
 	var invocationTimestamp float64
-	var appDetails json.RawMessage
+	var appDetails *models.AppDetails
 
 	if appDetailsByInvocation != nil {
 		appDetails = appDetailsByInvocation[invocationID]

@@ -42,6 +42,17 @@ type LlmAsAJudgeCriterion struct {
 	JudgeModelOptions JudgeModelOptions `json:"judgeModelOptions,omitempty"`
 }
 
+// LlmBackedUserSimulatorCriterion adds a stop signal to configure the per-turn
+// user simulator quality evaluator. Matches adk-python
+// LlmBackedUserSimulatorCriterion (eval_metrics.py).
+type LlmBackedUserSimulatorCriterion struct {
+	LlmAsAJudgeCriterion
+	StopSignal string `json:"stopSignal,omitempty"`
+}
+
+// DefaultUserSimulatorStopSignal is the Python default for stop_signal.
+const DefaultUserSimulatorStopSignal = "</finished>"
+
 // RubricsBasedCriterion adds rubrics for rubric-based metrics.
 type RubricsBasedCriterion struct {
 	BaseCriterion
@@ -120,6 +131,14 @@ func (c *jsonCriterion) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		c.value = t
+		return nil
+	}
+	if _, ok := raw["stopSignal"]; ok {
+		var u LlmBackedUserSimulatorCriterion
+		if err := json.Unmarshal(data, &u); err != nil {
+			return err
+		}
+		c.value = u
 		return nil
 	}
 	if _, ok := raw["judgeModelOptions"]; ok {

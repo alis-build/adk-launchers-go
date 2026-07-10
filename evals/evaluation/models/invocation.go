@@ -40,7 +40,7 @@ type Invocation struct {
 	IntermediateData  jsonIntermediate `json:"intermediateData,omitempty"`
 	CreationTimestamp float64          `json:"creationTimestamp,omitempty"`
 	Rubrics           []Rubric         `json:"rubrics,omitempty"`
-	AppDetails        json.RawMessage  `json:"appDetails,omitempty"`
+	AppDetails        *AppDetails      `json:"appDetails,omitempty"`
 }
 
 // jsonIntermediate unmarshals intermediateData as either IntermediateData or InvocationEvents.

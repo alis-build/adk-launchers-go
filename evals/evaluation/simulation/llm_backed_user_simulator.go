@@ -2,6 +2,7 @@ package simulation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -65,8 +66,10 @@ func NewLlmBackedUserSimulator(cfg LlmBackedUserSimulatorConfig, scenario *model
 		cfg.MaxAllowedInvocations = defaultLlmBackedConfig().MaxAllowedInvocations
 	}
 	persona := ""
-	if len(scenario.UserPersona) > 0 && string(scenario.UserPersona) != "null" {
-		persona = string(scenario.UserPersona)
+	if scenario.UserPersona != nil {
+		if buf, err := json.Marshal(scenario.UserPersona); err == nil {
+			persona = string(buf)
+		}
 	}
 	return &LlmBackedUserSimulator{
 		config:    cfg,

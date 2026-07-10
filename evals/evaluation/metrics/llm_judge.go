@@ -18,12 +18,16 @@ type JudgeClient interface {
 // llmJudgeEvaluator scores invocations by prompting an LLM judge. Behavior is
 // customized per metric via formatPrompt, parseScore, and optional
 // aggregatePerInvocation hooks wired by the new*Evaluator factory functions.
+//
+// parseScore receives the actual invocation so rubric evaluators can thread
+// per-invocation rubrics (unioned with the criterion set) through to the
+// parser; simpler metrics ignore the argument.
 type llmJudgeEvaluator struct {
 	metric                 models.EvalMetric
 	requireExpected        bool
 	client                 JudgeClient
 	formatPrompt           func(actual models.Invocation, expected *models.Invocation) string
-	parseScore             func(response string) (float64, []models.RubricScore, error)
+	parseScore             func(response string, actual models.Invocation) (float64, []models.RubricScore, error)
 	aggregatePerInvocation func([]PerInvocationResult) PerInvocationResult
 }
 
@@ -71,7 +75,7 @@ func (e *llmJudgeEvaluator) EvaluateInvocations(
 			if err != nil {
 				return EvaluationResult{}, err
 			}
-			score, rubrics, err := e.parseScore(resp)
+			score, rubrics, err := e.parseScore(resp, actual[i])
 			if err != nil {
 				return EvaluationResult{}, err
 			}
@@ -177,7 +181,7 @@ func newFinalResponseMatchV2Evaluator(metric models.EvalMetric, cfg *RegistryCon
 		requireExpected: true,
 		client:          client,
 		formatPrompt:    formatFinalResponseMatchV2Prompt,
-		parseScore: func(response string) (float64, []models.RubricScore, error) {
+		parseScore: func(response string, _ models.Invocation) (float64, []models.RubricScore, error) {
 			score, err := parseValidInvalidJSON(response)
 			return score, nil, err
 		},
@@ -219,50 +223,195 @@ func newHallucinationsEvaluator(metric models.EvalMetric, cfg *RegistryConfig) E
 				textFromContent(actual.FinalResponse),
 			)
 		},
-		parseScore: func(response string) (float64, []models.RubricScore, error) {
+		parseScore: func(response string, _ models.Invocation) (float64, []models.RubricScore, error) {
 			score, err := parseValidInvalidJSON(response)
 			return score, nil, err
 		},
 	}
 }
 
-// newRubricBasedEvaluator builds rubric-based LLM-judge evaluators. Multi-turn
-// trajectory rubrics are reference-free; other kinds require expected invocations.
+// rubricsFromCriterion pulls the rubric list off the metric criterion, returning
+// nil when the criterion isn't a RubricsBasedCriterion.
+func rubricsFromCriterion(m models.EvalMetric) []models.Rubric {
+	if c, ok := m.Criterion.AsRubrics(); ok {
+		return c.Rubrics
+	}
+	return nil
+}
+
+// newRubricBasedEvaluator builds rubric-based LLM-judge evaluators.
+//
+// Final-response rubrics require golden data (Python's evaluator requires
+// expected_invocation for the response comparison). Tool-use rubrics are
+// reference-free — Python's tool-use evaluator only inspects the actual
+// invocation. Multi-turn trajectory rubrics use a dedicated evaluator that
+// judges the full dialogue in a single LLM call.
 func newRubricBasedEvaluator(metric models.EvalMetric, kind rubricKind, cfg *RegistryConfig) Evaluator {
 	var client JudgeClient
 	if cfg != nil {
 		client = cfg.JudgeClient
 	}
+	critRubrics := rubricsFromCriterion(metric)
+
+	if kind == rubricKindMultiTurnTrajectory {
+		return &multiTurnRubricEvaluator{
+			metric:           metric,
+			client:           client,
+			criterionRubrics: critRubrics,
+		}
+	}
+
 	return &llmJudgeEvaluator{
 		metric:          metric,
-		requireExpected: kind != rubricKindMultiTurnTrajectory,
+		requireExpected: kind == rubricKindFinalResponse,
 		client:          client,
 		formatPrompt: func(actual models.Invocation, expected *models.Invocation) string {
-			return fmt.Sprintf("Evaluate rubric metric %q for response %q", metric.MetricName, textFromContent(actual.FinalResponse))
+			eff, err := effectiveRubrics(critRubrics, actual.Rubrics)
+			if err != nil {
+				// Duplicate rubric IDs across criterion + invocation scope: fall
+				// back to criterion-only rubrics so we can still produce a prompt.
+				eff = critRubrics
+			}
+			switch kind {
+			case rubricKindFinalResponse:
+				return formatRubricFinalResponsePrompt(actual, expected, eff)
+			case rubricKindToolUse:
+				return formatRubricToolUsePrompt(actual, eff)
+			}
+			return ""
 		},
-		parseScore: func(response string) (float64, []models.RubricScore, error) {
-			score, err := parseValidInvalidJSON(response)
-			return score, nil, err
+		parseScore: func(resp string, actual models.Invocation) (float64, []models.RubricScore, error) {
+			eff, err := effectiveRubrics(critRubrics, actual.Rubrics)
+			if err != nil {
+				eff = critRubrics
+			}
+			return parseRubricVerdicts(resp, eff)
+		},
+		aggregatePerInvocation: func(s []PerInvocationResult) PerInvocationResult {
+			return majorityVoteAggregate(s, metric.Threshold)
 		},
 	}
 }
 
-// newPerTurnSimulatorEvaluator builds the per-turn user simulator quality metric.
-func newPerTurnSimulatorEvaluator(metric models.EvalMetric, cfg *RegistryConfig) Evaluator {
-	var client JudgeClient
-	if cfg != nil {
-		client = cfg.JudgeClient
+// multiTurnRubricEvaluator is the dedicated evaluator for
+// rubric_based_multi_turn_trajectory_quality_v1. It marks the first N-1 turns
+// as NOT_EVALUATED and issues a single judge call over the full dialogue on the
+// last turn, matching adk-python
+// RubricBasedMultiTurnTrajectoryEvaluator.evaluate_invocations.
+type multiTurnRubricEvaluator struct {
+	metric           models.EvalMetric
+	client           JudgeClient
+	criterionRubrics []models.Rubric
+}
+
+// EvaluateInvocations runs one judge call across the full conversation.
+func (e *multiTurnRubricEvaluator) EvaluateInvocations(
+	ctx context.Context,
+	actual []models.Invocation,
+	expected []models.Invocation,
+	_ *models.ConversationScenario,
+) (EvaluationResult, error) {
+	if e.client == nil {
+		return EvaluationResult{OverallEvalStatus: models.EvalStatusNotEvaluated}, nil
 	}
-	return &llmJudgeEvaluator{
-		metric:          metric,
-		requireExpected: false,
-		client:          client,
-		formatPrompt: func(actual models.Invocation, _ *models.Invocation) string {
-			return fmt.Sprintf("Evaluate user simulator turn quality for %q", textFromContent(actual.UserContent))
-		},
-		parseScore: func(response string) (float64, []models.RubricScore, error) {
-			score, err := parseValidInvalidJSON(response)
-			return score, nil, err
-		},
+	if len(actual) == 0 {
+		return EvaluationResult{OverallEvalStatus: models.EvalStatusNotEvaluated}, nil
 	}
+
+	// Pre-populate first N-1 turns as NOT_EVALUATED.
+	per := make([]PerInvocationResult, 0, len(actual))
+	for i := 0; i < len(actual)-1; i++ {
+		var exp *models.Invocation
+		if i < len(expected) {
+			exp = &expected[i]
+		}
+		per = append(per, PerInvocationResult{
+			ActualInvocation:   actual[i],
+			ExpectedInvocation: exp,
+			EvalStatus:         models.EvalStatusNotEvaluated,
+		})
+	}
+
+	// Union criterion rubrics with rubrics attached to any invocation.
+	invRubrics := make([]models.Rubric, 0)
+	seen := make(map[string]struct{})
+	for _, inv := range actual {
+		for _, r := range inv.Rubrics {
+			if _, ok := seen[r.RubricID]; ok {
+				continue
+			}
+			seen[r.RubricID] = struct{}{}
+			invRubrics = append(invRubrics, r)
+		}
+	}
+	eff, err := effectiveRubrics(e.criterionRubrics, invRubrics)
+	if err != nil {
+		eff = e.criterionRubrics
+	}
+
+	opts := judgeOptions(e.metric)
+	samples := opts.NumSamples
+	if samples <= 0 {
+		samples = 1
+	}
+	prompt := formatRubricMultiTurnPrompt(actual, eff)
+
+	var sampleResults []PerInvocationResult
+	last := actual[len(actual)-1]
+	var lastExp *models.Invocation
+	if len(actual)-1 < len(expected) {
+		lastExp = &expected[len(actual)-1]
+	}
+	for range samples {
+		resp, err := e.client.GenerateJudgeResponse(ctx, prompt, opts)
+		if err != nil {
+			return EvaluationResult{}, err
+		}
+		score, rubrics, err := parseRubricVerdicts(resp, eff)
+		if err != nil {
+			return EvaluationResult{}, err
+		}
+		s := score
+		sampleResults = append(sampleResults, PerInvocationResult{
+			ActualInvocation:   last,
+			ExpectedInvocation: lastExp,
+			Score:              &s,
+			EvalStatus:         statusForScore(score, e.metric.Threshold),
+			RubricScores:       rubrics,
+		})
+	}
+	lastResult := sampleResults[0]
+	if len(sampleResults) > 1 {
+		lastResult = majorityVoteAggregate(sampleResults, e.metric.Threshold)
+	}
+	per = append(per, lastResult)
+
+	// Aggregate overall rubric scores by ID across the sole scored turn.
+	overallRubrics := aggregateOverallRubrics(lastResult.RubricScores)
+
+	return EvaluationResult{
+		OverallScore:         lastResult.Score,
+		OverallEvalStatus:    lastResult.EvalStatus,
+		PerInvocationResults: per,
+		OverallRubricScores:  overallRubrics,
+	}, nil
+}
+
+// aggregateOverallRubrics copies per-invocation rubric scores into the overall
+// slot with an aggregated-score rationale, matching Python's
+// MeanInvocationResultsSummarizer semantics for the single-turn evaluated case.
+func aggregateOverallRubrics(rubrics []models.RubricScore) []models.RubricScore {
+	if len(rubrics) == 0 {
+		return nil
+	}
+	out := make([]models.RubricScore, 0, len(rubrics))
+	agg := "This is an aggregated score derived from individual entries. Please refer to individual entries in each invocation for actual rationale from the model."
+	for _, r := range rubrics {
+		out = append(out, models.RubricScore{
+			RubricID:  r.RubricID,
+			Score:     r.Score,
+			Rationale: &agg,
+		})
+	}
+	return out
 }

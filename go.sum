@@ -58,6 +58,8 @@ github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260702075359-115fd75c
 github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260702075359-115fd75c997b/go.mod h1:ERAMOexUee4AIuoxksuuGoEcHl3aqLwaazjGwlR9ZCI=
 github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260706214105-ff60085fd16f h1:3PI6EAvm5qHTqaAkBxhHvYLyX0ijr2RYECRC4MgM420=
 github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260706214105-ff60085fd16f/go.mod h1:ERAMOexUee4AIuoxksuuGoEcHl3aqLwaazjGwlR9ZCI=
+github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260710001500-bfb13c0759f7 h1:oBEUPXIS5OdpEneMxn7Tj5b2/omwo5ai4aoG8yf2iTQ=
+github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260710001500-bfb13c0759f7/go.mod h1:ERAMOexUee4AIuoxksuuGoEcHl3aqLwaazjGwlR9ZCI=
 github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1xcsSM=
 github.com/cenkalti/backoff/v5 v5.0.3/go.mod h1:rkhZdG3JZukswDf7f0cwqPNk4K0sa+F97BxZthm/crw=
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
@@ -286,6 +288,8 @@ google.golang.org/api v0.287.0 h1:CQDMqUiqZZ0U/Yge3zyjAhNQ0OSYEH0PaA7l4xtEen4=
 google.golang.org/api v0.287.0/go.mod h1:pPW85yt3Iuc3unkpaMhFtMmOqnTdCwCqEOaUlnuxRlQ=
 google.golang.org/api v0.287.1 h1:LiyJx32VU3cwQfLchn/513qKhc25hq0pEANYJoWNnnI=
 google.golang.org/api v0.287.1/go.mod h1:lM2kYRzYUCBY91P9h6VF1PYmvhxii3O5hji37qRvIcY=
+google.golang.org/api v0.288.0 h1:glhO/J88obKP5I269W3hB73dvBKrjU56ZfmNlNXpgTU=
+google.golang.org/api v0.288.0/go.mod h1:lM2kYRzYUCBY91P9h6VF1PYmvhxii3O5hji37qRvIcY=
 google.golang.org/appengine v1.1.0/go.mod h1:EbEs0AVv82hx2wNQdGPgUI5lhzA/G0D9YwlJXL52JkM=
 google.golang.org/appengine v1.4.0/go.mod h1:xpcJRLb0r/rnEns0DIKYYv+WjYCduHsrkT7/EB5XEv4=
 google.golang.org/genai v1.62.0 h1:PaBju84orf4Vbcc6OfHe4vxhxhjwulKTgOpEc3iIc00=
