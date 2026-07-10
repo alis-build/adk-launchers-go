@@ -288,7 +288,13 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 
 				if state.CurrentTextMessageID == "" {
 					state.CurrentTextMessageID = events.GenerateMessageID()
-					sink.Emit(NewTextMessageStartEvent(state.CurrentTextMessageID, "assistant", ev.Author))
+					// Blank / whitespace-only authors are trimmed so the wire
+					// JSON omits "name" via omitempty on the upstream field.
+					sink.Emit(events.NewTextMessageStartEvent(
+						state.CurrentTextMessageID,
+						events.WithRole("assistant"),
+						events.WithName(strings.TrimSpace(ev.Author)),
+					))
 				}
 				sink.Emit(events.NewTextMessageContentEvent(state.CurrentTextMessageID, part.Text))
 				continue
