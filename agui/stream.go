@@ -236,9 +236,13 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 
 				if state.currentTextMessageID == "" {
 					state.currentTextMessageID = events.GenerateMessageID()
-					// Emit via the local shim so the optional "name" field lands
-					// on the wire until the AG-UI Go SDK supports it natively.
-					e.emit(newTextMessageStartEvent(state.currentTextMessageID, "assistant", ev.Author))
+					// Blank / whitespace-only authors are trimmed so the wire
+					// JSON omits "name" via omitempty on the upstream field.
+					e.emit(events.NewTextMessageStartEvent(
+						state.currentTextMessageID,
+						events.WithRole("assistant"),
+						events.WithName(strings.TrimSpace(ev.Author)),
+					))
 				}
 				e.emit(events.NewTextMessageContentEvent(state.currentTextMessageID, part.Text))
 				continue

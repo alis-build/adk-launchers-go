@@ -154,12 +154,9 @@
 // for a future omit-root policy; v1 always includes author when present.
 //
 // Live SSE text streaming emits optional name on TEXT_MESSAGE_START from
-// ev.Author via a temporary emit-only shim (agui.TextMessageStartEvent) until
-// the AG-UI Go SDK adds Name on events.TextMessageStartEvent. Follow-up:
-// upstream PR to ag-ui/sdks/community/go/pkg/core/events/message_events.go —
-// not opened by this launcher. When author changes mid-stream, open text is
-// closed before step events so each partial sequence gets a fresh START with
-// the new name.
+// ev.Author via [events.WithName]. When author changes mid-stream, any open
+// text is closed before step events so each partial sequence gets a fresh
+// START with the new name.
 //
 // This function does not require the sublauncher to be running; use it from
 // custom HTTP handlers or tooling that need AG-UI-shaped history without a
