@@ -398,15 +398,18 @@ func (e *multiTurnRubricEvaluator) EvaluateInvocations(
 	}, nil
 }
 
-// aggregatedRationaleBoilerplate is the placeholder emitted on
-// [EvaluationResult.OverallRubricScores] entries whose score is a mean across
-// multiple per-invocation contributions. Concatenating N distinct rationales
-// would explode wire size and confuse downstream renderers, so the aggregator
-// signals "look at PerInvocationResults for the actual model reasoning"
-// instead. When a rubric only has a single source rationale (single-turn,
-// single-sample, or single-invocation), the aggregators pass the source
-// through verbatim — see [aggregatePerInvocationRubrics] and
-// [aggregateOverallRubrics].
+// aggregatedRationaleBoilerplate is the fallback emitted on
+// [EvaluationResult.OverallRubricScores] entries when every per-invocation
+// contribution for a rubric arrived without a Rationale (deterministic
+// evaluators, or upstream parse failures). It preserves the wire invariant
+// that a rubric with a score also has a non-nil rationale pointer so
+// downstream consumers can rely on that when rendering.
+//
+// The rubric-based LLM-judge evaluators do NOT hit this fallback under
+// normal operation: [aggregatePerInvocationRubrics] concatenates
+// per-invocation rationales with `[invocation N]` prefixes, and
+// [aggregateOverallRubrics] mirrors the sole rationale for the multi-turn
+// evaluated case.
 const aggregatedRationaleBoilerplate = "This is an aggregated score derived from individual entries. Please refer to individual entries in each invocation for actual rationale from the model."
 
 // aggregatePerInvocationRubrics collapses per-invocation RubricScores into an
@@ -417,12 +420,13 @@ const aggregatedRationaleBoilerplate = "This is an aggregated score derived from
 // first-seen ordering within each invocation. Returns nil when no scored
 // rubric appears in any invocation.
 //
-// Rationale handling: when a rubric appears in exactly one per-invocation
-// result, its source Rationale is preserved verbatim so the wire reflects
-// the model's actual reasoning (this is the common single-turn,
-// single-sample case). When a rubric appears in two or more contributions,
-// the entry carries [aggregatedRationaleBoilerplate] pointing readers at
-// PerInvocationResults for the raw per-source text.
+// Rationale handling: when a rubric has exactly one source rationale, that
+// text is passed through verbatim. When it has multiple sources, they are
+// concatenated with `[invocation N]` prefixes (1-based, matching the order
+// invocations were scored) and separated by a blank line so downstream
+// renderers can trace each rationale back to its turn without a schema
+// change. Rubrics with zero source rationales fall back to
+// [aggregatedRationaleBoilerplate] so the wire pointer is never nil.
 //
 // This backs [EvaluationResult.OverallRubricScores], which downstream
 // consumers (see local_eval_service.computeMetricResults) surface via
@@ -433,8 +437,16 @@ func aggregatePerInvocationRubrics(per []PerInvocationResult) []models.RubricSco
 	order := make([]string, 0)
 	sums := make(map[string]float64)
 	counts := make(map[string]int)
-	rationales := make(map[string]*string)
-	for _, p := range per {
+	// rationalesByID tracks non-empty per-invocation rationales in the order
+	// invocations were scored so the concatenated overall rationale mirrors
+	// the per-turn sequence. Empty/nil source rationales are dropped rather
+	// than emitted as `[invocation N] ""` noise.
+	type rationaleEntry struct {
+		invocation int // 1-based index into `per` (readable in wire output)
+		text       string
+	}
+	rationalesByID := make(map[string][]rationaleEntry)
+	for i, p := range per {
 		for _, r := range p.RubricScores {
 			if r.Score == nil {
 				continue
@@ -444,8 +456,11 @@ func aggregatePerInvocationRubrics(per []PerInvocationResult) []models.RubricSco
 			}
 			sums[r.RubricID] += *r.Score
 			counts[r.RubricID]++
-			if r.Rationale != nil {
-				rationales[r.RubricID] = r.Rationale
+			if r.Rationale != nil && *r.Rationale != "" {
+				rationalesByID[r.RubricID] = append(rationalesByID[r.RubricID], rationaleEntry{
+					invocation: i + 1,
+					text:       *r.Rationale,
+				})
 			}
 		}
 	}
@@ -457,9 +472,22 @@ func aggregatePerInvocationRubrics(per []PerInvocationResult) []models.RubricSco
 		mean := sums[id] / float64(counts[id])
 		m := mean
 		rs := models.RubricScore{RubricID: id, Score: &m}
-		if counts[id] == 1 && rationales[id] != nil {
-			rs.Rationale = rationales[id]
-		} else {
+		rats := rationalesByID[id]
+		switch {
+		case len(rats) == 1:
+			t := rats[0].text
+			rs.Rationale = &t
+		case len(rats) > 1:
+			var b strings.Builder
+			for i, e := range rats {
+				if i > 0 {
+					b.WriteString("\n\n")
+				}
+				fmt.Fprintf(&b, "[invocation %d] %s", e.invocation, e.text)
+			}
+			s := b.String()
+			rs.Rationale = &s
+		default:
 			r := aggregatedRationaleBoilerplate
 			rs.Rationale = &r
 		}

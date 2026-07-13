@@ -806,26 +806,30 @@ func TestAggregatePerInvocationRubricsSkipsNilScores(t *testing.T) {
 	}
 }
 
-// aggregatePerInvocationRubrics rationale semantics: a rubric with exactly
-// one scored contribution passes its source rationale through so downstream
-// consumers see the model's actual per-rubric reasoning; rubrics with two or
-// more scored contributions can't be meaningfully concatenated, so the entry
-// carries the aggregated-view boilerplate pointing readers at
-// PerInvocationResults for the raw text. Missing source rationales fall back
-// to the boilerplate.
+// aggregatePerInvocationRubrics rationale semantics:
+//   - Exactly one source rationale: passed through verbatim so downstream
+//     consumers see the model's actual per-rubric reasoning.
+//   - Multiple source rationales: concatenated with `[invocation N]`
+//     prefixes (1-based, mirroring the per-invocation sequence) and blank-line
+//     separators so a single wire string carries every per-turn rationale.
+//   - Missing/empty source rationales for every contribution: fall back to
+//     [aggregatedRationaleBoilerplate] so the wire pointer stays non-nil.
+//   - Mixed present + missing: only the non-empty ones are concatenated;
+//     invocations without a rationale are silently dropped rather than
+//     emitted as `[invocation N] ""` noise.
 func TestAggregatePerInvocationRubricsRationale(t *testing.T) {
 	one := 1.0
 	zero := 0.0
 	single := "the answer addressed the request"
 	firstOfMany := "first invocation reasoning"
 	secondOfMany := "second invocation reasoning"
+	empty := ""
 
 	tests := []struct {
-		name      string
-		per       []PerInvocationResult
-		rubricID  string
-		wantRat   string
-		wantMatch func(string) bool
+		name     string
+		per      []PerInvocationResult
+		rubricID string
+		wantRat  string
 	}{
 		{
 			name: "single contribution passes source through",
@@ -836,18 +840,48 @@ func TestAggregatePerInvocationRubricsRationale(t *testing.T) {
 			wantRat:  single,
 		},
 		{
-			name: "multiple contributions collapse to boilerplate",
+			name: "multiple contributions concatenate with invocation prefixes",
 			per: []PerInvocationResult{
 				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one, Rationale: &firstOfMany}}},
 				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &zero, Rationale: &secondOfMany}}},
 			},
 			rubricID: "r1",
-			wantRat:  aggregatedRationaleBoilerplate,
+			wantRat:  "[invocation 1] first invocation reasoning\n\n[invocation 2] second invocation reasoning",
+		},
+		{
+			name: "mixed present and missing rationales concat only the present ones",
+			per: []PerInvocationResult{
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one, Rationale: &firstOfMany}}},
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one}}},
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &zero, Rationale: &secondOfMany}}},
+			},
+			rubricID: "r1",
+			// Invocation 2 dropped (nil rationale); indices reflect original
+			// per-invocation position so the reader can still align turns.
+			wantRat: "[invocation 1] first invocation reasoning\n\n[invocation 3] second invocation reasoning",
+		},
+		{
+			name: "empty-string rationales are treated as missing",
+			per: []PerInvocationResult{
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one, Rationale: &empty}}},
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one, Rationale: &firstOfMany}}},
+			},
+			rubricID: "r1",
+			wantRat:  firstOfMany,
 		},
 		{
 			name: "single contribution with nil rationale falls back to boilerplate",
 			per: []PerInvocationResult{
 				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one}}},
+			},
+			rubricID: "r1",
+			wantRat:  aggregatedRationaleBoilerplate,
+		},
+		{
+			name: "multiple contributions all missing rationale fall back to boilerplate",
+			per: []PerInvocationResult{
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one}}},
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &zero}}},
 			},
 			rubricID: "r1",
 			wantRat:  aggregatedRationaleBoilerplate,
