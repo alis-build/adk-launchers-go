@@ -398,6 +398,17 @@ func (e *multiTurnRubricEvaluator) EvaluateInvocations(
 	}, nil
 }
 
+// aggregatedRationaleBoilerplate is the placeholder emitted on
+// [EvaluationResult.OverallRubricScores] entries whose score is a mean across
+// multiple per-invocation contributions. Concatenating N distinct rationales
+// would explode wire size and confuse downstream renderers, so the aggregator
+// signals "look at PerInvocationResults for the actual model reasoning"
+// instead. When a rubric only has a single source rationale (single-turn,
+// single-sample, or single-invocation), the aggregators pass the source
+// through verbatim — see [aggregatePerInvocationRubrics] and
+// [aggregateOverallRubrics].
+const aggregatedRationaleBoilerplate = "This is an aggregated score derived from individual entries. Please refer to individual entries in each invocation for actual rationale from the model."
+
 // aggregatePerInvocationRubrics collapses per-invocation RubricScores into an
 // overall slot keyed by RubricID for the single-turn rubric evaluators
 // (final_response and tool_use). Scores are the arithmetic mean across
@@ -405,6 +416,13 @@ func (e *multiTurnRubricEvaluator) EvaluateInvocations(
 // skipped. Rubric IDs preserve first-seen ordering across invocations, then
 // first-seen ordering within each invocation. Returns nil when no scored
 // rubric appears in any invocation.
+//
+// Rationale handling: when a rubric appears in exactly one per-invocation
+// result, its source Rationale is preserved verbatim so the wire reflects
+// the model's actual reasoning (this is the common single-turn,
+// single-sample case). When a rubric appears in two or more contributions,
+// the entry carries [aggregatedRationaleBoilerplate] pointing readers at
+// PerInvocationResults for the raw per-source text.
 //
 // This backs [EvaluationResult.OverallRubricScores], which downstream
 // consumers (see local_eval_service.computeMetricResults) surface via
@@ -415,6 +433,7 @@ func aggregatePerInvocationRubrics(per []PerInvocationResult) []models.RubricSco
 	order := make([]string, 0)
 	sums := make(map[string]float64)
 	counts := make(map[string]int)
+	rationales := make(map[string]*string)
 	for _, p := range per {
 		for _, r := range p.RubricScores {
 			if r.Score == nil {
@@ -425,41 +444,56 @@ func aggregatePerInvocationRubrics(per []PerInvocationResult) []models.RubricSco
 			}
 			sums[r.RubricID] += *r.Score
 			counts[r.RubricID]++
+			if r.Rationale != nil {
+				rationales[r.RubricID] = r.Rationale
+			}
 		}
 	}
 	if len(order) == 0 {
 		return nil
 	}
-	agg := "This is an aggregated score derived from individual entries. Please refer to individual entries in each invocation for actual rationale from the model."
 	out := make([]models.RubricScore, 0, len(order))
 	for _, id := range order {
 		mean := sums[id] / float64(counts[id])
 		m := mean
-		r := agg
-		out = append(out, models.RubricScore{
-			RubricID:  id,
-			Score:     &m,
-			Rationale: &r,
-		})
+		rs := models.RubricScore{RubricID: id, Score: &m}
+		if counts[id] == 1 && rationales[id] != nil {
+			rs.Rationale = rationales[id]
+		} else {
+			r := aggregatedRationaleBoilerplate
+			rs.Rationale = &r
+		}
+		out = append(out, rs)
 	}
 	return out
 }
 
-// aggregateOverallRubrics copies per-invocation rubric scores into the overall
-// slot with an aggregated-score rationale, matching Python's
-// MeanInvocationResultsSummarizer semantics for the single-turn evaluated case.
+// aggregateOverallRubrics copies per-invocation rubric scores into the
+// overall slot, matching Python's MeanInvocationResultsSummarizer semantics
+// for the single-turn evaluated case. The input is the RubricScores slice
+// from one PerInvocationResult (either the sole sample or the majority-vote
+// winner), so each RubricID appears exactly once and its source Rationale is
+// the model's actual reasoning — passed through verbatim rather than
+// replaced with [aggregatedRationaleBoilerplate]. Entries missing a source
+// rationale (deterministic evaluators, or upstream parse failures) fall back
+// to the boilerplate for the "aggregated view, look elsewhere" signal.
 func aggregateOverallRubrics(rubrics []models.RubricScore) []models.RubricScore {
 	if len(rubrics) == 0 {
 		return nil
 	}
 	out := make([]models.RubricScore, 0, len(rubrics))
-	agg := "This is an aggregated score derived from individual entries. Please refer to individual entries in each invocation for actual rationale from the model."
 	for _, r := range rubrics {
-		out = append(out, models.RubricScore{
-			RubricID:  r.RubricID,
-			Score:     r.Score,
-			Rationale: &agg,
-		})
+		entry := models.RubricScore{
+			RubricID: r.RubricID,
+			Score:    r.Score,
+		}
+		if r.Rationale != nil {
+			entry.Rationale = r.Rationale
+		} else {
+			agg := aggregatedRationaleBoilerplate
+			entry.Rationale = &agg
+		}
+		out = append(out, entry)
 	}
 	return out
 }

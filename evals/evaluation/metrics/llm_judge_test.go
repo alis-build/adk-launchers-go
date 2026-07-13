@@ -701,8 +701,12 @@ func TestRubricEvaluatorPopulatesOverallRubricScoresSingleInvocation(t *testing.
 	if got.RubricID != "r1" || got.Score == nil || *got.Score != 1.0 {
 		t.Fatalf("overall rubric = %+v", got)
 	}
-	if got.Rationale == nil || !strings.Contains(*got.Rationale, "aggregated score") {
-		t.Fatalf("overall rationale = %+v", got.Rationale)
+	// Single-invocation, single-sample: aggregator preserves the source
+	// rationale ("ok" from the fake judge) rather than replacing it with
+	// the aggregated-view boilerplate. See aggregatePerInvocationRubrics
+	// pass-through branch.
+	if got.Rationale == nil || *got.Rationale != "ok" {
+		t.Fatalf("overall rationale = %+v, want passthrough of parser rationale %q", got.Rationale, "ok")
 	}
 }
 
@@ -799,5 +803,107 @@ func TestAggregatePerInvocationRubricsSkipsNilScores(t *testing.T) {
 	}
 	if out := aggregatePerInvocationRubrics(perAllNil); out != nil {
 		t.Fatalf("all-nil case returned %+v, want nil", out)
+	}
+}
+
+// aggregatePerInvocationRubrics rationale semantics: a rubric with exactly
+// one scored contribution passes its source rationale through so downstream
+// consumers see the model's actual per-rubric reasoning; rubrics with two or
+// more scored contributions can't be meaningfully concatenated, so the entry
+// carries the aggregated-view boilerplate pointing readers at
+// PerInvocationResults for the raw text. Missing source rationales fall back
+// to the boilerplate.
+func TestAggregatePerInvocationRubricsRationale(t *testing.T) {
+	one := 1.0
+	zero := 0.0
+	single := "the answer addressed the request"
+	firstOfMany := "first invocation reasoning"
+	secondOfMany := "second invocation reasoning"
+
+	tests := []struct {
+		name      string
+		per       []PerInvocationResult
+		rubricID  string
+		wantRat   string
+		wantMatch func(string) bool
+	}{
+		{
+			name: "single contribution passes source through",
+			per: []PerInvocationResult{
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one, Rationale: &single}}},
+			},
+			rubricID: "r1",
+			wantRat:  single,
+		},
+		{
+			name: "multiple contributions collapse to boilerplate",
+			per: []PerInvocationResult{
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one, Rationale: &firstOfMany}}},
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &zero, Rationale: &secondOfMany}}},
+			},
+			rubricID: "r1",
+			wantRat:  aggregatedRationaleBoilerplate,
+		},
+		{
+			name: "single contribution with nil rationale falls back to boilerplate",
+			per: []PerInvocationResult{
+				{RubricScores: []models.RubricScore{{RubricID: "r1", Score: &one}}},
+			},
+			rubricID: "r1",
+			wantRat:  aggregatedRationaleBoilerplate,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := aggregatePerInvocationRubrics(tt.per)
+			if len(got) != 1 || got[0].RubricID != tt.rubricID {
+				t.Fatalf("got = %+v", got)
+			}
+			if got[0].Rationale == nil {
+				t.Fatalf("rationale = nil, want %q", tt.wantRat)
+			}
+			if *got[0].Rationale != tt.wantRat {
+				t.Fatalf("rationale = %q, want %q", *got[0].Rationale, tt.wantRat)
+			}
+		})
+	}
+}
+
+// aggregateOverallRubrics is called by the multi-turn evaluator on a single
+// PerInvocationResult's RubricScores. Each rubric appears exactly once and
+// carries the model's parsed rationale, so the overall slot should mirror
+// that verbatim rather than replacing it with the aggregated-view
+// boilerplate. Missing source rationales fall back to the boilerplate so
+// downstream consumers always see a non-nil pointer.
+func TestAggregateOverallRubricsPreservesRationale(t *testing.T) {
+	one := 1.0
+	rat1 := "helpful and concise"
+	rat2 := "safe content, no PII"
+
+	in := []models.RubricScore{
+		{RubricID: "helpful", Score: &one, Rationale: &rat1},
+		{RubricID: "safe", Score: &one, Rationale: &rat2},
+		{RubricID: "no_source_rationale", Score: &one},
+	}
+	got := aggregateOverallRubrics(in)
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	wantRat := map[string]string{
+		"helpful":             rat1,
+		"safe":                rat2,
+		"no_source_rationale": aggregatedRationaleBoilerplate,
+	}
+	for _, r := range got {
+		want, ok := wantRat[r.RubricID]
+		if !ok {
+			t.Fatalf("unexpected rubric %q in output", r.RubricID)
+		}
+		if r.Rationale == nil {
+			t.Fatalf("%s rationale = nil, want %q", r.RubricID, want)
+		}
+		if *r.Rationale != want {
+			t.Fatalf("%s rationale = %q, want %q", r.RubricID, *r.Rationale, want)
+		}
 	}
 }
