@@ -3,36 +3,40 @@ module go.alis.build/adk/launchers
 go 1.26.1
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260710001500-bfb13c0759f7
+	cloud.google.com/go/storage v1.63.1
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260715230559-125befb3e887
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	go.alis.build/a2a/extension/scheduler v1.2.5
 	go.alis.build/agui/history v0.1.4
 	go.alis.build/alog v0.1.0
-	go.alis.build/common v1.1.10
+	go.alis.build/common v1.1.12
 	go.alis.build/iam/v3 v3.7.0
 	go.alis.build/lro/v2 v2.8.0
 	go.alis.build/mux v0.4.9
 	google.golang.org/adk v1.5.0
+	google.golang.org/api v0.288.0
 	google.golang.org/genai v1.63.0
-	google.golang.org/grpc v1.82.0
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 )
 
 require (
 	cel.dev/expr v0.25.2 // indirect
 	cloud.google.com/go v0.123.0 // indirect
-	cloud.google.com/go/auth v0.21.0 // indirect
+	cloud.google.com/go/auth v0.22.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/cloudtasks v1.18.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	cloud.google.com/go/iam v1.11.0 // indirect
+	cloud.google.com/go/iam v1.12.0 // indirect
 	cloud.google.com/go/longrunning v1.2.0 // indirect
-	cloud.google.com/go/monitoring v1.29.0 // indirect
+	cloud.google.com/go/monitoring v1.30.0 // indirect
 	cloud.google.com/go/scheduler v1.16.0 // indirect
-	cloud.google.com/go/spanner v1.92.0 // indirect
+	cloud.google.com/go/spanner v1.93.0 // indirect
 	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.6.0 // indirect
-	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.33.0 // indirect
+	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.34.0 // indirect
+	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.58.0 // indirect
+	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.58.0 // indirect
 	github.com/a2aproject/a2a-go/v2 v2.3.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -79,10 +83,9 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	google.golang.org/api v0.288.0 // indirect
-	google.golang.org/genproto v0.0.0-20260706201446-f0a921348800 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260706201446-f0a921348800 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
+	google.golang.org/genproto v0.0.0-20260715232425-e75dac1f907d // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260715232425-e75dac1f907d // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260715232425-e75dac1f907d // indirect
 	rsc.io/omap v1.2.0 // indirect
 	rsc.io/ordered v1.1.1 // indirect
 )

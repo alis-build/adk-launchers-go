@@ -1,7 +1,12 @@
-// Package adkrun runs ADK agents in-process from launchers (scheduler cron ticks, etc.).
+// Package adkrun runs ADK agents in-process from launchers (scheduler cron ticks,
+// eval inference, AG-UI runs, etc.).
 //
-// Construct a [Runtime] with [NewRuntime] and [launcher.Config], then call [Runtime.RunSSE]
-// and range over the returned event iterator.
+// Construct a [Runtime] with [NewRuntime] and [launcher.Config], then call
+// [Runtime.RunSSE] and range over the returned event iterator. Use
+// [Runtime.RunSSEWithExtraPlugins] when a single run needs additional ADK plugins
+// (for example eval request interceptors) without changing the launcher-wide
+// plugin list. Multi-turn callers should use [Runtime.MergeExtraPlugins] once and
+// pass the result to [Runtime.RunSSEWithPluginConfig] on each turn.
 package adkrun
 
 import (
@@ -14,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/cmd/launcher"
+	"google.golang.org/adk/plugin"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
@@ -49,11 +55,17 @@ type RunRequest struct {
 	SaveInputBlobsAsArtifacts bool `json:"saveInputBlobsAsArtifacts,omitempty"`
 	// StateDelta merges into the session state before the run (ADK runner.WithStateDelta).
 	StateDelta map[string]any `json:"stateDelta,omitempty"`
-	// FunctionCallEventID resumes or continues a pending function call.
-	// Not yet applied by the in-process runner; reserved for future ADK support.
+	// FunctionCallEventID identifies the event whose function call this request answers.
+	// Accepted for ADK REST API parity; the in-process runner on adk v1 does not read this
+	// field. See the InvocationID note below for the equivalent limitation on invocation resume.
 	FunctionCallEventID string `json:"functionCallEventId,omitempty"`
-	// InvocationID correlates the run with a prior invocation.
-	// Not yet applied by the in-process runner; reserved for future ADK support.
+	// InvocationID correlates the run with a prior invocation for API/logging parity.
+	// The in-process runner on adk v1.5.0 does not read this field: runner.Run always
+	// allocates a fresh e-<uuid> invocation, even when NewMessage carries FunctionResponse
+	// parts that match a paused FunctionCall on the session. When google.golang.org/adk/runner
+	// exposes invocation resume (e.g. runner.WithInvocationID), this field will be plumbed
+	// through so confirmation resume continues the same ADK invocation
+	// (https://adk.dev/tools-custom/confirmation/, https://adk.dev/runtime/resume/).
 	InvocationID string `json:"invocationId,omitempty"`
 }
 
@@ -91,10 +103,52 @@ func (rt *Runtime) AppName() string {
 	return rt.appName
 }
 
+// LauncherConfig returns the launcher configuration backing this runtime.
+// Callers must treat the returned value as read-only; mutating shared services
+// or plugin lists affects all concurrent runs on this runtime.
+func (rt *Runtime) LauncherConfig() *launcher.Config {
+	return rt.launcherCfg
+}
+
 // RunSSE executes an agent turn and returns the session id plus an iterator of ADK
 // session events. Callers range over events until the iterator completes or returns
 // an error; set [RunRequest.Streaming] to receive partial model tokens.
 func (rt *Runtime) RunSSE(ctx context.Context, req RunRequest) (string, iter.Seq2[*Event, error], error) {
+	return rt.runSSE(ctx, req, rt.launcherCfg.PluginConfig)
+}
+
+// MergeExtraPlugins returns a plugin config with extraPlugins appended to the
+// launcher plugin list. Multi-turn eval inference should call this once per run
+// and reuse the result with [Runtime.RunSSEWithPluginConfig].
+func (rt *Runtime) MergeExtraPlugins(extraPlugins ...*plugin.Plugin) runner.PluginConfig {
+	base := rt.launcherCfg.PluginConfig
+	if len(extraPlugins) == 0 {
+		return base
+	}
+	merged := make([]*plugin.Plugin, 0, len(base.Plugins)+len(extraPlugins))
+	merged = append(merged, base.Plugins...)
+	merged = append(merged, extraPlugins...)
+	return runner.PluginConfig{
+		Plugins:      merged,
+		CloseTimeout: base.CloseTimeout,
+	}
+}
+
+// RunSSEWithPluginConfig is like [Runtime.RunSSE] but uses the supplied plugin
+// config instead of the launcher default. Prefer this over repeated calls to
+// [Runtime.RunSSEWithExtraPlugins] when the same extra plugins apply to every turn.
+func (rt *Runtime) RunSSEWithPluginConfig(ctx context.Context, req RunRequest, pluginConfig runner.PluginConfig) (string, iter.Seq2[*Event, error], error) {
+	return rt.runSSE(ctx, req, pluginConfig)
+}
+
+// RunSSEWithExtraPlugins is like [Runtime.RunSSE] but merges extraPlugins onto
+// the launcher plugin list for this run only. Plugin order is launcher plugins
+// first, then extraPlugins. Returns the same errors as [Runtime.RunSSE].
+func (rt *Runtime) RunSSEWithExtraPlugins(ctx context.Context, req RunRequest, extraPlugins ...*plugin.Plugin) (string, iter.Seq2[*Event, error], error) {
+	return rt.runSSE(ctx, req, rt.MergeExtraPlugins(extraPlugins...))
+}
+
+func (rt *Runtime) runSSE(ctx context.Context, req RunRequest, pluginConfig runner.PluginConfig) (string, iter.Seq2[*Event, error], error) {
 	if strings.TrimSpace(req.UserID) == "" {
 		return "", nil, fmt.Errorf("adkrun: user id is required")
 	}
@@ -113,7 +167,6 @@ func (rt *Runtime) RunSSE(ctx context.Context, req RunRequest) (string, iter.Seq
 	sessionService := rt.launcherCfg.SessionService
 	memoryService := rt.launcherCfg.MemoryService
 	artifactService := rt.launcherCfg.ArtifactService
-	pluginConfig := rt.launcherCfg.PluginConfig
 
 	sessionID := req.SessionID
 	if sessionID == "" {
@@ -160,15 +213,14 @@ func (rt *Runtime) RunSSE(ctx context.Context, req RunRequest) (string, iter.Seq
 	}
 
 	// TODO(adk-invocation-resume): When google.golang.org/adk/runner exposes invocation
-	// resume (e.g. runner.WithInvocationID), pass req.InvocationID into
-	// icontext.NewInvocationContext so confirmation resume continues the same ADK
-	// invocation per https://adk.dev/tools-custom/confirmation/ and
-	// https://adk.dev/runtime/resume/. Today runner.Run always allocates a new
-	// e-<uuid> invocation even when req.InvocationID is set.
-	if req.InvocationID != "" {
-		// Reserved for future wiring; stored on RunRequest for launcher/clients now.
-		_ = req.InvocationID
-	}
+	// resume (e.g. runner.WithInvocationID), pass req.InvocationID into the runner so
+	// confirmation resume continues the same ADK invocation per
+	// https://adk.dev/tools-custom/confirmation/ and https://adk.dev/runtime/resume/.
+	// On adk v1.5.0 runner.Run always allocates a fresh e-<uuid> invocation even when
+	// req.InvocationID or req.FunctionCallEventID are set; they are accepted for
+	// REST API parity only.
+	_ = req.InvocationID
+	_ = req.FunctionCallEventID
 
 	msg := req.NewMessage
 	msg.Parts = slices.Clone(req.NewMessage.Parts)
