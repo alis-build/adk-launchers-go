@@ -97,14 +97,56 @@ func TestProcessEvent_TextStreaming(t *testing.T) {
 	}
 }
 
-func TestProcessEvent_TextStreaming_FinalSkipped(t *testing.T) {
+func TestProcessEvent_TextStreaming_FinalDeduped(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+
+	// Stream partial deltas first.
+	e1, rec1 := newTestEmitter()
+	ev1 := session.NewEvent("inv1")
+	ev1.Content = genai.NewContentFromText("Hel", genai.RoleModel)
+	ev1.Partial = true
+	if _, err := l.processEvent(e1, ev1, state); err != nil {
+		t.Fatalf("processEvent() partial 1 error = %v", err)
+	}
+	evts1 := parseSSEEvents(rec1.Body.String())
+	if len(evts1) != 2 {
+		t.Fatalf("partial 1: got %d events, want 2", len(evts1))
+	}
+
+	e2, rec2 := newTestEmitter()
+	ev2 := session.NewEvent("inv1")
+	ev2.Content = genai.NewContentFromText("lo", genai.RoleModel)
+	ev2.Partial = true
+	if _, err := l.processEvent(e2, ev2, state); err != nil {
+		t.Fatalf("processEvent() partial 2 error = %v", err)
+	}
+	evts2 := parseSSEEvents(rec2.Body.String())
+	if len(evts2) != 1 {
+		t.Fatalf("partial 2: got %d events, want 1", len(evts2))
+	}
+
+	// Final non-partial with full accumulated text should not re-emit.
+	e3, rec3 := newTestEmitter()
+	ev3 := session.NewEvent("inv1")
+	ev3.Content = genai.NewContentFromText("Hello", genai.RoleModel)
+	ev3.Partial = false
+	if _, err := l.processEvent(e3, ev3, state); err != nil {
+		t.Fatalf("processEvent() final error = %v", err)
+	}
+	evts3 := parseSSEEvents(rec3.Body.String())
+	if len(evts3) != 0 {
+		t.Fatalf("got %d events, want 0 (final text deduped)", len(evts3))
+	}
+}
+
+func TestProcessEvent_TextStreaming_NonPartialOnly(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
 	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
 
-	// Non-partial (final) text event should be skipped.
 	ev := session.NewEvent("inv1")
-	ev.Content = genai.NewContentFromText("final", genai.RoleModel)
+	ev.Content = genai.NewContentFromText("remote reply in full", genai.RoleModel)
 	ev.Partial = false
 
 	if _, err := l.processEvent(e, ev, state); err != nil {
@@ -112,8 +154,55 @@ func TestProcessEvent_TextStreaming_FinalSkipped(t *testing.T) {
 	}
 
 	evts := parseSSEEvents(rec.Body.String())
-	if len(evts) != 0 {
-		t.Fatalf("got %d events, want 0 (final text skipped)", len(evts))
+	if len(evts) != 2 {
+		t.Fatalf("got %d events, want 2 (START + CONTENT)", len(evts))
+	}
+	if evts[0].Type != events.EventTypeTextMessageStart {
+		t.Errorf("event[0].Type = %v, want TEXT_MESSAGE_START", evts[0].Type)
+	}
+	if evts[1].Type != events.EventTypeTextMessageContent {
+		t.Errorf("event[1].Type = %v, want TEXT_MESSAGE_CONTENT", evts[1].Type)
+	}
+	if evts[1].str("delta") != "remote reply in full" {
+		t.Errorf("event[1].delta = %q, want remote reply in full", evts[1].str("delta"))
+	}
+}
+
+func TestProcessEvent_TextStreaming_SubAgentNonPartialOnly(t *testing.T) {
+	l := newTestLauncher("test-app")
+	e, rec := newTestEmitter()
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+
+	ev := session.NewEvent("inv1")
+	ev.Author = "Data_Analyst"
+	ev.Content = genai.NewContentFromText("analysis complete", genai.RoleModel)
+	ev.Partial = false
+
+	if _, err := l.processEvent(e, ev, state); err != nil {
+		t.Fatalf("processEvent() error = %v", err)
+	}
+
+	evts := parseSSEEvents(rec.Body.String())
+	if len(evts) != 3 {
+		t.Fatalf("got %d events, want 3 (STEP_STARTED + START + CONTENT)", len(evts))
+	}
+	if evts[0].Type != events.EventTypeStepStarted {
+		t.Errorf("event[0].Type = %v, want STEP_STARTED", evts[0].Type)
+	}
+	if evts[0].str("stepName") != "Data_Analyst" {
+		t.Errorf("event[0].stepName = %q, want Data_Analyst", evts[0].str("stepName"))
+	}
+	if evts[1].Type != events.EventTypeTextMessageStart {
+		t.Errorf("event[1].Type = %v, want TEXT_MESSAGE_START", evts[1].Type)
+	}
+	if evts[1].str("name") != "Data_Analyst" {
+		t.Errorf("event[1].name = %q, want Data_Analyst", evts[1].str("name"))
+	}
+	if evts[2].Type != events.EventTypeTextMessageContent {
+		t.Errorf("event[2].Type = %v, want TEXT_MESSAGE_CONTENT", evts[2].Type)
+	}
+	if evts[2].str("delta") != "analysis complete" {
+		t.Errorf("event[2].delta = %q, want analysis complete", evts[2].str("delta"))
 	}
 }
 
@@ -145,6 +234,87 @@ func TestProcessEvent_ReasoningPhase(t *testing.T) {
 	}
 	if evts[2].Type != events.EventTypeReasoningMessageContent {
 		t.Errorf("event[2].Type = %v, want REASONING_MESSAGE_CONTENT", evts[2].Type)
+	}
+}
+
+func TestProcessEvent_ReasoningPhase_NonPartialOnly(t *testing.T) {
+	l := newTestLauncher("test-app")
+	e, rec := newTestEmitter()
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+
+	ev := session.NewEvent("inv1")
+	ev.Content = &genai.Content{
+		Role:  string(genai.RoleModel),
+		Parts: []*genai.Part{{Text: "thinking about it...", Thought: true}},
+	}
+	ev.Partial = false
+
+	if _, err := l.processEvent(e, ev, state); err != nil {
+		t.Fatalf("processEvent() error = %v", err)
+	}
+
+	evts := parseSSEEvents(rec.Body.String())
+	if len(evts) != 3 {
+		t.Fatalf("got %d events, want 3 (ReasoningStart + MessageStart + MessageContent)", len(evts))
+	}
+	if evts[2].Type != events.EventTypeReasoningMessageContent {
+		t.Errorf("event[2].Type = %v, want REASONING_MESSAGE_CONTENT", evts[2].Type)
+	}
+	if evts[2].str("delta") != "thinking about it..." {
+		t.Errorf("event[2].delta = %q, want thinking about it...", evts[2].str("delta"))
+	}
+}
+
+func TestProcessEvent_ReasoningPhase_FinalDeduped(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+
+	e1, rec1 := newTestEmitter()
+	ev1 := session.NewEvent("inv1")
+	ev1.Content = &genai.Content{
+		Role:  string(genai.RoleModel),
+		Parts: []*genai.Part{{Text: "think", Thought: true}},
+	}
+	ev1.Partial = true
+	if _, err := l.processEvent(e1, ev1, state); err != nil {
+		t.Fatalf("processEvent() partial error = %v", err)
+	}
+	evts1 := parseSSEEvents(rec1.Body.String())
+	if len(evts1) != 3 {
+		t.Fatalf("partial: got %d events, want 3", len(evts1))
+	}
+
+	e2, rec2 := newTestEmitter()
+	ev2 := session.NewEvent("inv1")
+	ev2.Content = &genai.Content{
+		Role:  string(genai.RoleModel),
+		Parts: []*genai.Part{{Text: "thinking", Thought: true}},
+	}
+	ev2.Partial = true
+	if _, err := l.processEvent(e2, ev2, state); err != nil {
+		t.Fatalf("processEvent() partial 2 error = %v", err)
+	}
+	evts2 := parseSSEEvents(rec2.Body.String())
+	if len(evts2) != 1 {
+		t.Fatalf("partial 2: got %d events, want 1 (content only)", len(evts2))
+	}
+	if evts2[0].str("delta") != "ing" {
+		t.Errorf("partial 2 delta = %q, want ing", evts2[0].str("delta"))
+	}
+
+	e3, rec3 := newTestEmitter()
+	ev3 := session.NewEvent("inv1")
+	ev3.Content = &genai.Content{
+		Role:  string(genai.RoleModel),
+		Parts: []*genai.Part{{Text: "thinking", Thought: true}},
+	}
+	ev3.Partial = false
+	if _, err := l.processEvent(e3, ev3, state); err != nil {
+		t.Fatalf("processEvent() final error = %v", err)
+	}
+	evts3 := parseSSEEvents(rec3.Body.String())
+	if len(evts3) != 0 {
+		t.Fatalf("got %d events, want 0 (final reasoning deduped)", len(evts3))
 	}
 }
 

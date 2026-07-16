@@ -83,7 +83,8 @@ type streamState struct {
 	lastTextMessageID         string            // most recent closed text message, used as parentMessageID for tool calls
 	currentStepAuthor         string            // active sub-agent step, empty when at root agent
 	rootAppName               string            // resolved ADK app name for this run (step event filtering)
-	emittedReasoningLen       int               // bytes of reasoning already emitted; used to compute deltas from accumulated partials
+	emittedReasoningLen       int               // bytes of reasoning already emitted; used to compute deltas from accumulated partials/finals
+	emittedTextLen            int               // bytes of text already emitted; partials are deltas, finals carry full accumulated text
 	runFinalized              bool              // true once RunFinished or RunError has been emitted
 	emittedInterrupts         []types.Interrupt // interrupts emitted this run; persisted to session state
 	emittedToolCallArgsJSON   map[string]string           // toolCallID -> args JSON from last successful lifecycle emission
@@ -194,14 +195,9 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 			// bracket individual messages within it. Per the AG-UI spec, these use
 			// separate IDs.
 			//
-			// ADK partial events contain accumulated thought text, not deltas.
-			// Track how much has been emitted and only send the new portion.
-			// Skip non-partial (final) events to avoid re-emitting the full text.
+			// ADK partial and final events carry accumulated thought text, not
+			// deltas. Track how much has been emitted and only send the new portion.
 			if part.Thought && part.Text != "" {
-				if !ev.Partial {
-					continue
-				}
-
 				if len(part.Text) <= state.emittedReasoningLen {
 					continue
 				}
@@ -228,9 +224,20 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 				closeReasoningMessage(e, state)
 
 				// ADK streaming emits partial events with delta text, then a final
-				// non-partial event with the full accumulated text. Skip the final
-				// event to avoid re-emitting text that was already streamed.
-				if !ev.Partial {
+				// non-partial event with the full accumulated text. Remote sub-agents
+				// may deliver only the final event; emit any text not yet streamed.
+				var delta string
+				if ev.Partial {
+					delta = part.Text
+					state.emittedTextLen += len(delta)
+				} else {
+					if len(part.Text) <= state.emittedTextLen {
+						continue
+					}
+					delta = part.Text[state.emittedTextLen:]
+					state.emittedTextLen = len(part.Text)
+				}
+				if delta == "" {
 					continue
 				}
 
@@ -244,7 +251,7 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 						events.WithName(strings.TrimSpace(ev.Author)),
 					))
 				}
-				e.emit(events.NewTextMessageContentEvent(state.currentTextMessageID, part.Text))
+				e.emit(events.NewTextMessageContentEvent(state.currentTextMessageID, delta))
 				continue
 			}
 
@@ -360,6 +367,7 @@ func closeTextMessage(e *emitter, state *streamState) {
 	e.emit(events.NewTextMessageEndEvent(state.currentTextMessageID))
 	state.lastTextMessageID = state.currentTextMessageID
 	state.currentTextMessageID = ""
+	state.emittedTextLen = 0
 }
 
 // closeReasoningMessage emits ReasoningMessageEnd and ReasoningEnd events
