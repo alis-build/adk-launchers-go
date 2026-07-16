@@ -135,6 +135,7 @@ type State struct {
 	CurrentStepAuthor         string
 	RootAppName               string
 	EmittedReasoningLen       int
+	EmittedTextLen            int
 	RunFinalized              bool
 	EmittedInterrupts         []types.Interrupt
 	EmittedToolCallArgsJSON   map[string]string
@@ -246,14 +247,9 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 			// bracket individual messages within it. Per the AG-UI spec, these use
 			// separate IDs.
 			//
-			// ADK partial events contain accumulated thought text, not deltas.
-			// Track how much has been emitted and only send the new portion.
-			// Skip non-partial (final) events to avoid re-emitting the full text.
+			// ADK partial and final events carry accumulated thought text, not
+			// deltas. Track how much has been emitted and only send the new portion.
 			if part.Thought && part.Text != "" {
-				if !ev.Partial {
-					continue
-				}
-
 				if len(part.Text) <= state.EmittedReasoningLen {
 					continue
 				}
@@ -280,9 +276,20 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 				closeReasoningMessage(sink, state)
 
 				// ADK streaming emits partial events with delta text, then a final
-				// non-partial event with the full accumulated text. Skip the final
-				// event to avoid re-emitting text that was already streamed.
-				if !ev.Partial {
+				// non-partial event with the full accumulated text. Remote sub-agents
+				// may deliver only the final event; emit any text not yet streamed.
+				var delta string
+				if ev.Partial {
+					delta = part.Text
+					state.EmittedTextLen += len(delta)
+				} else {
+					if len(part.Text) <= state.EmittedTextLen {
+						continue
+					}
+					delta = part.Text[state.EmittedTextLen:]
+					state.EmittedTextLen = len(part.Text)
+				}
+				if delta == "" {
 					continue
 				}
 
@@ -296,7 +303,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 						events.WithName(strings.TrimSpace(ev.Author)),
 					))
 				}
-				sink.Emit(events.NewTextMessageContentEvent(state.CurrentTextMessageID, part.Text))
+				sink.Emit(events.NewTextMessageContentEvent(state.CurrentTextMessageID, delta))
 				continue
 			}
 
@@ -412,6 +419,7 @@ func closeTextMessage(sink eventSink, state *State) {
 	sink.Emit(events.NewTextMessageEndEvent(state.CurrentTextMessageID))
 	state.LastTextMessageID = state.CurrentTextMessageID
 	state.CurrentTextMessageID = ""
+	state.EmittedTextLen = 0
 }
 
 // closeReasoningMessage emits ReasoningMessageEnd and ReasoningEnd events

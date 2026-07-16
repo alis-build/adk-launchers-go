@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
+	_ "go.alis.build/adk/launchers/internal/testenv"
 	"google.golang.org/adk/v2/session"
 )
 
