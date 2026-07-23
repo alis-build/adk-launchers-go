@@ -250,6 +250,11 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 			// ADK partial and final events carry accumulated thought text, not
 			// deltas. Track how much has been emitted and only send the new portion.
 			if part.Thought && part.Text != "" {
+				if state.CurrentReasoningMessageID == "" {
+					if ev.Partial || len(part.Text) > state.EmittedReasoningLen {
+						state.EmittedReasoningLen = 0
+					}
+				}
 				if len(part.Text) <= state.EmittedReasoningLen {
 					continue
 				}
@@ -263,6 +268,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 					sink.Emit(events.NewReasoningStartEvent(state.CurrentReasoningPhaseID))
 				}
 				if state.CurrentReasoningMessageID == "" {
+					state.EmittedReasoningLen = len(part.Text)
 					state.CurrentReasoningMessageID = events.GenerateMessageID()
 					sink.Emit(events.NewReasoningMessageStartEvent(state.CurrentReasoningMessageID, "reasoning"))
 				}
@@ -280,11 +286,17 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 				// may deliver only the final event; emit any text not yet streamed.
 				var delta string
 				if ev.Partial {
+					if state.CurrentTextMessageID == "" {
+						state.EmittedTextLen = 0
+					}
 					delta = part.Text
 					state.EmittedTextLen += len(delta)
 				} else {
 					if len(part.Text) <= state.EmittedTextLen {
 						continue
+					}
+					if state.CurrentTextMessageID == "" {
+						state.EmittedTextLen = 0
 					}
 					delta = part.Text[state.EmittedTextLen:]
 					state.EmittedTextLen = len(part.Text)
@@ -294,6 +306,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 				}
 
 				if state.CurrentTextMessageID == "" {
+					state.EmittedTextLen = len(part.Text)
 					state.CurrentTextMessageID = events.GenerateMessageID()
 					// Blank / whitespace-only authors are trimmed so the wire
 					// JSON omits "name" via omitempty on the upstream field.
@@ -419,7 +432,6 @@ func closeTextMessage(sink eventSink, state *State) {
 	sink.Emit(events.NewTextMessageEndEvent(state.CurrentTextMessageID))
 	state.LastTextMessageID = state.CurrentTextMessageID
 	state.CurrentTextMessageID = ""
-	state.EmittedTextLen = 0
 }
 
 // closeReasoningMessage emits ReasoningMessageEnd and ReasoningEnd events
@@ -433,7 +445,6 @@ func closeReasoningMessage(sink eventSink, state *State) {
 		sink.Emit(events.NewReasoningEndEvent(state.CurrentReasoningPhaseID))
 		state.CurrentReasoningPhaseID = ""
 	}
-	state.EmittedReasoningLen = 0
 }
 
 // EmitInterrupt converts an adk_request_confirmation FunctionCall into an
