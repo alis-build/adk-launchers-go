@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	pb "go.alis.build/common/alis/a2a/extension/scheduler/v1"
+	"go.alis.build/adk/launchers/internal/threadmeta"
 	"go.alis.build/iam/v3"
+	adklauncher "google.golang.org/adk/cmd/launcher"
 )
 
 // cronConfig holds runtime options for the Cloud Tasks cron handler and executeCron.
@@ -20,6 +22,12 @@ type cronConfig struct {
 	syncExecution bool
 	// observer receives lifecycle callbacks; nil disables observation.
 	observer CronObserver
+	// threadService when set enables thread metadata upserts on cron runs.
+	threadService threadmeta.Upserter
+	// launcherCfg supplies AgentLoader for thread display names.
+	launcherCfg *adklauncher.Config
+	// defaultAppName is the ADK app used for all cron runs on this launcher.
+	defaultAppName string
 }
 
 // resolveSystemIdentity returns the configured system identity or the environment default.

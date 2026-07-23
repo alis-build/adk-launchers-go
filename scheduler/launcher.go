@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/mux"
+	historyservice "go.alis.build/agui/history/service"
 	schedulerext "go.alis.build/a2a/extension/scheduler"
 	schedjsonrpc "go.alis.build/a2a/extension/scheduler/jsonrpc"
 	schedulerservice "go.alis.build/a2a/extension/scheduler/service"
@@ -67,6 +68,27 @@ func WithSynchronousExecution(sync bool) Option {
 func WithCronObserver(observer CronObserver) Option {
 	return func(l *schedulerLauncher) {
 		l.cronCfg.observer = observer
+	}
+}
+
+// WithThreadService enables thread metadata upserts on cron runs so scheduled
+// runs appear alongside interactive /run_sse runs in the AGUI history listing.
+// When set, the cron handler calls CreateOrUpdateThread before and after each
+// ADK invocation (best-effort: failures are logged, not returned).
+//
+// Pass the same *historyservice.ThreadService instance as
+// [go.alis.build/adk/launchers/agui.WithThreadService]. If a different instance
+// is passed, scheduled and interactive runs will write to independent service
+// state and will not coexist in the history listing.
+//
+// Pre-run upsert uses cron.context_id when set; on the first tick both ids are
+// empty so only the post-run upsert (after ADK returns a session id) creates
+// the thread. See package doc for full timing.
+//
+// A nil svc disables the upsert (equivalent to not setting the option).
+func WithThreadService(svc *historyservice.ThreadService) Option {
+	return func(l *schedulerLauncher) {
+		l.cronCfg.threadService = svc
 	}
 }
 
@@ -222,6 +244,9 @@ func (l *schedulerLauncher) mountHostRoutes(config *adklauncher.Config) error {
 	if err != nil {
 		return fmt.Errorf("scheduler: %w", err)
 	}
+
+	l.cronCfg.defaultAppName = l.appName
+	l.cronCfg.launcherCfg = config
 
 	l.registerGRPC()
 

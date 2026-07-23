@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"testing"
 
+	historyservice "go.alis.build/agui/history/service"
 	pb "go.alis.build/common/alis/a2a/extension/scheduler/v1"
 	"go.alis.build/iam/v3"
 	"google.golang.org/grpc/codes"
@@ -102,6 +104,127 @@ func testCronConfig() *cronConfig {
 			Email: "system@test",
 			Type:  iam.ServiceAccount,
 		},
+		defaultAppName: "my.agent",
+	}
+}
+
+type upsertSpy struct {
+	calls []historyservice.CreateOrUpdateThreadRequest
+	err   error
+}
+
+func (s *upsertSpy) CreateOrUpdateThread(_ context.Context, req *historyservice.CreateOrUpdateThreadRequest) error {
+	s.calls = append(s.calls, *req)
+	return s.err
+}
+
+func threadUpsertConfig(spy *upsertSpy) *cronConfig {
+	cfg := testCronConfig()
+	cfg.threadService = spy
+	return cfg
+}
+
+func TestRunCronMessage_firstTickUpsertsPostRunOnly(t *testing.T) {
+	spy := &upsertSpy{}
+	runner := &fakeRunner{nextSess: "sess-new"}
+	owner := ownerIdentity("alice", "alice@example.com")
+
+	id, err := runCronMessage(context.Background(), runner, threadUpsertConfig(spy), owner, "", "", "hello")
+	if err != nil {
+		t.Fatalf("runCronMessage: %v", err)
+	}
+	if id != "sess-new" {
+		t.Fatalf("session id = %q, want sess-new", id)
+	}
+	if len(spy.calls) != 1 {
+		t.Fatalf("upsert calls = %d, want 1 post-run only", len(spy.calls))
+	}
+	if spy.calls[0].ThreadID != "sess-new" || spy.calls[0].UserMessageText != "hello" {
+		t.Fatalf("upsert = %#v", spy.calls[0])
+	}
+}
+
+func TestRunCronMessage_continuingTickUpsertsPreRunOnly(t *testing.T) {
+	spy := &upsertSpy{}
+	runner := &fakeRunner{nextSess: "sess-existing"}
+	owner := ownerIdentity("alice", "alice@example.com")
+
+	_, err := runCronMessage(context.Background(), runner, threadUpsertConfig(spy), owner, "sess-existing", "sess-existing", "hello")
+	if err != nil {
+		t.Fatalf("runCronMessage: %v", err)
+	}
+	if len(spy.calls) != 1 {
+		t.Fatalf("upsert calls = %d, want 1 pre-run only", len(spy.calls))
+	}
+	if spy.calls[0].ThreadID != "sess-existing" {
+		t.Fatalf("thread id = %q", spy.calls[0].ThreadID)
+	}
+}
+
+func TestRunCronMessage_newSessionIDUpsertsPreAndPost(t *testing.T) {
+	spy := &upsertSpy{}
+	runner := &fakeRunner{nextSess: "sess-new"}
+	owner := ownerIdentity("alice", "alice@example.com")
+
+	_, err := runCronMessage(context.Background(), runner, threadUpsertConfig(spy), owner, "sess-old", "sess-old", "hello")
+	if err != nil {
+		t.Fatalf("runCronMessage: %v", err)
+	}
+	if len(spy.calls) != 2 {
+		t.Fatalf("upsert calls = %d, want pre + post", len(spy.calls))
+	}
+	if spy.calls[0].ThreadID != "sess-old" || spy.calls[1].ThreadID != "sess-new" {
+		t.Fatalf("upserts = %#v", spy.calls)
+	}
+}
+
+func TestExecuteCron_initialPromptThenMainThreadUpserts(t *testing.T) {
+	spy := &upsertSpy{}
+	svc := &fakeScheduler{
+		cron: &pb.Cron{
+			Name:          "crons/recurring",
+			Owner:         "users/bob",
+			Prompt:        "tick",
+			InitialPrompt: "bootstrap",
+			Type:          pb.Cron_TYPE_CRON,
+		},
+	}
+	runner := &fakeRunner{nextSess: "sess-recur"}
+
+	if err := executeCron(context.Background(), svc, runner, threadUpsertConfig(spy), svc.cron, "bob"); err != nil {
+		t.Fatalf("executeCron: %v", err)
+	}
+	if len(spy.calls) != 2 {
+		t.Fatalf("upsert calls = %d, want initial post-run + main pre-run", len(spy.calls))
+	}
+	if spy.calls[0].ThreadID != "sess-recur" || spy.calls[0].UserMessageText != "bootstrap" {
+		t.Fatalf("initial upsert = %#v", spy.calls[0])
+	}
+	if spy.calls[1].ThreadID != "sess-recur" || spy.calls[1].UserMessageText != "tick" {
+		t.Fatalf("main upsert = %#v", spy.calls[1])
+	}
+}
+
+func TestExecuteCron_threadUpsertFailureDoesNotFailTick(t *testing.T) {
+	spy := &upsertSpy{err: errors.New("spanner down")}
+	svc := &fakeScheduler{
+		cron: &pb.Cron{
+			Name:   "crons/upsert-fail",
+			Owner:  "users/alice",
+			Prompt: "hello",
+			Type:   pb.Cron_TYPE_CRON,
+		},
+	}
+	runner := &fakeRunner{nextSess: "sess-upsert-fail"}
+
+	if err := executeCron(context.Background(), svc, runner, threadUpsertConfig(spy), svc.cron, "alice"); err != nil {
+		t.Fatalf("executeCron should succeed when upsert fails, got %v", err)
+	}
+	if len(spy.calls) != 1 {
+		t.Fatalf("upsert calls = %d, want post-run attempt", len(spy.calls))
+	}
+	if svc.update == nil {
+		t.Fatal("expected UpdateCron after successful agent run")
 	}
 }
 

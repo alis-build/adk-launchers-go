@@ -62,13 +62,16 @@
 //   - [WithJSONRPCOptions] — forwarded to the extension JSON-RPC handler (e.g. CORS).
 //   - [WithSynchronousExecution] — sync ADK run; 500 on agent failure, 200 on persist failure.
 //   - [WithCronObserver] — lifecycle hooks around in-process execution.
+//   - [WithThreadService] — upsert thread metadata on cron runs (same instance as AGUI launcher).
 //   - [WithGRPCRegistrar] — register SchedulerService on the host grpc.Server during setup.
 //   - [WithoutSystemAuth] — delegate cron callback authentication to a trusted upstream.
 //
 // # Example
 //
 //	import (
+//	    historyservice "go.alis.build/agui/history/service"
 //	    schedulerservice "go.alis.build/a2a/extension/scheduler/service"
+//	    "go.alis.build/adk/launchers/agui"
 //	    "go.alis.build/adk/launchers/scheduler"
 //	    launchersweb "go.alis.build/adk/launchers/web"
 //	    "go.alis.build/iam/v3"
@@ -76,6 +79,7 @@
 //	    "google.golang.org/grpc"
 //	)
 //
+//	historySvc := historyservice.New(/* ... */)
 //	grpcServer := grpc.NewServer(
 //	    grpc.UnaryInterceptor(schedulerservice.UnaryServerInterceptor()),
 //	)
@@ -85,12 +89,36 @@
 //	        Email: "alis-build@my-project.iam.gserviceaccount.com",
 //	        Type:  iam.ServiceAccount,
 //	    }),
+//	    scheduler.WithThreadService(historySvc),
 //	    scheduler.WithGRPCRegistrar(grpcServer),
 //	)
-//	launchersweb.NewLauncher(webapi.NewLauncher(), sched)
+//	launchersweb.NewLauncher(
+//	    webapi.NewLauncher(),
+//	    agui.NewLauncher("my.agent", agui.WithThreadService(historySvc)),
+//	    sched,
+//	)
 //	hostmux.HandleGRPC(grpcServer)
 //
 // CLI: adk web --port 8080 api scheduler -app_name=my.agent
+//
+// # Thread history integration
+//
+// [WithThreadService] wires a shared [historyservice.ThreadService] instance into
+// the cron handler. On every tick the handler upserts thread metadata (display
+// name, most recent user message) so scheduled runs appear alongside interactive
+// /run_sse runs in the AGUI history listing.
+//
+// Pass the same *ThreadService value as [go.alis.build/adk/launchers/agui.WithThreadService];
+// otherwise scheduled and interactive runs will not coexist in the listing (they
+// will write to different service instances that may not share a backend view of
+// the same threads).
+//
+// Upsert timing: when cron.context_id (or the in-tick session id) is already set,
+// metadata is upserted before the ADK run. On the first tick of a new cron both ids
+// are empty, so the pre-run upsert is skipped and the thread is created after ADK
+// returns a new session id. When ADK returns a different session id than the
+// pre-run thread id, a second upsert runs after a successful invocation (future
+// ticks reuse that id via cron.context_id).
 //
 // # Multi-agent crons (TODO)
 //

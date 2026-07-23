@@ -9,6 +9,7 @@ import (
 
 	"go.alis.build/alog"
 	pb "go.alis.build/common/alis/a2a/extension/scheduler/v1"
+	"go.alis.build/adk/launchers/internal/threadmeta"
 	"go.alis.build/iam/v3"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -109,13 +110,15 @@ func executeCron(
 	}()
 
 	// ADK runs as the cron owner; SchedulerService RPCs in this function use system ctx.
-	runCtx := userRunContext(ctx, ownerID, cron.GetEmail())
+	owner := ownerIdentity(ownerID, cron.GetEmail())
+	runCtx := userRunContext(ctx, owner)
 
 	sessionID := cron.GetContextId()
+	cronContextID := sessionID
 
 	// Recurring crons: run initial_prompt once before the first regular prompt.
 	if cron.GetType() == pb.Cron_TYPE_CRON && sessionID == "" && strings.TrimSpace(cron.GetInitialPrompt()) != "" {
-		id, err := rt.RunUserMessage(runCtx, ownerID, "", cron.GetInitialPrompt())
+		id, err := runCronMessage(runCtx, rt, cfg, owner, cronContextID, "", cron.GetInitialPrompt())
 		if err != nil {
 			runErr = fmt.Errorf("initial run: %w", err)
 			return runErr
@@ -123,7 +126,7 @@ func executeCron(
 		sessionID = mergeSessionID(sessionID, id)
 	}
 
-	id, err := rt.RunUserMessage(runCtx, ownerID, sessionID, cron.GetPrompt())
+	id, err := runCronMessage(runCtx, rt, cfg, owner, cronContextID, sessionID, cron.GetPrompt())
 	if err != nil {
 		runErr = fmt.Errorf("run: %w", err)
 		return runErr
@@ -164,9 +167,38 @@ func executeCron(
 	return nil
 }
 
-// userRunContext returns a context that runs ADK as the cron owner.
-// Mirrors the stock handler's callAgent(userID, email) impersonation.
-func userRunContext(parent context.Context, ownerID, email string) context.Context {
+// runCronMessage runs one ADK user turn for a cron tick and optionally upserts
+// thread metadata so the run appears in the AGUI history listing.
+func runCronMessage(
+	ctx context.Context,
+	rt cronRunner,
+	cfg *cronConfig,
+	owner *iam.Identity,
+	cronContextID, sessionID, prompt string,
+) (string, error) {
+	threadID := threadmeta.ThreadIDFromSession(sessionID)
+	if threadID == "" {
+		threadID = threadmeta.ThreadIDFromSession(cronContextID)
+	}
+	appName := cfg.defaultAppName
+
+	if cfg.threadService != nil && threadID != "" {
+		threadmeta.Upsert(ctx, cfg.threadService, owner, cfg.launcherCfg, cfg.defaultAppName, threadID, appName, prompt)
+	}
+
+	newSessionID, runErr := rt.RunUserMessage(ctx, owner.ID, sessionID, prompt)
+
+	// Post-run upsert only when ADK returned a new session id that we haven't
+	// already upserted above. This avoids a redundant CreateOrUpdateThread when
+	// a continuing cron reuses the same thread id (idempotent, but wasteful),
+	// and matches the AGUI interactive path which upserts once per run.
+	if runErr == nil && cfg.threadService != nil && newSessionID != "" && newSessionID != threadID {
+		threadmeta.Upsert(ctx, cfg.threadService, owner, cfg.launcherCfg, cfg.defaultAppName, newSessionID, appName, prompt)
+	}
+	return newSessionID, runErr
+}
+
+func ownerIdentity(ownerID, email string) *iam.Identity {
 	if email == "" {
 		email = ownerID
 	}
@@ -174,8 +206,14 @@ func userRunContext(parent context.Context, ownerID, email string) context.Conte
 	if strings.HasSuffix(email, ".iam.gserviceaccount.com") {
 		user.Type = iam.ServiceAccount
 	}
-	ctx := user.OutgoingMetadata(parent)
-	return user.Context(ctx)
+	return user
+}
+
+// userRunContext returns a context that runs ADK as the cron owner.
+// Mirrors the stock handler's callAgent(userID, email) impersonation.
+func userRunContext(parent context.Context, owner *iam.Identity) context.Context {
+	ctx := owner.OutgoingMetadata(parent)
+	return owner.Context(ctx)
 }
 
 // incomingContext copies HTTP headers into gRPC incoming metadata for downstream RPCs.

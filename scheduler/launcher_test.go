@@ -3,6 +3,7 @@ package scheduler
 import (
 	"testing"
 
+	historyservice "go.alis.build/agui/history/service"
 	schedulerservice "go.alis.build/a2a/extension/scheduler/service"
 	"google.golang.org/grpc"
 )
@@ -43,4 +44,12 @@ func TestWithGRPCRegistrar_nilPanics(t *testing.T) {
 		}
 	}()
 	WithGRPCRegistrar(nil)
+}
+
+func TestWithThreadService_setsCronCfg(t *testing.T) {
+	svc := &historyservice.ThreadService{}
+	l := NewLauncher("my.agent", &schedulerservice.SchedulerService{}, WithThreadService(svc)).(*schedulerLauncher)
+	if l.cronCfg.threadService != svc {
+		t.Fatal("expected WithThreadService to set cronCfg.threadService")
+	}
 }
