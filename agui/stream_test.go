@@ -140,6 +140,77 @@ func TestProcessEvent_TextStreaming_FinalDeduped(t *testing.T) {
 	}
 }
 
+func TestProcessEvent_TextStreaming_FinalDedupedAfterTurnComplete(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	var allEvts []sseEvent
+
+	e1, rec1 := newTestEmitter()
+	ev1 := session.NewEvent("inv1")
+	ev1.Content = genai.NewContentFromText("Hel", genai.RoleModel)
+	ev1.Partial = true
+	if _, err := l.processEvent(e1, ev1, state); err != nil {
+		t.Fatalf("processEvent() partial 1 error = %v", err)
+	}
+	allEvts = append(allEvts, parseSSEEvents(rec1.Body.String())...)
+
+	e2, rec2 := newTestEmitter()
+	ev2 := session.NewEvent("inv1")
+	ev2.Content = genai.NewContentFromText("lo", genai.RoleModel)
+	ev2.Partial = true
+	if _, err := l.processEvent(e2, ev2, state); err != nil {
+		t.Fatalf("processEvent() partial 2 error = %v", err)
+	}
+	allEvts = append(allEvts, parseSSEEvents(rec2.Body.String())...)
+
+	// TurnComplete between partial stream and ADK's trailing non-partial final.
+	e3, rec3 := newTestEmitter()
+	ev3 := session.NewEvent("inv1")
+	ev3.TurnComplete = true
+	if _, err := l.processEvent(e3, ev3, state); err != nil {
+		t.Fatalf("processEvent() turn complete error = %v", err)
+	}
+	turnEvts := parseSSEEvents(rec3.Body.String())
+	allEvts = append(allEvts, turnEvts...)
+	if len(turnEvts) != 1 || turnEvts[0].Type != events.EventTypeTextMessageEnd {
+		t.Fatalf("turn complete: got %d events, want 1 TEXT_MESSAGE_END", len(turnEvts))
+	}
+
+	e4, rec4 := newTestEmitter()
+	ev4 := session.NewEvent("inv1")
+	ev4.Content = genai.NewContentFromText("Hello", genai.RoleModel)
+	ev4.Partial = false
+	if _, err := l.processEvent(e4, ev4, state); err != nil {
+		t.Fatalf("processEvent() final error = %v", err)
+	}
+	finalEvts := parseSSEEvents(rec4.Body.String())
+	if len(finalEvts) != 0 {
+		t.Fatalf("got %d events after final non-partial, want 0 (duplicate lifecycle)", len(finalEvts))
+	}
+
+	var starts, ends int
+	var deltaSum strings.Builder
+	for _, ev := range allEvts {
+		switch ev.Type {
+		case events.EventTypeTextMessageStart:
+			starts++
+		case events.EventTypeTextMessageEnd:
+			ends++
+		case events.EventTypeTextMessageContent:
+			deltaSum.WriteString(ev.str("delta"))
+		}
+	}
+	if starts != 1 {
+		t.Errorf("got %d TEXT_MESSAGE_START, want 1", starts)
+	}
+	if ends != 1 {
+		t.Errorf("got %d TEXT_MESSAGE_END, want 1", ends)
+	}
+	if deltaSum.String() != "Hello" {
+		t.Errorf("content deltas = %q, want Hello", deltaSum.String())
+	}
+}
+
 func TestProcessEvent_TextStreaming_NonPartialOnly(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
@@ -315,6 +386,91 @@ func TestProcessEvent_ReasoningPhase_FinalDeduped(t *testing.T) {
 	evts3 := parseSSEEvents(rec3.Body.String())
 	if len(evts3) != 0 {
 		t.Fatalf("got %d events, want 0 (final reasoning deduped)", len(evts3))
+	}
+}
+
+func TestProcessEvent_ReasoningPhase_FinalDedupedAfterTurnComplete(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{runID: "r1", threadID: "t1", rootAppName: "test-app"}
+	var allEvts []sseEvent
+
+	e1, rec1 := newTestEmitter()
+	ev1 := session.NewEvent("inv1")
+	ev1.Content = &genai.Content{
+		Role:  string(genai.RoleModel),
+		Parts: []*genai.Part{{Text: "think", Thought: true}},
+	}
+	ev1.Partial = true
+	if _, err := l.processEvent(e1, ev1, state); err != nil {
+		t.Fatalf("processEvent() partial 1 error = %v", err)
+	}
+	allEvts = append(allEvts, parseSSEEvents(rec1.Body.String())...)
+
+	e2, rec2 := newTestEmitter()
+	ev2 := session.NewEvent("inv1")
+	ev2.Content = &genai.Content{
+		Role:  string(genai.RoleModel),
+		Parts: []*genai.Part{{Text: "thinking", Thought: true}},
+	}
+	ev2.Partial = true
+	if _, err := l.processEvent(e2, ev2, state); err != nil {
+		t.Fatalf("processEvent() partial 2 error = %v", err)
+	}
+	allEvts = append(allEvts, parseSSEEvents(rec2.Body.String())...)
+
+	e3, rec3 := newTestEmitter()
+	ev3 := session.NewEvent("inv1")
+	ev3.TurnComplete = true
+	if _, err := l.processEvent(e3, ev3, state); err != nil {
+		t.Fatalf("processEvent() turn complete error = %v", err)
+	}
+	turnEvts := parseSSEEvents(rec3.Body.String())
+	allEvts = append(allEvts, turnEvts...)
+	hasReasoningEnd := false
+	for _, ev := range turnEvts {
+		if ev.Type == events.EventTypeReasoningMessageEnd || ev.Type == events.EventTypeReasoningEnd {
+			hasReasoningEnd = true
+		}
+	}
+	if !hasReasoningEnd {
+		t.Fatalf("turn complete: expected reasoning end events, got %d events", len(turnEvts))
+	}
+
+	e4, rec4 := newTestEmitter()
+	ev4 := session.NewEvent("inv1")
+	ev4.Content = &genai.Content{
+		Role:  string(genai.RoleModel),
+		Parts: []*genai.Part{{Text: "thinking", Thought: true}},
+	}
+	ev4.Partial = false
+	if _, err := l.processEvent(e4, ev4, state); err != nil {
+		t.Fatalf("processEvent() final error = %v", err)
+	}
+	finalEvts := parseSSEEvents(rec4.Body.String())
+	if len(finalEvts) != 0 {
+		t.Fatalf("got %d events after final non-partial, want 0 (duplicate reasoning lifecycle)", len(finalEvts))
+	}
+
+	var msgStarts, msgEnds int
+	var deltaSum strings.Builder
+	for _, ev := range allEvts {
+		switch ev.Type {
+		case events.EventTypeReasoningMessageStart:
+			msgStarts++
+		case events.EventTypeReasoningMessageEnd:
+			msgEnds++
+		case events.EventTypeReasoningMessageContent:
+			deltaSum.WriteString(ev.str("delta"))
+		}
+	}
+	if msgStarts != 1 {
+		t.Errorf("got %d REASONING_MESSAGE_START, want 1", msgStarts)
+	}
+	if msgEnds != 1 {
+		t.Errorf("got %d REASONING_MESSAGE_END, want 1", msgEnds)
+	}
+	if deltaSum.String() != "thinking" {
+		t.Errorf("reasoning deltas = %q, want thinking", deltaSum.String())
 	}
 }
 

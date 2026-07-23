@@ -198,6 +198,11 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 			// ADK partial and final events carry accumulated thought text, not
 			// deltas. Track how much has been emitted and only send the new portion.
 			if part.Thought && part.Text != "" {
+				if state.currentReasoningMessageID == "" {
+					if ev.Partial || len(part.Text) > state.emittedReasoningLen {
+						state.emittedReasoningLen = 0
+					}
+				}
 				if len(part.Text) <= state.emittedReasoningLen {
 					continue
 				}
@@ -211,6 +216,7 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 					e.emit(events.NewReasoningStartEvent(state.currentReasoningPhaseID))
 				}
 				if state.currentReasoningMessageID == "" {
+					state.emittedReasoningLen = len(part.Text)
 					state.currentReasoningMessageID = events.GenerateMessageID()
 					e.emit(events.NewReasoningMessageStartEvent(state.currentReasoningMessageID, "reasoning"))
 				}
@@ -228,11 +234,17 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 				// may deliver only the final event; emit any text not yet streamed.
 				var delta string
 				if ev.Partial {
+					if state.currentTextMessageID == "" {
+						state.emittedTextLen = 0
+					}
 					delta = part.Text
 					state.emittedTextLen += len(delta)
 				} else {
 					if len(part.Text) <= state.emittedTextLen {
 						continue
+					}
+					if state.currentTextMessageID == "" {
+						state.emittedTextLen = 0
 					}
 					delta = part.Text[state.emittedTextLen:]
 					state.emittedTextLen = len(part.Text)
@@ -242,6 +254,7 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 				}
 
 				if state.currentTextMessageID == "" {
+					state.emittedTextLen = len(part.Text)
 					state.currentTextMessageID = events.GenerateMessageID()
 					// Blank / whitespace-only authors are trimmed so the wire
 					// JSON omits "name" via omitempty on the upstream field.
@@ -367,7 +380,6 @@ func closeTextMessage(e *emitter, state *streamState) {
 	e.emit(events.NewTextMessageEndEvent(state.currentTextMessageID))
 	state.lastTextMessageID = state.currentTextMessageID
 	state.currentTextMessageID = ""
-	state.emittedTextLen = 0
 }
 
 // closeReasoningMessage emits ReasoningMessageEnd and ReasoningEnd events
@@ -381,7 +393,6 @@ func closeReasoningMessage(e *emitter, state *streamState) {
 		e.emit(events.NewReasoningEndEvent(state.currentReasoningPhaseID))
 		state.currentReasoningPhaseID = ""
 	}
-	state.emittedReasoningLen = 0
 }
 
 // emitInterrupt converts an adk_request_confirmation FunctionCall into an
