@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	pb "go.alis.build/common/alis/a2a/extension/scheduler/v1"
 	"go.alis.build/adk/launchers/internal/threadmeta"
+	pb "go.alis.build/common/alis/a2a/extension/scheduler"
 	"go.alis.build/iam/v3"
 	adklauncher "google.golang.org/adk/cmd/launcher"
 )

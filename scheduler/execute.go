@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strings"
 
-	"go.alis.build/alog"
-	pb "go.alis.build/common/alis/a2a/extension/scheduler/v1"
 	"go.alis.build/adk/launchers/internal/threadmeta"
+	"go.alis.build/alog"
+	pb "go.alis.build/common/alis/a2a/extension/scheduler"
 	"go.alis.build/iam/v3"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"

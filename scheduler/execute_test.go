@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	historyservice "go.alis.build/agui/history/service"
-	pb "go.alis.build/common/alis/a2a/extension/scheduler/v1"
+	pb "go.alis.build/common/alis/a2a/extension/scheduler"
 	"go.alis.build/iam/v3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

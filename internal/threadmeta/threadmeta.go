@@ -27,7 +27,7 @@ import (
 	"strings"
 
 	historyservice "go.alis.build/agui/history/service"
-	pb "go.alis.build/common/alis/agui/history/v1"
+	pb "go.alis.build/common/alis/agui/history"
 	"go.alis.build/iam/v3"
 	adklauncher "google.golang.org/adk/cmd/launcher"
 	"google.golang.org/grpc"

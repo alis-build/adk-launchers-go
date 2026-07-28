@@ -3,7 +3,7 @@ package scheduler
 import (
 	"testing"
 
-	pb "go.alis.build/common/alis/a2a/extension/scheduler/v1"
+	pb "go.alis.build/common/alis/a2a/extension/scheduler"
 )
 
 func TestOwnerFromCron(t *testing.T) {
