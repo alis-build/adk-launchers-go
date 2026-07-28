@@ -15,7 +15,7 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	historyservice "go.alis.build/agui/history/service"
-	pb "go.alis.build/common/alis/agui/history/v1"
+	pb "go.alis.build/common/alis/agui/history"
 	"go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
 	"google.golang.org/adk/v2/session"

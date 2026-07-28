@@ -9,10 +9,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"go.alis.build/alog"
-	pb "go.alis.build/common/alis/agui/scheduler/v1"
 	"go.alis.build/adk/launchers/internal/adkrun"
 	"go.alis.build/adk/launchers/internal/threadmeta"
+	"go.alis.build/alog"
+	pb "go.alis.build/common/alis/agui/scheduler"
 	"go.alis.build/iam/v3"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"

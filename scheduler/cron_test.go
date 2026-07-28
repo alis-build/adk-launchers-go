@@ -3,7 +3,7 @@ package scheduler
 import (
 	"testing"
 
-	pb "go.alis.build/common/alis/agui/scheduler/v1"
+	pb "go.alis.build/common/alis/agui/scheduler"
 )
 
 func TestOwnerFromCron(t *testing.T) {

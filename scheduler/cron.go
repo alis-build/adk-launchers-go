@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"go.alis.build/alog"
-	historyservice "go.alis.build/agui/history/service"
-	pb "go.alis.build/common/alis/agui/scheduler/v1"
 	"go.alis.build/adk/launchers/internal/adkrun"
+	historyservice "go.alis.build/agui/history/service"
+	"go.alis.build/alog"
+	pb "go.alis.build/common/alis/agui/scheduler"
 	"go.alis.build/iam/v3"
 	adklauncher "google.golang.org/adk/v2/cmd/launcher"
 	"google.golang.org/protobuf/types/known/structpb"

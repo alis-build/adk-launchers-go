@@ -1,20 +1,21 @@
 module go.alis.build/adk/launchers
 
-go 1.26.1
+go 1.26.5
 
 require (
 	cloud.google.com/go/storage v1.64.0
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260723113845-932f8fabf617
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260728151320-ea3db4630d1e
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
-	go.alis.build/agui/history v0.1.4
-	go.alis.build/agui/scheduler v0.1.1
+	go.alis.build/agui/history v0.1.5
+	go.alis.build/agui/scheduler v0.1.2
 	go.alis.build/alog v0.1.0
-	go.alis.build/common v1.1.15
+	go.alis.build/common/alis/agui/history v1.4.0
+	go.alis.build/common/alis/agui/scheduler v1.0.0
 	go.alis.build/iam/v3 v3.8.0
 	go.alis.build/lro/v2 v2.9.0
 	go.alis.build/mux v0.4.9
-	google.golang.org/adk/v2 v2.0.0
+	google.golang.org/adk/v2 v2.1.0
 	google.golang.org/api v0.290.0
 	google.golang.org/genai v1.65.0
 	google.golang.org/grpc v1.82.1
@@ -26,7 +27,7 @@ require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.22.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
-	cloud.google.com/go/cloudtasks v1.18.0 // indirect
+	cloud.google.com/go/cloudtasks v1.19.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/iam v1.12.0 // indirect
 	cloud.google.com/go/longrunning v1.2.0 // indirect
@@ -34,10 +35,10 @@ require (
 	cloud.google.com/go/scheduler v1.16.0 // indirect
 	cloud.google.com/go/spanner v1.93.0 // indirect
 	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.6.0 // indirect
-	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.34.0 // indirect
-	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.58.0 // indirect
-	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.58.0 // indirect
-	github.com/a2aproject/a2a-go/v2 v2.3.1 // indirect
+	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.35.0 // indirect
+	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.59.0 // indirect
+	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.59.0 // indirect
+	github.com/a2aproject/a2a-go/v2 v2.4.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
@@ -51,7 +52,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/safehtml v0.1.0 // indirect
-	github.com/googleapis/enterprise-certificate-proxy v0.3.18 // indirect
+	github.com/googleapis/enterprise-certificate-proxy v0.3.19 // indirect
 	github.com/googleapis/gax-go/v2 v2.23.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
@@ -59,6 +60,7 @@ require (
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.8.1 // indirect
+	go.alis.build/common/alis/iam v1.18.0 // indirect
 	go.alis.build/validation v1.0.7 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
@@ -83,9 +85,9 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	google.golang.org/genproto v0.0.0-20260720211330-0afa2a65878a // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260720211330-0afa2a65878a // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260720211330-0afa2a65878a // indirect
+	google.golang.org/genproto v0.0.0-20260727163830-6c54dddc4772 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260727163830-6c54dddc4772 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260727163830-6c54dddc4772 // indirect
 	rsc.io/omap v1.2.0 // indirect
 	rsc.io/ordered v1.1.1 // indirect
 )

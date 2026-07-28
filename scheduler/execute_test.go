@@ -12,8 +12,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	pb "go.alis.build/common/alis/agui/scheduler/v1"
 	"go.alis.build/adk/launchers/internal/adkrun"
+	pb "go.alis.build/common/alis/agui/scheduler"
 	"go.alis.build/iam/v3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -51,10 +51,10 @@ type recordedRun struct {
 }
 
 type fakeRunner struct {
-	runs      []recordedRun
-	nextSess  string
-	runErr    error
-	done      chan struct{}
+	runs     []recordedRun
+	nextSess string
+	runErr   error
+	done     chan struct{}
 }
 
 func (f *fakeRunner) RunCron(_ context.Context, req adkrun.RunRequest) (string, error) {
