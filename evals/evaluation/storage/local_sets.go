@@ -119,7 +119,7 @@ func (m *LocalEvalSetsManager) ListEvalSets(appName string) ([]string, error) {
 		}
 	}
 	sort.Strings(ids)
-	return ids, nil
+	return StringSliceForJSON(ids), nil
 }
 
 func (m *LocalEvalSetsManager) GetEvalCase(appName, evalSetID, evalCaseID string) (*models.EvalCase, error) {

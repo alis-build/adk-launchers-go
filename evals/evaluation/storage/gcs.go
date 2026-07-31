@@ -157,7 +157,7 @@ func (m *GCSEvalSetsManager) ListEvalSets(appName string) ([]string, error) {
 		return nil, fmt.Errorf("%w: eval directory for app %q not found", ErrNotFound, appName)
 	}
 	sort.Strings(ids)
-	return ids, nil
+	return StringSliceForJSON(ids), nil
 }
 
 func (m *GCSEvalSetsManager) GetEvalCase(appName, evalSetID, evalCaseID string) (*models.EvalCase, error) {
@@ -292,5 +292,5 @@ func (m *GCSEvalSetResultsManager) ListEvalSetResults(appName string) ([]string,
 		}
 	}
 	sort.Strings(ids)
-	return ids, nil
+	return StringSliceForJSON(ids), nil
 }

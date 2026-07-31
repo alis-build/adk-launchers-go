@@ -96,7 +96,7 @@ func (m *LocalEvalSetResultsManager) ListEvalSetResults(appName string) ([]strin
 		}
 	}
 	sort.Strings(ids)
-	return ids, nil
+	return StringSliceForJSON(ids), nil
 }
 
 // parseEvalSetResultJSON unmarshals a persisted eval set result file.

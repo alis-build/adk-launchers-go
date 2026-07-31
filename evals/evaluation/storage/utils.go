@@ -72,3 +72,12 @@ func createEvalSetResult(appName, evalSetID string, caseResults []models.EvalCas
 		CreationTimestamp: float64(ts),
 	}
 }
+
+// StringSliceForJSON returns ids when non-nil, or an empty slice when nil, so JSON
+// encoders emit [] instead of null for empty list results.
+func StringSliceForJSON(ids []string) []string {
+	if ids == nil {
+		return []string{}
+	}
+	return ids
+}

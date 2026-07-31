@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -158,5 +159,47 @@ func TestListEvalSetsMissingApp(t *testing.T) {
 	_, err := m.ListEvalSets("missing_app")
 	if err == nil || !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestListEvalSetResultsEmptyReturnsNonNilSlice(t *testing.T) {
+	dir := t.TempDir()
+	m := storage.NewLocalEvalSetResultsManager(dir)
+
+	ids, err := m.ListEvalSetResults("app")
+	if err != nil {
+		t.Fatalf("ListEvalSetResults: %v", err)
+	}
+	if ids == nil || len(ids) != 0 {
+		t.Fatalf("ids = %v, want non-nil empty slice", ids)
+	}
+
+	historyDir := filepath.Join(dir, "app", ".adk", "eval_history")
+	if err := os.MkdirAll(historyDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	ids, err = m.ListEvalSetResults("app")
+	if err != nil {
+		t.Fatalf("ListEvalSetResults empty dir: %v", err)
+	}
+	if ids == nil || len(ids) != 0 {
+		t.Fatalf("ids = %v, want non-nil empty slice", ids)
+	}
+}
+
+func TestListEvalSetsEmptyAppDirReturnsNonNilSlice(t *testing.T) {
+	dir := t.TempDir()
+	appDir := filepath.Join(dir, "my_app")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	m := storage.NewLocalEvalSetsManager(dir)
+
+	ids, err := m.ListEvalSets("my_app")
+	if err != nil {
+		t.Fatalf("ListEvalSets: %v", err)
+	}
+	if ids == nil || len(ids) != 0 {
+		t.Fatalf("ids = %v, want non-nil empty slice", ids)
 	}
 }
