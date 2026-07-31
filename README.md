@@ -167,7 +167,7 @@ Requires `agui` on the `adk web` command line. Change prefix with `agui -path_pr
 | POST   | `/agui/run_sse`                     | _(auth)_ JSON **RunAgentInput** body → `text/event-stream` (AG-UI SSE). Bundled app passes `context: [{description:"app", value: agentId}]` for multi-agent routing. [AG-UI spec](https://docs.ag-ui.com) |
 | GET    | `/agui/threads/{threadId}/messages` | _(auth)_ Query: `agentId`, `after` (RFC 3339), `limit`. JSON: `{"messages":[],"nextCursor":"..."}` or SSE if `Accept: text/event-stream`                                                                  |
 | GET    | `/agui/threads/{threadId}`          | _(auth)_ Single thread metadata (`WithThreadService`)                                                                                                                                                     |
-| DELETE | `/agui/threads/{threadId}`          | _(auth)_ Delete thread (`WithThreadService`)                                                                                                                                                              |
+| DELETE | `/agui/threads/{threadId}`          | _(auth)_ Delete thread metadata and backing ADK session (`WithThreadService`)                                                                                                                             |
 | GET    | `/agui/threads`                     | _(auth)_ Query: `agentId`, `pageSize`, `pageToken`. Thread list with unread/pinned metadata (`WithThreadService`)                                                                                         |
 
 #### History JSON-RPC (`agui` + `WithThreadService`)
