@@ -33,7 +33,7 @@ func (g *Generator) generateInferencesLive(ctx context.Context, opts InferenceOp
 	}
 
 	userID, appName, state := sessionBootstrap(opts.SessionInput, g.Runtime.AppName())
-	sessionID := NewEvalSessionID()
+	sessionID := evalSessionID(opts)
 
 	r, err := g.newEvalRunner(appName, interceptor)
 	if err != nil {

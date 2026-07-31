@@ -23,6 +23,82 @@ func TestNewEvalSessionID(t *testing.T) {
 	}
 }
 
+func TestEvalSessionIDUsesOptionWhenSet(t *testing.T) {
+	const want = EvalSessionIDPrefix + "fixed"
+	got := evalSessionID(InferenceOptions{SessionID: want})
+	if got != want {
+		t.Fatalf("evalSessionID() = %q, want %q", got, want)
+	}
+}
+
+func TestEvalSessionIDAllocatesWhenEmpty(t *testing.T) {
+	got := evalSessionID(InferenceOptions{})
+	if !strings.HasPrefix(got, EvalSessionIDPrefix) {
+		t.Fatalf("evalSessionID() = %q", got)
+	}
+}
+
+func TestGenerateInferencesUsesProvidedSessionID(t *testing.T) {
+	ctx := context.Background()
+	sessSvc := session.InMemoryService()
+	const wantSessionID = EvalSessionIDPrefix + "provided-session"
+
+	replyAgent, err := agent.New(agent.Config{
+		Name: "reply-agent",
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				ev := session.NewEvent(ctx, ctx.InvocationID())
+				ev.Author = "reply-agent"
+				ev.Content = genai.NewContentFromText("ok", genai.RoleModel)
+				yield(ev, nil)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+
+	rt, err := adkrun.NewRuntime(&launcher.Config{
+		AgentLoader:    agent.NewSingleLoader(replyAgent),
+		SessionService: sessSvc,
+	}, "reply-agent")
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+
+	gen := &Generator{Runtime: rt}
+	evalCase := models.EvalCase{
+		EvalID: "case-1",
+		Conversation: []models.Invocation{
+			{UserContent: genai.NewContentFromText("Hello", genai.RoleUser)},
+		},
+	}
+	provider := simulation.UserSimulatorProvider{}
+	sim, err := provider.Provide(evalCase)
+	if err != nil {
+		t.Fatalf("Provide: %v", err)
+	}
+
+	if _, err := gen.GenerateInferences(ctx, InferenceOptions{
+		SessionID:     wantSessionID,
+		UserSimulator: sim,
+	}); err != nil {
+		t.Fatalf("GenerateInferences: %v", err)
+	}
+
+	resp, err := sessSvc.Get(ctx, &session.GetRequest{
+		AppName:   "reply-agent",
+		UserID:    defaultEvalUserID,
+		SessionID: wantSessionID,
+	})
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	if resp == nil || resp.Session == nil || resp.Session.Events().Len() == 0 {
+		t.Fatal("expected session with events at provided session id")
+	}
+}
+
 func TestGetAppDetailsByInvocationID(t *testing.T) {
 	interceptor, err := NewRequestInterceptor()
 	if err != nil {

@@ -21,6 +21,9 @@ type InferenceOptions struct {
 	UseLive              bool
 	LiveTimeoutSeconds   int
 	RequestInterceptor   *RequestInterceptor
+	// SessionID is the ADK session id for the inference run. When empty, the
+	// generator allocates one via NewEvalSessionID.
+	SessionID string
 }
 
 // Generator runs agents through the user simulator loop for eval inference.
@@ -31,6 +34,14 @@ type Generator struct {
 // NewEvalSessionID returns a new eval-scoped session id.
 func NewEvalSessionID() string {
 	return EvalSessionIDPrefix + uuid.NewString()
+}
+
+// evalSessionID returns opts.SessionID when set, otherwise a new eval session id.
+func evalSessionID(opts InferenceOptions) string {
+	if strings.TrimSpace(opts.SessionID) != "" {
+		return opts.SessionID
+	}
+	return NewEvalSessionID()
 }
 
 // GenerateInferences runs the agent against the user simulator and returns invocations.
@@ -59,7 +70,7 @@ func (g *Generator) generateInferencesStandard(ctx context.Context, opts Inferen
 	}
 
 	userID, appName, state := sessionBootstrap(opts.SessionInput, g.Runtime.AppName())
-	sessionID := NewEvalSessionID()
+	sessionID := evalSessionID(opts)
 	pluginConfig := g.Runtime.MergeExtraPlugins(interceptor.Plugin())
 
 	var events []*session.Event

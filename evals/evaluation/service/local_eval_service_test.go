@@ -25,6 +25,75 @@ func (s stubRubricJudge) GenerateJudgeResponse(context.Context, string, models.J
 	return s.response, nil
 }
 
+func TestPerformInferenceSessionIDMatchesRunnerSession(t *testing.T) {
+	ctx := context.Background()
+	sessSvc := session.InMemoryService()
+	const wantSessionID = generator.EvalSessionIDPrefix + "fixed-eval-session"
+
+	sets := storage.NewInMemoryEvalSetsManager()
+	_, _ = sets.CreateEvalSet("app", "set1")
+	_ = sets.AddEvalCase("app", "set1", models.EvalCase{
+		EvalID: "case1",
+		Conversation: []models.Invocation{
+			{UserContent: genai.NewContentFromText("Hello", genai.RoleUser)},
+		},
+	})
+
+	a, err := agent.New(agent.Config{
+		Name: "app",
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				ev := session.NewEvent(ctx, ctx.InvocationID())
+				ev.Author = "app"
+				ev.Content = genai.NewContentFromText("ok", genai.RoleModel)
+				yield(ev, nil)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	rt, err := adkrun.NewRuntime(&launcher.Config{
+		AgentLoader:    agent.NewSingleLoader(a),
+		SessionService: sessSvc,
+	}, "app")
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+
+	svc := &service.LocalEvalService{
+		Generator:    &generator.Generator{Runtime: rt},
+		Sets:         sets,
+		SimProvider:  simulation.UserSimulatorProvider{},
+		Sessions:     sessSvc,
+		NewSessionID: func() string { return wantSessionID },
+	}
+	inf, err := svc.PerformInference(ctx, service.InferenceRequest{
+		AppName: "app", EvalSetID: "set1",
+	})
+	if err != nil {
+		t.Fatalf("PerformInference: %v", err)
+	}
+	if len(inf) != 1 || inf[0].Status != service.InferenceStatusSuccess {
+		t.Fatalf("inf = %+v", inf)
+	}
+	if inf[0].SessionID != wantSessionID {
+		t.Fatalf("SessionID = %q, want %q", inf[0].SessionID, wantSessionID)
+	}
+
+	resp, err := sessSvc.Get(ctx, &session.GetRequest{
+		AppName:   "app",
+		UserID:    "test_user_id",
+		SessionID: wantSessionID,
+	})
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	if resp == nil || resp.Session == nil || resp.Session.Events().Len() == 0 {
+		t.Fatal("expected inference session to exist with events")
+	}
+}
+
 func TestLocalEvalServiceEvaluate(t *testing.T) {
 	ctx := context.Background()
 	sets := storage.NewInMemoryEvalSetsManager()
