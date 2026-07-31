@@ -480,7 +480,7 @@ func (l *evalsLauncher) listEvalSetsLegacyHandler() alismux.Func {
 		if err != nil {
 			return err
 		}
-		return writeJSON(w, http.StatusOK, ids)
+		return writeJSON(w, http.StatusOK, storage.StringSliceForJSON(ids))
 	}
 }
 
@@ -490,7 +490,10 @@ func (l *evalsLauncher) listEvalSetIDs(appName string) ([]string, error) {
 	if err != nil && storageNotFound(err) {
 		return []string{}, nil
 	}
-	return ids, err
+	if err != nil {
+		return nil, err
+	}
+	return storage.StringSliceForJSON(ids), nil
 }
 
 func (l *evalsLauncher) getEvalSetHandler() alismux.Func {
@@ -827,7 +830,7 @@ func (l *evalsLauncher) listEvalResultsLegacyHandler() alismux.Func {
 		if err != nil {
 			return err
 		}
-		return writeJSON(w, http.StatusOK, ids)
+		return writeJSON(w, http.StatusOK, storage.StringSliceForJSON(ids))
 	}
 }
 

@@ -7,6 +7,9 @@ import (
 	"iter"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
@@ -346,4 +349,77 @@ func TestDeleteEvalSet(t *testing.T) {
 	if got != nil {
 		t.Fatal("expected eval set to be deleted")
 	}
+}
+
+func assertLegacyListJSONEmptyArray(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("body = %q, want []", rec.Body.String())
+	}
+}
+
+func TestLegacyListEvalResultsEmptyReturnsJSONArray(t *testing.T) {
+	l, _ := newHandlerTestLauncher(t)
+	rec := callHandler(t, l.listEvalResultsLegacyHandler(), http.MethodGet, "/apps/my_app/eval_results", nil, map[string]string{
+		"app_name": "my_app",
+	})
+	assertLegacyListJSONEmptyArray(t, rec)
+}
+
+func TestLegacyListEvalResultsNilSliceReturnsJSONArray(t *testing.T) {
+	l, _ := newHandlerTestLauncher(t)
+	l.resultsManager = nilSliceResultsManager{}
+	rec := callHandler(t, l.listEvalResultsLegacyHandler(), http.MethodGet, "/apps/my_app/eval_results", nil, map[string]string{
+		"app_name": "my_app",
+	})
+	assertLegacyListJSONEmptyArray(t, rec)
+}
+
+func TestLegacyListEvalSetsEmptyReturnsJSONArray(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "my_app"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	sets := storage.NewLocalEvalSetsManager(dir)
+	results := storage.NewLocalEvalSetResultsManager(dir)
+	l := NewLauncher(
+		WithAgentsDir(dir),
+		WithEvalSetsManager(sets),
+		WithEvalSetResultsManager(results),
+	).(*evalsLauncher)
+	l.setsManager = sets
+	l.resultsManager = results
+
+	rec := callHandler(t, l.listEvalSetsLegacyHandler(), http.MethodGet, "/apps/my_app/eval_sets", nil, map[string]string{
+		"app_name": "my_app",
+	})
+	assertLegacyListJSONEmptyArray(t, rec)
+}
+
+func TestLegacyListEvalCasesEmptyReturnsJSONArray(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+
+	rec := callHandler(t, l.listEvalCasesHandler(), http.MethodGet, "/apps/my_app/eval_sets/set1/evals", nil, map[string]string{
+		"app_name": "my_app", "eval_set_id": "set1",
+	})
+	assertLegacyListJSONEmptyArray(t, rec)
+}
+
+// nilSliceResultsManager simulates GCS ListEvalSetResults returning a nil slice on success.
+type nilSliceResultsManager struct{}
+
+func (nilSliceResultsManager) SaveEvalSetResult(string, string, []models.EvalCaseResult) (*models.EvalSetResult, error) {
+	return nil, nil
+}
+
+func (nilSliceResultsManager) GetEvalSetResult(string, string) (*models.EvalSetResult, error) {
+	return nil, nil
+}
+
+func (nilSliceResultsManager) ListEvalSetResults(string) ([]string, error) {
+	return nil, nil
 }
