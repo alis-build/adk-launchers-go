@@ -100,10 +100,10 @@ func GetLlmBackedUserSimulatorPrompt(conversationPlan, conversationHistory, stop
 	}
 
 	params := map[string]string{
-		"stop_signal":         stopSignal,
-		"conversation_plan":   conversationPlan,
+		"stop_signal":          stopSignal,
+		"conversation_plan":    conversationPlan,
 		"conversation_history": conversationHistory,
-		"persona":             persona,
+		"persona":              persona,
 	}
 	return renderTemplate(template, params), nil
 }

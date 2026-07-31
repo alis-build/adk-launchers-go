@@ -15,9 +15,9 @@ const llmRequestIDKey = "__llm_request_key__"
 
 // RequestInterceptor caches LLM requests and links them to model responses.
 type RequestInterceptor struct {
-	mu         sync.RWMutex
-	requests   map[string]*model.LLMRequest
-	plugin     *plugin.Plugin
+	mu       sync.RWMutex
+	requests map[string]*model.LLMRequest
+	plugin   *plugin.Plugin
 }
 
 // NewRequestInterceptor builds the eval request interceptor plugin. Returns an

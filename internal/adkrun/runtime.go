@@ -218,4 +218,3 @@ func (rt *Runtime) runSSE(ctx context.Context, req RunRequest, pluginConfig runn
 	msg.Parts = slices.Clone(req.NewMessage.Parts)
 	return sessionID, r.Run(ctx, req.UserID, sessionID, &msg, runCfg, opts...), nil
 }
-

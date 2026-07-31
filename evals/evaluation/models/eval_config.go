@@ -19,9 +19,9 @@ type CustomMetricConfig struct {
 
 // EvalConfig holds evaluation criteria and simulator settings.
 type EvalConfig struct {
-	Criteria            map[string]jsonCriterion     `json:"criteria,omitempty"`
+	Criteria            map[string]jsonCriterion      `json:"criteria,omitempty"`
 	CustomMetrics       map[string]CustomMetricConfig `json:"customMetrics,omitempty"`
-	UserSimulatorConfig json.RawMessage              `json:"userSimulatorConfig,omitempty"`
+	UserSimulatorConfig json.RawMessage               `json:"userSimulatorConfig,omitempty"`
 }
 
 // DefaultEvalConfig matches Python _DEFAULT_EVAL_CONFIG.

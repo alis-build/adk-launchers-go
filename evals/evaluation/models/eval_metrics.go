@@ -8,31 +8,31 @@ import (
 
 // Prebuilt metric name constants (Python PrebuiltMetrics).
 const (
-	MetricToolTrajectoryAvgScore                    = "tool_trajectory_avg_score"
-	MetricResponseEvaluationScore                   = "response_evaluation_score"
-	MetricResponseMatchScore                        = "response_match_score"
-	MetricSafetyV1                                  = "safety_v1"
-	MetricFinalResponseMatchV2                      = "final_response_match_v2"
-	MetricRubricBasedFinalResponseQualityV1         = "rubric_based_final_response_quality_v1"
-	MetricHallucinationsV1                          = "hallucinations_v1"
-	MetricRubricBasedToolUseQualityV1               = "rubric_based_tool_use_quality_v1"
-	MetricPerTurnUserSimulatorQualityV1             = "per_turn_user_simulator_quality_v1"
-	MetricMultiTurnTaskSuccessV1                    = "multi_turn_task_success_v1"
-	MetricMultiTurnTrajectoryQualityV1              = "multi_turn_trajectory_quality_v1"
-	MetricMultiTurnToolUseQualityV1                 = "multi_turn_tool_use_quality_v1"
-	MetricRubricBasedMultiTurnTrajectoryQualityV1   = "rubric_based_multi_turn_trajectory_quality_v1"
+	MetricToolTrajectoryAvgScore                  = "tool_trajectory_avg_score"
+	MetricResponseEvaluationScore                 = "response_evaluation_score"
+	MetricResponseMatchScore                      = "response_match_score"
+	MetricSafetyV1                                = "safety_v1"
+	MetricFinalResponseMatchV2                    = "final_response_match_v2"
+	MetricRubricBasedFinalResponseQualityV1       = "rubric_based_final_response_quality_v1"
+	MetricHallucinationsV1                        = "hallucinations_v1"
+	MetricRubricBasedToolUseQualityV1             = "rubric_based_tool_use_quality_v1"
+	MetricPerTurnUserSimulatorQualityV1           = "per_turn_user_simulator_quality_v1"
+	MetricMultiTurnTaskSuccessV1                  = "multi_turn_task_success_v1"
+	MetricMultiTurnTrajectoryQualityV1            = "multi_turn_trajectory_quality_v1"
+	MetricMultiTurnToolUseQualityV1               = "multi_turn_tool_use_quality_v1"
+	MetricRubricBasedMultiTurnTrajectoryQualityV1 = "rubric_based_multi_turn_trajectory_quality_v1"
 )
 
 // JudgeModelOptions configures LLM-as-judge metrics.
 type JudgeModelOptions struct {
-	JudgeModel       string                    `json:"judgeModel,omitempty"`
+	JudgeModel       string                       `json:"judgeModel,omitempty"`
 	JudgeModelConfig *genai.GenerateContentConfig `json:"judgeModelConfig,omitempty"`
-	NumSamples       int                       `json:"numSamples,omitempty"`
+	NumSamples       int                          `json:"numSamples,omitempty"`
 }
 
 // BaseCriterion is the base threshold criterion for a metric.
 type BaseCriterion struct {
-	Threshold                          float64 `json:"threshold"`
+	Threshold                           float64 `json:"threshold"`
 	IncludeIntermediateResponsesInFinal bool    `json:"includeIntermediateResponsesInFinal,omitempty"`
 }
 
@@ -63,8 +63,8 @@ type RubricsBasedCriterion struct {
 // HallucinationsCriterion configures hallucination detection.
 type HallucinationsCriterion struct {
 	BaseCriterion
-	JudgeModelOptions                 JudgeModelOptions `json:"judgeModelOptions,omitempty"`
-	EvaluateIntermediateNLResponses   bool              `json:"evaluateIntermediateNlResponses,omitempty"`
+	JudgeModelOptions               JudgeModelOptions `json:"judgeModelOptions,omitempty"`
+	EvaluateIntermediateNLResponses bool              `json:"evaluateIntermediateNlResponses,omitempty"`
 }
 
 // ToolTrajectoryMatchType controls trajectory comparison mode.
@@ -84,10 +84,10 @@ type ToolTrajectoryCriterion struct {
 
 // EvalMetric describes a metric to run with threshold and criterion payload.
 type EvalMetric struct {
-	MetricName           string          `json:"metricName"`
-	Threshold            float64         `json:"threshold"`
-	Criterion            jsonCriterion   `json:"criterion,omitempty"`
-	CustomFunctionPath   *string         `json:"customFunctionPath,omitempty"`
+	MetricName         string        `json:"metricName"`
+	Threshold          float64       `json:"threshold"`
+	Criterion          jsonCriterion `json:"criterion,omitempty"`
+	CustomFunctionPath *string       `json:"customFunctionPath,omitempty"`
 }
 
 // jsonCriterion holds unmarshaled criterion variants for EvalMetric.
@@ -162,10 +162,10 @@ func (c jsonCriterion) MarshalJSON() ([]byte, error) {
 
 // MetricValueInterval describes valid score bounds for a metric.
 type MetricValueInterval struct {
-	MinValue   float64 `json:"minValue"`
-	MaxValue   float64 `json:"maxValue"`
-	OpenAtMin  bool    `json:"openAtMin,omitempty"`
-	OpenAtMax  bool    `json:"openAtMax,omitempty"`
+	MinValue  float64 `json:"minValue"`
+	MaxValue  float64 `json:"maxValue"`
+	OpenAtMin bool    `json:"openAtMin,omitempty"`
+	OpenAtMax bool    `json:"openAtMax,omitempty"`
 }
 
 // MetricValueInfo describes metric value semantics.
@@ -187,11 +187,11 @@ type EvalMetricResultDetails struct {
 
 // EvalMetricResult is the outcome for one metric.
 type EvalMetricResult struct {
-	MetricName  string                   `json:"metricName"`
-	Threshold   float64                  `json:"threshold"`
-	Score       *float64                 `json:"score,omitempty"`
-	EvalStatus  EvalStatus               `json:"evalStatus"`
-	Details     *EvalMetricResultDetails `json:"details,omitempty"`
+	MetricName string                   `json:"metricName"`
+	Threshold  float64                  `json:"threshold"`
+	Score      *float64                 `json:"score,omitempty"`
+	EvalStatus EvalStatus               `json:"evalStatus"`
+	Details    *EvalMetricResultDetails `json:"details,omitempty"`
 }
 
 // EvalMetricResultPerInvocation holds per-turn metric results.
@@ -203,14 +203,14 @@ type EvalMetricResultPerInvocation struct {
 
 // EvalCaseResult is case-level evaluation output.
 type EvalCaseResult struct {
-	EvalSetID                      string                          `json:"evalSetId"`
-	EvalID                         string                          `json:"evalId"`
-	FinalEvalStatus                EvalStatus                      `json:"finalEvalStatus"`
-	OverallEvalMetricResults       []EvalMetricResult              `json:"overallEvalMetricResults"`
-	EvalMetricResultPerInvocation  []EvalMetricResultPerInvocation `json:"evalMetricResultPerInvocation"`
-	SessionID                      string                          `json:"sessionId"`
-	SessionDetails                 json.RawMessage                 `json:"sessionDetails,omitempty"`
-	UserID                         *string                         `json:"userId,omitempty"`
+	EvalSetID                     string                          `json:"evalSetId"`
+	EvalID                        string                          `json:"evalId"`
+	FinalEvalStatus               EvalStatus                      `json:"finalEvalStatus"`
+	OverallEvalMetricResults      []EvalMetricResult              `json:"overallEvalMetricResults"`
+	EvalMetricResultPerInvocation []EvalMetricResultPerInvocation `json:"evalMetricResultPerInvocation"`
+	SessionID                     string                          `json:"sessionId"`
+	SessionDetails                json.RawMessage                 `json:"sessionDetails,omitempty"`
+	UserID                        *string                         `json:"userId,omitempty"`
 }
 
 // EvalSetResult is set-level evaluation output persisted to history.
@@ -224,12 +224,12 @@ type EvalSetResult struct {
 
 // RunEvalResult is the legacy per-case response from run_eval.
 type RunEvalResult struct {
-	EvalSetFile                    string                          `json:"evalSetFile,omitempty"`
-	EvalSetID                      string                          `json:"evalSetId"`
-	EvalID                         string                          `json:"evalId"`
-	FinalEvalStatus                EvalStatus                      `json:"finalEvalStatus"`
-	OverallEvalMetricResults       []EvalMetricResult              `json:"overallEvalMetricResults"`
-	EvalMetricResultPerInvocation  []EvalMetricResultPerInvocation `json:"evalMetricResultPerInvocation"`
-	UserID                         *string                         `json:"userId,omitempty"`
-	SessionID                      string                          `json:"sessionId"`
+	EvalSetFile                   string                          `json:"evalSetFile,omitempty"`
+	EvalSetID                     string                          `json:"evalSetId"`
+	EvalID                        string                          `json:"evalId"`
+	FinalEvalStatus               EvalStatus                      `json:"finalEvalStatus"`
+	OverallEvalMetricResults      []EvalMetricResult              `json:"overallEvalMetricResults"`
+	EvalMetricResultPerInvocation []EvalMetricResultPerInvocation `json:"evalMetricResultPerInvocation"`
+	UserID                        *string                         `json:"userId,omitempty"`
+	SessionID                     string                          `json:"sessionId"`
 }

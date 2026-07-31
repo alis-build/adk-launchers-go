@@ -10,8 +10,8 @@ import (
 
 // InMemoryEvalSetsManager is a dict-backed EvalSetsManager for tests and CLI file mode.
 type InMemoryEvalSetsManager struct {
-	mu    sync.RWMutex
-	sets  map[string]map[string]*models.EvalSet // app -> evalSetID -> set
+	mu   sync.RWMutex
+	sets map[string]map[string]*models.EvalSet // app -> evalSetID -> set
 }
 
 // NewInMemoryEvalSetsManager returns an in-memory EvalSetsManager for tests.
@@ -45,9 +45,9 @@ func (m *InMemoryEvalSetsManager) CreateEvalSet(appName, evalSetID string) (*mod
 	}
 	name := evalSetID
 	set := &models.EvalSet{
-		EvalSetID: evalSetID,
-		Name:      &name,
-		EvalCases: []models.EvalCase{},
+		EvalSetID:         evalSetID,
+		Name:              &name,
+		EvalCases:         []models.EvalCase{},
 		CreationTimestamp: float64(nowUnix()),
 	}
 	m.sets[appName][evalSetID] = set

@@ -487,7 +487,7 @@ func TestConvertSessionToMessages_PartConverterAuthorName(t *testing.T) {
 		ev := session.NewEvent(t.Context(), "inv1")
 		ev.Author = "converter-agent"
 		ev.Content = &genai.Content{
-			Role: string(genai.RoleModel),
+			Role:  string(genai.RoleModel),
 			Parts: []*genai.Part{{Text: "custom part"}},
 		}
 		s.events = append(s.events, ev)

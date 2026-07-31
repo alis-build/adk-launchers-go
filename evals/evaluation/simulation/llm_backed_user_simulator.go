@@ -44,11 +44,11 @@ type LlmContentGenerator interface {
 
 // LlmBackedUserSimulator generates user turns with an LLM.
 type LlmBackedUserSimulator struct {
-	config               LlmBackedUserSimulatorConfig
-	scenario             *models.ConversationScenario
-	generator            LlmContentGenerator
-	invocationCount      int
-	persona              string
+	config          LlmBackedUserSimulatorConfig
+	scenario        *models.ConversationScenario
+	generator       LlmContentGenerator
+	invocationCount int
+	persona         string
 }
 
 // NewLlmBackedUserSimulator constructs an LLM-backed user simulator for scenario eval cases.

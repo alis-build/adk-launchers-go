@@ -152,7 +152,7 @@
 //
 //   - UpdateUserThreadState — params:
 //     {"userThreadState":{"thread":"<threadId>","readRunCount":N,"pinned":true},
-//      "updateMask":"pinned,read_run_count"}
+//     "updateMask":"pinned,read_run_count"}
 //     Returns updated UserThreadState. updateMask uses comma-separated snake_case paths.
 //
 // Other ThreadService RPCs may be available on the same path; see go.alis.build/agui/history.

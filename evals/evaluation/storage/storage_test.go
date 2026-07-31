@@ -70,12 +70,12 @@ func TestLocalEvalSetResultsManager(t *testing.T) {
 	m := storage.NewLocalEvalSetResultsManager(dir)
 	result, err := m.SaveEvalSetResult("app", "set1", []models.EvalCaseResult{
 		{
-			EvalSetID:                "set1",
-			EvalID:                   "c1",
-			FinalEvalStatus:          models.EvalStatusPassed,
-			OverallEvalMetricResults: []models.EvalMetricResult{},
+			EvalSetID:                     "set1",
+			EvalID:                        "c1",
+			FinalEvalStatus:               models.EvalStatusPassed,
+			OverallEvalMetricResults:      []models.EvalMetricResult{},
 			EvalMetricResultPerInvocation: []models.EvalMetricResultPerInvocation{},
-			SessionID:                "sess",
+			SessionID:                     "sess",
 		},
 	})
 	if err != nil {

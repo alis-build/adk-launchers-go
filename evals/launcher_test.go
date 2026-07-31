@@ -27,6 +27,20 @@ func TestDevAppBaseDefaultPrefix(t *testing.T) {
 	}
 }
 
+func TestWebuiAppBaseDefaultPrefix(t *testing.T) {
+	l := NewLauncher().(*evalsLauncher)
+	if got := l.webuiAppBase(); got != "/api/apps/{app_name}" {
+		t.Fatalf("webuiAppBase() = %q, want /api/apps/{app_name}", got)
+	}
+}
+
+func TestWebuiAppBaseCustomPrefix(t *testing.T) {
+	l := NewLauncher(WithPathPrefix("/v1")).(*evalsLauncher)
+	if got := l.webuiAppBase(); got != "/v1/apps/{app_name}" {
+		t.Fatalf("webuiAppBase() = %q, want /v1/apps/{app_name}", got)
+	}
+}
+
 func TestParsePathPrefixFlag(t *testing.T) {
 	l := NewLauncher().(*evalsLauncher)
 	if _, err := l.Parse([]string{"-path_prefix=/v1"}); err != nil {

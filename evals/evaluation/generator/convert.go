@@ -106,9 +106,9 @@ func convertInvocationEvents(invocationID string, events []*session.Event, appDe
 	}
 
 	return models.Invocation{
-		InvocationID:      invocationID,
-		UserContent:       userContent,
-		FinalResponse:     finalResponse,
+		InvocationID:  invocationID,
+		UserContent:   userContent,
+		FinalResponse: finalResponse,
 		IntermediateData: models.InvocationEventsField(models.InvocationEvents{
 			InvocationEvents: invEvents,
 		}),
