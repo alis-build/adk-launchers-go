@@ -143,6 +143,7 @@ func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID 
 		return result
 	}
 	inv, err := s.Generator.GenerateInferences(ctx, generator.InferenceOptions{
+		SessionID:          sessionID,
 		SessionInput:       evalCase.SessionInput,
 		UserSimulator:      sim,
 		UseLive:            cfg.UseLive,
