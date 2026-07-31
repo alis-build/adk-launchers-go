@@ -44,8 +44,24 @@
 //	GET    /api/dev/apps/{app}/eval-results/{resultId}
 //	GET    /api/dev/apps/{app}/metrics-info
 //
-// Legacy equivalents: eval_sets, add_session, run_eval, evals (case list/CRUD),
-// eval_results.
+// Legacy underscore equivalents (eval_sets, add_session, run_eval, evals, eval_results)
+// are registered at both {pathPrefix}/dev/apps/{app}/... and {pathPrefix}/apps/{app}/...
+// so bundled adk-web (which calls /apps/... without /dev) works out of the box.
+//
+// WebUI routes (legacy naming, /apps prefix):
+//
+//	POST   /api/apps/{app}/eval_sets/{id}
+//	GET    /api/apps/{app}/eval_sets
+//	GET    /api/apps/{app}/eval_sets/{id}
+//	DELETE /api/apps/{app}/eval_sets/{id}
+//	POST   /api/apps/{app}/eval_sets/{id}/add_session
+//	POST   /api/apps/{app}/eval_sets/{id}/run_eval
+//	GET    /api/apps/{app}/eval_sets/{id}/evals
+//	GET    /api/apps/{app}/eval_sets/{id}/evals/{caseId}
+//	PUT    /api/apps/{app}/eval_sets/{id}/evals/{caseId}
+//	DELETE /api/apps/{app}/eval_sets/{id}/evals/{caseId}
+//	GET    /api/apps/{app}/eval_results
+//	GET    /api/apps/{app}/eval_results/{resultId}
 //
 // # Storage
 //

@@ -235,6 +235,23 @@ func TestGetEvalSet(t *testing.T) {
 	}
 }
 
+func TestCreateEvalSetLegacyWebuiPath(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+
+	// Bundled adk-web POSTs to /api/apps/{app}/eval_sets/{id} (no /dev segment).
+	rec := callHandler(t, l.createEvalSetLegacyHandler(), http.MethodPost, "/apps/my_app/eval_sets/webui_set", nil, map[string]string{
+		"app_name": "my_app", "eval_set_id": "webui_set",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status = %d body = %s", rec.Code, rec.Body.String())
+	}
+
+	got, err := sets.GetEvalSet("my_app", "webui_set")
+	if err != nil || got == nil {
+		t.Fatalf("GetEvalSet: err = %v got = %+v", err, got)
+	}
+}
+
 func TestCreateEvalSetPersistsMetadataRoundTrip(t *testing.T) {
 	l, sets := newHandlerTestLauncher(t)
 

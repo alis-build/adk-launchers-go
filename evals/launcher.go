@@ -209,24 +209,31 @@ func (l *evalsLauncher) mountHostRoutes(config *adklauncher.Config) error {
 	alismux.Put(devApp+"/eval-sets/{eval_set_id}/eval-cases/{eval_case_id}", l.updateEvalCaseHandler())
 	alismux.Delete(devApp+"/eval-sets/{eval_set_id}/eval-cases/{eval_case_id}", l.deleteEvalCaseHandler())
 
-	alismux.Post(devApp+"/eval_sets/{eval_set_id}", l.createEvalSetLegacyHandler())
-	alismux.Get(devApp+"/eval_sets", l.listEvalSetsLegacyHandler())
-	alismux.Get(devApp+"/eval_sets/{eval_set_id}", l.getEvalSetHandler())
-	alismux.Delete(devApp+"/eval_sets/{eval_set_id}", l.deleteEvalSetHandler())
-	alismux.Post(devApp+"/eval_sets/{eval_set_id}/add_session", l.addSessionHandler())
-	alismux.Post(devApp+"/eval_sets/{eval_set_id}/run_eval", l.runEvalLegacyHandler())
-	alismux.Get(devApp+"/eval_sets/{eval_set_id}/evals", l.listEvalCasesHandler())
-	alismux.Get(devApp+"/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.getEvalCaseHandler())
-	alismux.Put(devApp+"/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.updateEvalCaseHandler())
-	alismux.Delete(devApp+"/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.deleteEvalCaseHandler())
+	l.mountLegacyEvalRoutes(devApp)
+	// Bundled adk-web calls legacy underscore paths at {pathPrefix}/apps/... (no /dev).
+	l.mountLegacyEvalRoutes(l.webuiAppBase())
 
 	alismux.Get(devApp+"/eval-results", l.listEvalResultsHandler())
 	alismux.Get(devApp+"/eval-results/{eval_result_id}", l.getEvalResultHandler())
-	alismux.Get(devApp+"/eval_results", l.listEvalResultsLegacyHandler())
-	alismux.Get(devApp+"/eval_results/{eval_result_id}", l.getEvalResultHandler())
 
 	alismux.Get(devApp+"/metrics-info", l.metricsInfoHandler())
 	return nil
+}
+
+// mountLegacyEvalRoutes registers underscore-named eval routes for adk-web / DevServer parity.
+func (l *evalsLauncher) mountLegacyEvalRoutes(base string) {
+	alismux.Post(base+"/eval_sets/{eval_set_id}", l.createEvalSetLegacyHandler())
+	alismux.Get(base+"/eval_sets", l.listEvalSetsLegacyHandler())
+	alismux.Get(base+"/eval_sets/{eval_set_id}", l.getEvalSetHandler())
+	alismux.Delete(base+"/eval_sets/{eval_set_id}", l.deleteEvalSetHandler())
+	alismux.Post(base+"/eval_sets/{eval_set_id}/add_session", l.addSessionHandler())
+	alismux.Post(base+"/eval_sets/{eval_set_id}/run_eval", l.runEvalLegacyHandler())
+	alismux.Get(base+"/eval_sets/{eval_set_id}/evals", l.listEvalCasesHandler())
+	alismux.Get(base+"/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.getEvalCaseHandler())
+	alismux.Put(base+"/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.updateEvalCaseHandler())
+	alismux.Delete(base+"/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.deleteEvalCaseHandler())
+	alismux.Get(base+"/eval_results", l.listEvalResultsLegacyHandler())
+	alismux.Get(base+"/eval_results/{eval_result_id}", l.getEvalResultHandler())
 }
 
 // initStorage constructs eval set and result managers from options or defaults.
@@ -289,12 +296,18 @@ func bucketFromURI(uri string) (string, error) {
 	return rest, nil
 }
 
-// devAppBase returns the path prefix for per-app dev eval routes.
+// devAppBase returns the path prefix for canonical per-app dev eval routes.
 func (l *evalsLauncher) devAppBase() string {
 	return l.pathPrefix + "/dev/apps/{app_name}"
 }
 
+// webuiAppBase returns the path prefix where bundled adk-web issues legacy eval requests.
+func (l *evalsLauncher) webuiAppBase() string {
+	return l.pathPrefix + "/apps/{app_name}"
+}
+
 func (l *evalsLauncher) UserMessage(webURL string, printer func(v ...any)) {
+	printer(fmt.Sprintf("       evals:  webui eval API at %s%s/apps/{app}/eval_sets", webURL, l.pathPrefix))
 	printer(fmt.Sprintf("       evals:  dev eval API at %s%s/dev/apps/{app}/eval-sets", webURL, l.pathPrefix))
 }
 
