@@ -313,6 +313,42 @@ func TestThreadMessages_SSE_FiltersInternalState(t *testing.T) {
 	}
 }
 
+func TestPurgeADKSession(t *testing.T) {
+	ctx := context.Background()
+	l, svc := setupThreadTestLauncher(t)
+	userID := "user-1"
+	threadID := "thread-1"
+
+	createSessionWithEvents(t, ctx, svc, userID, threadID, nil, nil)
+
+	if err := l.purgeADKSession(ctx, userID, threadID, "", ""); err != nil {
+		t.Fatalf("purgeADKSession() error = %v", err)
+	}
+
+	_, err := svc.Get(ctx, &session.GetRequest{
+		AppName:   "test-app",
+		UserID:    userID,
+		SessionID: threadID,
+	})
+	if err == nil {
+		t.Fatal("expected session to be deleted")
+	}
+}
+
+func TestPurgeADKSession_NilSessionService(t *testing.T) {
+	l := newTestLauncher("test-app")
+	if err := l.purgeADKSession(context.Background(), "user-1", "thread-1", "", ""); err != nil {
+		t.Fatalf("purgeADKSession() with nil session service error = %v", err)
+	}
+}
+
+func TestPurgeADKSession_IdempotentWhenMissing(t *testing.T) {
+	l, _ := setupThreadTestLauncher(t)
+	if err := l.purgeADKSession(context.Background(), "user-1", "nonexistent", "", ""); err != nil {
+		t.Fatalf("purgeADKSession() for missing session error = %v", err)
+	}
+}
+
 func TestAcceptsSSE(t *testing.T) {
 	tests := []struct {
 		accept string

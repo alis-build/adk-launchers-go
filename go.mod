@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	cloud.google.com/go/storage v1.64.0
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260728151320-ea3db4630d1e
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260730140106-bb1c2afddb48
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	go.alis.build/agui/history v0.1.5
@@ -16,9 +16,9 @@ require (
 	go.alis.build/lro/v2 v2.9.0
 	go.alis.build/mux v0.4.9
 	google.golang.org/adk/v2 v2.1.0
-	google.golang.org/api v0.290.0
-	google.golang.org/genai v1.65.0
-	google.golang.org/grpc v1.82.1
+	google.golang.org/api v0.291.0
+	google.golang.org/genai v1.66.0
+	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -33,7 +33,7 @@ require (
 	cloud.google.com/go/longrunning v1.2.0 // indirect
 	cloud.google.com/go/monitoring v1.30.0 // indirect
 	cloud.google.com/go/scheduler v1.16.0 // indirect
-	cloud.google.com/go/spanner v1.93.0 // indirect
+	cloud.google.com/go/spanner v1.94.0 // indirect
 	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.6.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.35.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.59.0 // indirect
@@ -85,9 +85,9 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	google.golang.org/genproto v0.0.0-20260727163830-6c54dddc4772 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260727163830-6c54dddc4772 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260727163830-6c54dddc4772 // indirect
+	google.golang.org/genproto v0.0.0-20260729162451-8efbd57d26e0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260729162451-8efbd57d26e0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260729162451-8efbd57d26e0 // indirect
 	rsc.io/omap v1.2.0 // indirect
 	rsc.io/ordered v1.1.1 // indirect
 )

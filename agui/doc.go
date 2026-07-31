@@ -254,8 +254,11 @@
 // When [WithThreadService] is configured, GET {path_prefix}/threads/{threadId}
 // returns the metadata for a single thread (display name, run count, agent ID,
 // timestamps) from the [go.alis.build/agui/history/service.ThreadService].
-// DELETE {path_prefix}/threads/{threadId} removes the thread and its associated
-// user states. Both operations require appropriate IAM roles on the thread's policy.
+// DELETE {path_prefix}/threads/{threadId} removes thread metadata and its
+// associated user states, then deletes the backing ADK session (Vertex Agent
+// Engine conversation history). Both operations require appropriate IAM roles
+// on the thread's policy. Optional query parameter "agentId" overrides app-name
+// resolution for multi-agent hosts.
 //
 // # Thread listing
 //

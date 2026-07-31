@@ -247,7 +247,8 @@ func (l *aguiLauncher) getThreadFunc() alismux.Func {
 }
 
 // deleteThreadFunc returns a [alismux.Func] that deletes a thread via the configured
-// ThreadService. Requires roles/thread.owner on the thread's IAM policy.
+// ThreadService and purges the backing ADK session. Requires roles/thread.owner
+// on the thread's IAM policy.
 func (l *aguiLauncher) deleteThreadFunc() alismux.Func {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		ctx := r.Context()
@@ -264,8 +265,20 @@ func (l *aguiLauncher) deleteThreadFunc() alismux.Func {
 			return nil
 		}
 
-		svcCtx := injectGrpcMetadata(ctx, identity, pb.ThreadService_DeleteThread_FullMethodName)
-		if _, deleteErr := l.config.threadService.DeleteThread(svcCtx, &pb.DeleteThreadRequest{
+		// Read agent_id before metadata deletion so session purge can resolve the
+		// correct ADK app name in multi-agent hosts.
+		getCtx := injectGrpcMetadata(ctx, identity, pb.ThreadService_GetThread_FullMethodName)
+		thread, getErr := l.config.threadService.GetThread(getCtx, &pb.GetThreadRequest{
+			Name: "threads/" + threadID,
+		})
+		if getErr != nil {
+			log.Printf("agui: get thread before delete failed for %s: %v", threadID, getErr)
+			grpcToHTTP(w, getErr, "failed to get thread", http.StatusInternalServerError)
+			return nil
+		}
+
+		delCtx := injectGrpcMetadata(ctx, identity, pb.ThreadService_DeleteThread_FullMethodName)
+		if _, deleteErr := l.config.threadService.DeleteThread(delCtx, &pb.DeleteThreadRequest{
 			Name: "threads/" + threadID,
 		}); deleteErr != nil {
 			log.Printf("agui: delete thread failed for %s: %v", threadID, deleteErr)
@@ -273,9 +286,37 @@ func (l *aguiLauncher) deleteThreadFunc() alismux.Func {
 			return nil
 		}
 
+		if err := l.purgeADKSession(ctx, identity.ID, threadID, thread.GetAgentId(), r.URL.Query().Get("agentId")); err != nil {
+			log.Printf("agui: delete thread: ADK session purge failed for %s: %v", threadID, err)
+			http.Error(w, "failed to delete session", http.StatusInternalServerError)
+			return nil
+		}
+
 		w.WriteHeader(http.StatusNoContent)
 		return nil
 	}
+}
+
+// purgeADKSession deletes the ADK session that backs an AG-UI thread. threadID
+// is also the ADK session ID. agentID is the thread's stored agent; queryAgentID
+// is an optional ?agentId= override for multi-agent resolution.
+func (l *aguiLauncher) purgeADKSession(ctx context.Context, userID, threadID, agentID, queryAgentID string) error {
+	if l.sessionService == nil {
+		return nil
+	}
+	explicitAgent := queryAgentID
+	if explicitAgent == "" {
+		explicitAgent = agentID
+	}
+	appName, err := resolveAppNameFromSources(l, l.launcherCfg, nil, nil, explicitAgent)
+	if err != nil {
+		return err
+	}
+	return l.sessionService.Delete(ctx, &session.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: threadID,
+	})
 }
 
 // listThreadsFunc returns a [alismux.Func] that lists threads with per-user metadata
