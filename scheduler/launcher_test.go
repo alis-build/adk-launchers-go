@@ -3,8 +3,8 @@ package scheduler
 import (
 	"testing"
 
-	historyservice "go.alis.build/agui/history/service"
 	schedulerservice "go.alis.build/a2a/extension/scheduler/service"
+	historyservice "go.alis.build/agui/history/service"
 	"google.golang.org/grpc"
 )
 

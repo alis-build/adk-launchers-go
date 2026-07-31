@@ -37,7 +37,7 @@ type Invocation struct {
 	InvocationID      string           `json:"invocationId,omitempty"`
 	UserContent       *genai.Content   `json:"userContent"`
 	FinalResponse     *genai.Content   `json:"finalResponse,omitempty"`
-	IntermediateData  jsonIntermediate `json:"intermediateData,omitempty"`
+	IntermediateData  jsonIntermediate `json:"intermediateData"`
 	CreationTimestamp float64          `json:"creationTimestamp,omitempty"`
 	Rubrics           []Rubric         `json:"rubrics,omitempty"`
 	AppDetails        *AppDetails      `json:"appDetails,omitempty"`
@@ -69,11 +69,38 @@ func (j *jsonIntermediate) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (j jsonIntermediate) MarshalJSON() ([]byte, error) {
-	if j.value == nil {
-		return []byte("null"), nil
+// intermediateDataJSON mirrors IntermediateData without omitempty: the webui
+// dereferences intermediateData.toolUses without optional chaining, so the
+// wire shape must always carry all three arrays.
+type intermediateDataJSON struct {
+	ToolUses              []*genai.FunctionCall     `json:"toolUses"`
+	ToolResponses         []*genai.FunctionResponse `json:"toolResponses"`
+	IntermediateResponses []IntermediateResponse    `json:"intermediateResponses"`
+}
+
+func normalizedIntermediateData(d IntermediateData) intermediateDataJSON {
+	out := intermediateDataJSON(d)
+	if out.ToolUses == nil {
+		out.ToolUses = []*genai.FunctionCall{}
 	}
-	return json.Marshal(j.value)
+	if out.ToolResponses == nil {
+		out.ToolResponses = []*genai.FunctionResponse{}
+	}
+	if out.IntermediateResponses == nil {
+		out.IntermediateResponses = []IntermediateResponse{}
+	}
+	return out
+}
+
+func (j jsonIntermediate) MarshalJSON() ([]byte, error) {
+	switch v := j.value.(type) {
+	case nil:
+		return json.Marshal(normalizedIntermediateData(IntermediateData{}))
+	case IntermediateData:
+		return json.Marshal(normalizedIntermediateData(v))
+	default:
+		return json.Marshal(j.value)
+	}
 }
 
 // Value returns the decoded intermediate payload.

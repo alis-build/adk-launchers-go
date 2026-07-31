@@ -55,7 +55,7 @@ func (e *mockEvents) All() iter.Seq[*session.Event] {
 	return slices.Values(e.events)
 }
 
-func (e *mockEvents) Len() int              { return len(e.events) }
+func (e *mockEvents) Len() int                { return len(e.events) }
 func (e *mockEvents) At(i int) *session.Event { return e.events[i] }
 
 // mockSession implements session.Session with configurable fields.

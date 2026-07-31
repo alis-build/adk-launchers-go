@@ -72,24 +72,24 @@ func (e *emitter) emit(event events.Event) {
 //
 // Fields are ordered largest-first (strings before bools) to minimize struct padding.
 type streamState struct {
-	runID                     string            // AG-UI run identifier
-	threadID                  string            // AG-UI thread identifier; also used as ADK session ID
-	userID                    string            // ADK user id for session snapshot loads
-	runCtx                    context.Context   // request context for session snapshot loads
-	reqState                  map[string]any    // RunAgentInput.state merged into snapshots
-	currentTextMessageID      string            // active text message, empty when none open
-	currentReasoningPhaseID   string            // active reasoning phase (ReasoningStart/End), empty when none open
-	currentReasoningMessageID string            // active reasoning message within the phase, empty when none open
-	lastTextMessageID         string            // most recent closed text message, used as parentMessageID for tool calls
-	currentStepAuthor         string            // active sub-agent step, empty when at root agent
-	rootAppName               string            // resolved ADK app name for this run (step event filtering)
-	emittedReasoningLen       int               // bytes of reasoning already emitted; used to compute deltas from accumulated partials/finals
-	emittedTextLen            int               // bytes of text already emitted; partials are deltas, finals carry full accumulated text
-	runFinalized              bool              // true once RunFinished or RunError has been emitted
-	emittedInterrupts         []types.Interrupt // interrupts emitted this run; persisted to session state
-	emittedToolCallArgsJSON   map[string]string           // toolCallID -> args JSON from last successful lifecycle emission
+	runID                     string                           // AG-UI run identifier
+	threadID                  string                           // AG-UI thread identifier; also used as ADK session ID
+	userID                    string                           // ADK user id for session snapshot loads
+	runCtx                    context.Context                  // request context for session snapshot loads
+	reqState                  map[string]any                   // RunAgentInput.state merged into snapshots
+	currentTextMessageID      string                           // active text message, empty when none open
+	currentReasoningPhaseID   string                           // active reasoning phase (ReasoningStart/End), empty when none open
+	currentReasoningMessageID string                           // active reasoning message within the phase, empty when none open
+	lastTextMessageID         string                           // most recent closed text message, used as parentMessageID for tool calls
+	currentStepAuthor         string                           // active sub-agent step, empty when at root agent
+	rootAppName               string                           // resolved ADK app name for this run (step event filtering)
+	emittedReasoningLen       int                              // bytes of reasoning already emitted; used to compute deltas from accumulated partials/finals
+	emittedTextLen            int                              // bytes of text already emitted; partials are deltas, finals carry full accumulated text
+	runFinalized              bool                             // true once RunFinished or RunError has been emitted
+	emittedInterrupts         []types.Interrupt                // interrupts emitted this run; persisted to session state
+	emittedToolCallArgsJSON   map[string]string                // toolCallID -> args JSON from last successful lifecycle emission
 	predictStateMappings      map[string][]PredictStateMapping // tool name -> mappings
-	emittedPredictStateTools  map[string]bool              // dedup per tool name, not per call — matches Python middleware; second call to same tool in one run won't re-emit
+	emittedPredictStateTools  map[string]bool                  // dedup per tool name, not per call — matches Python middleware; second call to same tool in one run won't re-emit
 }
 
 // emitToolCallLifecycle emits TOOL_CALL_START/ARGS/END for a tool proposal.

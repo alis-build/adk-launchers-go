@@ -16,11 +16,11 @@ import (
 
 // InferenceOptions configures a single eval inference run.
 type InferenceOptions struct {
-	SessionInput         *models.SessionInput
-	UserSimulator        simulation.UserSimulator
-	UseLive              bool
-	LiveTimeoutSeconds   int
-	RequestInterceptor   *RequestInterceptor
+	SessionInput       *models.SessionInput
+	UserSimulator      simulation.UserSimulator
+	UseLive            bool
+	LiveTimeoutSeconds int
+	RequestInterceptor *RequestInterceptor
 	// SessionID is the ADK session id for the inference run. When empty, the
 	// generator allocates one via NewEvalSessionID.
 	SessionID string

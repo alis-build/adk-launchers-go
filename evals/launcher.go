@@ -816,7 +816,7 @@ func (l *evalsLauncher) listEvalResultsHandler() alismux.Func {
 		if err != nil {
 			return err
 		}
-		return writeJSON(w, http.StatusOK, ListEvalResultsResponse{EvalResultIDs: ids})
+		return writeJSON(w, http.StatusOK, ListEvalResultsResponse{EvalResultIDs: storage.StringSliceForJSON(ids)})
 	}
 }
 

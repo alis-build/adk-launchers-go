@@ -409,6 +409,121 @@ func TestLegacyListEvalCasesEmptyReturnsJSONArray(t *testing.T) {
 	assertLegacyListJSONEmptyArray(t, rec)
 }
 
+func TestListEvalResultsNilSliceReturnsJSONArray(t *testing.T) {
+	l, _ := newHandlerTestLauncher(t)
+	l.resultsManager = nilSliceResultsManager{}
+	rec := callHandler(t, l.listEvalResultsHandler(), http.MethodGet, "/dev/apps/my_app/eval-results", nil, map[string]string{
+		"app_name": "my_app",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := m["evalResultIds"].([]any); !ok {
+		t.Fatalf("evalResultIds = %v (%T), want array", m["evalResultIds"], m["evalResultIds"])
+	}
+}
+
+// TestGetEvalResultNormalizesLegacyIntermediateData reproduces the exact
+// property chain the webui dereferences without optional chaining
+// (eval-tab: actualInvocation.intermediateData.toolUses) against a stored
+// result file containing "intermediateData": null.
+func TestGetEvalResultNormalizesLegacyIntermediateData(t *testing.T) {
+	l, _ := newHandlerTestLauncher(t)
+	dir := t.TempDir()
+	l.resultsManager = storage.NewLocalEvalSetResultsManager(dir)
+
+	histDir := filepath.Join(dir, "my_app", ".adk", "eval_history")
+	if err := os.MkdirAll(histDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	fixture := `{
+		"evalSetResultId": "my_app_set_a_res1",
+		"evalSetId": "set_a",
+		"evalCaseResults": [{
+			"evalSetId": "set_a",
+			"evalId": "case_1",
+			"finalEvalStatus": 2,
+			"overallEvalMetricResults": [],
+			"evalMetricResultPerInvocation": [{
+				"actualInvocation": {"userContent": {"parts": [{"text": "q"}]}, "intermediateData": null},
+				"expectedInvocation": {"userContent": {"parts": [{"text": "q"}]}},
+				"evalMetricResults": []
+			}],
+			"sessionId": "s1"
+		}]
+	}`
+	path := filepath.Join(histDir, "my_app_set_a_res1.evalset_result.json")
+	if err := os.WriteFile(path, []byte(fixture), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	rec := callHandler(t, l.getEvalResultHandler(), http.MethodGet, "/dev/apps/my_app/eval-results/my_app_set_a_res1", nil, map[string]string{
+		"app_name": "my_app", "eval_result_id": "my_app_set_a_res1",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	caseResults, ok := m["evalCaseResults"].([]any)
+	if !ok || len(caseResults) != 1 {
+		t.Fatalf("evalCaseResults = %v", m["evalCaseResults"])
+	}
+	perInv := caseResults[0].(map[string]any)["evalMetricResultPerInvocation"].([]any)
+	for _, key := range []string{"actualInvocation", "expectedInvocation"} {
+		inv, ok := perInv[0].(map[string]any)[key].(map[string]any)
+		if !ok {
+			t.Fatalf("%s = %v", key, perInv[0])
+		}
+		data, ok := inv["intermediateData"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s.intermediateData = %v (%T), want object", key, inv["intermediateData"], inv["intermediateData"])
+		}
+		if _, ok := data["toolUses"].([]any); !ok {
+			t.Fatalf("%s.intermediateData.toolUses = %v (%T), want array", key, data["toolUses"], data["toolUses"])
+		}
+	}
+}
+
+// TestGetEvalResultDefaultsMissingCaseResults covers foreign result files
+// written without an evalCaseResults key; the webui maps over the field
+// unguarded so it must serialize as [] rather than null.
+func TestGetEvalResultDefaultsMissingCaseResults(t *testing.T) {
+	l, _ := newHandlerTestLauncher(t)
+	dir := t.TempDir()
+	l.resultsManager = storage.NewLocalEvalSetResultsManager(dir)
+
+	histDir := filepath.Join(dir, "my_app", ".adk", "eval_history")
+	if err := os.MkdirAll(histDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	fixture := `{"evalSetResultId": "my_app_set_a_res2", "evalSetId": "set_a"}`
+	path := filepath.Join(histDir, "my_app_set_a_res2.evalset_result.json")
+	if err := os.WriteFile(path, []byte(fixture), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	rec := callHandler(t, l.getEvalResultHandler(), http.MethodGet, "/dev/apps/my_app/eval-results/my_app_set_a_res2", nil, map[string]string{
+		"app_name": "my_app", "eval_result_id": "my_app_set_a_res2",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := m["evalCaseResults"].([]any); !ok {
+		t.Fatalf("evalCaseResults = %v (%T), want array", m["evalCaseResults"], m["evalCaseResults"])
+	}
+}
+
 // nilSliceResultsManager simulates GCS ListEvalSetResults returning a nil slice on success.
 type nilSliceResultsManager struct{}
 

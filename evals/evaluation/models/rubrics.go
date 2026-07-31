@@ -7,10 +7,10 @@ type RubricContent struct {
 
 // Rubric is a single evaluation rubric.
 type Rubric struct {
-	RubricID       string        `json:"rubricId"`
-	RubricContent  RubricContent `json:"rubricContent"`
-	Description    *string       `json:"description,omitempty"`
-	Type           *string       `json:"type,omitempty"`
+	RubricID      string        `json:"rubricId"`
+	RubricContent RubricContent `json:"rubricContent"`
+	Description   *string       `json:"description,omitempty"`
+	Type          *string       `json:"type,omitempty"`
 }
 
 // RubricScore holds the score for a rubric assessment.

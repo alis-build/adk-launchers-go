@@ -104,6 +104,9 @@ func parseEvalSetResultJSON(data []byte) (*models.EvalSetResult, error) {
 	var result models.EvalSetResult
 	err := json.Unmarshal(data, &result)
 	if err == nil && result.EvalSetResultID != "" {
+		if result.EvalCaseResults == nil {
+			result.EvalCaseResults = []models.EvalCaseResult{}
+		}
 		return &result, nil
 	}
 	// Some legacy writers stored the JSON as a JSON-encoded string; unwrap once.

@@ -10,9 +10,9 @@ import (
 
 // Legacy eval set JSON is a top-level array of cases in the old format.
 type legacyEvalCase struct {
-	Name            string                   `json:"name"`
-	Data            []legacyInvocation       `json:"data"`
-	InitialSession  map[string]any           `json:"initial_session,omitempty"`
+	Name           string             `json:"name"`
+	Data           []legacyInvocation `json:"data"`
+	InitialSession map[string]any     `json:"initial_session,omitempty"`
 }
 
 type legacyInvocation struct {
@@ -116,6 +116,9 @@ func ParseEvalSetFile(evalSetID string, data []byte) (EvalSet, error) {
 	}
 	if set.EvalSetID == "" {
 		set.EvalSetID = evalSetID
+	}
+	if set.EvalCases == nil {
+		set.EvalCases = []EvalCase{}
 	}
 	for i := range set.EvalCases {
 		if err := set.EvalCases[i].Validate(); err != nil {

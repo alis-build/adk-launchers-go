@@ -14,9 +14,9 @@ const (
 
 // InferenceConfig controls inference execution.
 type InferenceConfig struct {
-	Parallelism          int  `json:"parallelism,omitempty"`
-	UseLive              bool `json:"useLive,omitempty"`
-	LiveTimeoutSeconds   int  `json:"liveTimeoutSeconds,omitempty"`
+	Parallelism        int  `json:"parallelism,omitempty"`
+	UseLive            bool `json:"useLive,omitempty"`
+	LiveTimeoutSeconds int  `json:"liveTimeoutSeconds,omitempty"`
 }
 
 // InferenceRequest loads eval cases and runs agent inference.
@@ -29,13 +29,13 @@ type InferenceRequest struct {
 
 // InferenceResult holds generated invocations for one eval case.
 type InferenceResult struct {
-	AppName     string              `json:"appName"`
-	EvalSetID   string              `json:"evalSetId"`
-	EvalCaseID  string              `json:"evalCaseId"`
-	SessionID   string              `json:"sessionId"`
-	Inferences  []models.Invocation `json:"inferences,omitempty"`
-	Status      InferenceStatus     `json:"status"`
-	ErrorMessage string             `json:"errorMessage,omitempty"`
+	AppName      string              `json:"appName"`
+	EvalSetID    string              `json:"evalSetId"`
+	EvalCaseID   string              `json:"evalCaseId"`
+	SessionID    string              `json:"sessionId"`
+	Inferences   []models.Invocation `json:"inferences,omitempty"`
+	Status       InferenceStatus     `json:"status"`
+	ErrorMessage string              `json:"errorMessage,omitempty"`
 }
 
 // EvaluateConfig selects metrics and parallelism for scoring.

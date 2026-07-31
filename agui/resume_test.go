@@ -92,7 +92,7 @@ func TestResumeEntriesToConfirmationContent(t *testing.T) {
 
 	t.Run("missing interruptId", func(t *testing.T) {
 		_, err := resumeEntriesToConfirmationContent([]types.ResumeEntry{{
-			Status:  types.ResumeStatusCancelled,
+			Status: types.ResumeStatusCancelled,
 		}})
 		if err == nil {
 			t.Fatal("expected error for missing interruptId")

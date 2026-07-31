@@ -74,6 +74,16 @@ func TestParseEvalSetFileLegacyArray(t *testing.T) {
 	}
 }
 
+func TestParseEvalSetFileDefaultsMissingEvalCases(t *testing.T) {
+	set, err := models.ParseEvalSetFile("set_a", []byte(`{"eval_set_id":"set_a"}`))
+	if err != nil {
+		t.Fatalf("ParseEvalSetFile: %v", err)
+	}
+	if set.EvalCases == nil {
+		t.Fatal("EvalCases = nil, want empty slice so it serializes as []")
+	}
+}
+
 func TestParseEvalSetFileModern(t *testing.T) {
 	raw := `{
 		"eval_set_id": "modern",

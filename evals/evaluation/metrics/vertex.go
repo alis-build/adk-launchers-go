@@ -10,11 +10,11 @@ import (
 type VertexMetric string
 
 const (
-	vertexMetricCoherence                    VertexMetric = "coherence"
-	vertexMetricSafety                       VertexMetric = "safety"
-	vertexMetricMultiTurnTaskSuccess         VertexMetric = "multi_turn_task_success"
-	vertexMetricMultiTurnTrajectoryQuality   VertexMetric = "multi_turn_trajectory_quality"
-	vertexMetricMultiTurnToolUseQuality      VertexMetric = "multi_turn_tool_use_quality"
+	vertexMetricCoherence                  VertexMetric = "coherence"
+	vertexMetricSafety                     VertexMetric = "safety"
+	vertexMetricMultiTurnTaskSuccess       VertexMetric = "multi_turn_task_success"
+	vertexMetricMultiTurnTrajectoryQuality VertexMetric = "multi_turn_trajectory_quality"
+	vertexMetricMultiTurnToolUseQuality    VertexMetric = "multi_turn_tool_use_quality"
 )
 
 // VertexEvalClient evaluates invocations using Vertex Gen AI Eval SDK semantics.
@@ -25,18 +25,18 @@ type VertexEvalClient interface {
 
 // VertexSingleTurnRequest is input for single-turn Vertex metrics.
 type VertexSingleTurnRequest struct {
-	Metric              VertexMetric
-	Actual              models.Invocation
-	Expected            models.Invocation
-	RequireExpected     bool
+	Metric          VertexMetric
+	Actual          models.Invocation
+	Expected        models.Invocation
+	RequireExpected bool
 }
 
 // VertexMultiTurnRequest is input for multi-turn Vertex metrics.
 type VertexMultiTurnRequest struct {
-	Metric              VertexMetric
-	Actual              []models.Invocation
-	Expected            []models.Invocation
-	Scenario            *models.ConversationScenario
+	Metric   VertexMetric
+	Actual   []models.Invocation
+	Expected []models.Invocation
+	Scenario *models.ConversationScenario
 }
 
 type vertexSingleTurnEvaluator struct {

@@ -113,7 +113,7 @@ func TestResponseMatchEvaluator(t *testing.T) {
 }
 
 func TestDefaultRegistryHas13Metrics(t *testing.T) {
- infos := metrics.DefaultRegistry.GetRegisteredMetrics()
+	infos := metrics.DefaultRegistry.GetRegisteredMetrics()
 	if len(infos) != 13 {
 		t.Fatalf("len = %d, want 13", len(infos))
 	}

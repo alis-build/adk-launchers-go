@@ -47,10 +47,10 @@ type recordedRun struct {
 }
 
 type fakeRunner struct {
-	runs      []recordedRun
-	nextSess  string
-	runErr    error
-	done      chan struct{}
+	runs     []recordedRun
+	nextSess string
+	runErr   error
+	done     chan struct{}
 }
 
 func (f *fakeRunner) RunUserMessage(_ context.Context, userID string, sessionID, prompt string) (string, error) {
@@ -232,11 +232,11 @@ func TestExecuteCron_threadUpsertFailureDoesNotFailTick(t *testing.T) {
 func TestSmoke_executeCron(t *testing.T) {
 	svc := &fakeScheduler{
 		cron: &pb.Cron{
-			Name:    "crons/smoke-1",
-			Owner:   "users/alice",
-			Email:   "alice@example.com",
-			Prompt:  "daily check-in",
-			Type:    pb.Cron_TYPE_CRON,
+			Name:      "crons/smoke-1",
+			Owner:     "users/alice",
+			Email:     "alice@example.com",
+			Prompt:    "daily check-in",
+			Type:      pb.Cron_TYPE_CRON,
 			ContextId: "",
 		},
 	}

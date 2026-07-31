@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	evalSetFileExtension   = ".evalset.json"
+	evalSetFileExtension    = ".evalset.json"
 	evalResultFileExtension = ".evalset_result.json"
-	historyDirName         = ".adk/eval_history"
+	historyDirName          = ".adk/eval_history"
 )
 
 var evalSetIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
