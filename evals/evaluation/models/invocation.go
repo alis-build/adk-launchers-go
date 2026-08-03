@@ -32,6 +32,36 @@ type InvocationEvents struct {
 	InvocationEvents []InvocationEvent `json:"invocationEvents"`
 }
 
+func (e InvocationEvents) toolCalls() []*genai.FunctionCall {
+	var calls []*genai.FunctionCall
+	for _, ev := range e.InvocationEvents {
+		if ev.Content == nil {
+			continue
+		}
+		for _, p := range ev.Content.Parts {
+			if p != nil && p.FunctionCall != nil {
+				calls = append(calls, p.FunctionCall)
+			}
+		}
+	}
+	return calls
+}
+
+func (e InvocationEvents) toolResponses() []*genai.FunctionResponse {
+	var responses []*genai.FunctionResponse
+	for _, ev := range e.InvocationEvents {
+		if ev.Content == nil {
+			continue
+		}
+		for _, p := range ev.Content.Parts {
+			if p != nil && p.FunctionResponse != nil {
+				responses = append(responses, p.FunctionResponse)
+			}
+		}
+	}
+	return responses
+}
+
 // Invocation is a single user/agent turn in an eval case.
 type Invocation struct {
 	InvocationID      string           `json:"invocationId,omitempty"`
@@ -92,12 +122,34 @@ func normalizedIntermediateData(d IntermediateData) intermediateDataJSON {
 	return out
 }
 
+// invocationEventsJSON is the wire shape for InvocationEvents: the events plus
+// the flat arrays derived from them, since the webui dereferences
+// intermediateData.toolUses regardless of shape. UnmarshalJSON discriminates on
+// the invocationEvents key first, so the merged object still decodes as
+// InvocationEvents and the events remain the source of truth.
+type invocationEventsJSON struct {
+	InvocationEvents []InvocationEvent `json:"invocationEvents"`
+	intermediateDataJSON
+}
+
 func (j jsonIntermediate) MarshalJSON() ([]byte, error) {
 	switch v := j.value.(type) {
 	case nil:
 		return json.Marshal(normalizedIntermediateData(IntermediateData{}))
 	case IntermediateData:
 		return json.Marshal(normalizedIntermediateData(v))
+	case InvocationEvents:
+		events := v.InvocationEvents
+		if events == nil {
+			events = []InvocationEvent{}
+		}
+		return json.Marshal(invocationEventsJSON{
+			InvocationEvents: events,
+			intermediateDataJSON: normalizedIntermediateData(IntermediateData{
+				ToolUses:      v.toolCalls(),
+				ToolResponses: v.toolResponses(),
+			}),
+		})
 	default:
 		return json.Marshal(j.value)
 	}
@@ -135,18 +187,7 @@ func GetAllToolCalls(intermediate jsonIntermediate) ([]*genai.FunctionCall, erro
 		return data.ToolUses, nil
 	}
 	if events, ok := intermediate.AsInvocationEvents(); ok {
-		var calls []*genai.FunctionCall
-		for _, ev := range events.InvocationEvents {
-			if ev.Content == nil {
-				continue
-			}
-			for _, p := range ev.Content.Parts {
-				if p != nil && p.FunctionCall != nil {
-					calls = append(calls, p.FunctionCall)
-				}
-			}
-		}
-		return calls, nil
+		return events.toolCalls(), nil
 	}
 	return nil, fmt.Errorf("unsupported intermediate data type %T", intermediate.value)
 }
@@ -160,18 +201,7 @@ func GetAllToolResponses(intermediate jsonIntermediate) ([]*genai.FunctionRespon
 		return data.ToolResponses, nil
 	}
 	if events, ok := intermediate.AsInvocationEvents(); ok {
-		var responses []*genai.FunctionResponse
-		for _, ev := range events.InvocationEvents {
-			if ev.Content == nil {
-				continue
-			}
-			for _, p := range ev.Content.Parts {
-				if p != nil && p.FunctionResponse != nil {
-					responses = append(responses, p.FunctionResponse)
-				}
-			}
-		}
-		return responses, nil
+		return events.toolResponses(), nil
 	}
 	return nil, fmt.Errorf("unsupported intermediate data type %T", intermediate.value)
 }

@@ -175,19 +175,107 @@ func TestIntermediateDataMarshalNeverNull(t *testing.T) {
 	}
 }
 
-func TestIntermediateDataInvocationEventsMarshalUnchanged(t *testing.T) {
+func TestIntermediateDataInvocationEventsMarshalMergesFlatArrays(t *testing.T) {
+	tests := []struct {
+		name              string
+		events            models.InvocationEvents
+		wantToolUses      int
+		wantToolResponses int
+	}{
+		{
+			name: "no tool calls",
+			events: models.InvocationEvents{
+				InvocationEvents: []models.InvocationEvent{{Author: "agent"}},
+			},
+		},
+		{
+			name:   "nil events",
+			events: models.InvocationEvents{},
+		},
+		{
+			name: "with tool calls and responses",
+			events: models.InvocationEvents{
+				InvocationEvents: []models.InvocationEvent{
+					{
+						Author: "agent",
+						Content: &genai.Content{Parts: []*genai.Part{
+							{FunctionCall: &genai.FunctionCall{ID: "call_1", Name: "search", Args: map[string]any{"q": "weather"}}},
+						}},
+					},
+					{
+						Author: "agent",
+						Content: &genai.Content{Parts: []*genai.Part{
+							{FunctionResponse: &genai.FunctionResponse{ID: "call_1", Name: "search"}},
+						}},
+					},
+				},
+			},
+			wantToolUses:      1,
+			wantToolResponses: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inv := models.Invocation{
+				UserContent:      genai.NewContentFromText("q", genai.RoleUser),
+				IntermediateData: models.InvocationEventsField(tt.events),
+			}
+			data := intermediateDataObject(t, inv)
+			if _, ok := data["invocationEvents"].([]any); !ok {
+				t.Fatalf("invocationEvents = %v (%T), want array", data["invocationEvents"], data["invocationEvents"])
+			}
+			for key, want := range map[string]int{
+				"toolUses":              tt.wantToolUses,
+				"toolResponses":         tt.wantToolResponses,
+				"intermediateResponses": 0,
+			} {
+				arr, ok := data[key].([]any)
+				if !ok {
+					t.Fatalf("%s = %v (%T), want array", key, data[key], data[key])
+				}
+				if len(arr) != want {
+					t.Fatalf("len(%s) = %d, want %d", key, len(arr), want)
+				}
+			}
+		})
+	}
+}
+
+func TestIntermediateDataInvocationEventsRoundTrip(t *testing.T) {
 	inv := models.Invocation{
 		UserContent: genai.NewContentFromText("q", genai.RoleUser),
 		IntermediateData: models.InvocationEventsField(models.InvocationEvents{
-			InvocationEvents: []models.InvocationEvent{{Author: "agent"}},
+			InvocationEvents: []models.InvocationEvent{
+				{
+					Author: "agent",
+					Content: &genai.Content{Parts: []*genai.Part{
+						{FunctionCall: &genai.FunctionCall{ID: "call_1", Name: "search"}},
+					}},
+				},
+			},
 		}),
 	}
-	data := intermediateDataObject(t, inv)
-	if _, ok := data["invocationEvents"].([]any); !ok {
-		t.Fatalf("invocationEvents = %v, want array", data["invocationEvents"])
+	out, err := json.Marshal(inv)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
-	if _, ok := data["toolUses"]; ok {
-		t.Fatalf("invocationEvents shape must not gain toolUses: %v", data)
+	var decoded models.Invocation
+	if err = json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	events, ok := decoded.IntermediateData.AsInvocationEvents()
+	if !ok {
+		t.Fatalf("round-trip value = %T, want InvocationEvents", decoded.IntermediateData.Value())
+	}
+	if len(events.InvocationEvents) != 1 || events.InvocationEvents[0].Author != "agent" {
+		t.Fatalf("events = %+v", events.InvocationEvents)
+	}
+	calls, err := models.GetAllToolCalls(decoded.IntermediateData)
+	if err != nil {
+		t.Fatalf("GetAllToolCalls: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Name != "search" {
+		t.Fatalf("calls = %+v", calls)
 	}
 }
 
