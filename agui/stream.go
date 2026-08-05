@@ -83,8 +83,8 @@ type streamState struct {
 	lastTextMessageID         string                           // most recent closed text message, used as parentMessageID for tool calls
 	currentStepAuthor         string                           // active sub-agent step, empty when at root agent
 	rootAppName               string                           // resolved ADK app name for this run (step event filtering)
-	emittedReasoningLen       int                              // bytes of reasoning already emitted; used to compute deltas from accumulated partials/finals
-	emittedTextLen            int                              // bytes of text already emitted; partials are deltas, finals carry full accumulated text
+	streamedReasoning         string                           // accumulated partial reasoning text of the current streamed message; classifies non-partial thought events as repeat vs independent
+	streamedText              strings.Builder                  // partial text deltas streamed for the current message; classifies non-partial text events as repeat vs independent
 	runFinalized              bool                             // true once RunFinished or RunError has been emitted
 	emittedInterrupts         []types.Interrupt                // interrupts emitted this run; persisted to session state
 	emittedToolCallArgsJSON   map[string]string                // toolCallID -> args JSON from last successful lifecycle emission
@@ -157,6 +157,11 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 	}
 	if ev.Author != "" && stepAuthor != state.currentStepAuthor {
 		closeTextMessage(e, state)
+		closeReasoningMessage(e, state)
+		// A different producer follows its own streaming convention; its text
+		// must not be deduped against the previous author's streamed content.
+		state.streamedText.Reset()
+		state.streamedReasoning = ""
 		if state.currentStepAuthor != "" {
 			e.emit(events.NewStepFinishedEvent(state.currentStepAuthor))
 		}
@@ -195,19 +200,43 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 			// bracket individual messages within it. Per the AG-UI spec, these use
 			// separate IDs.
 			//
-			// ADK partial and final events carry accumulated thought text, not
-			// deltas. Track how much has been emitted and only send the new portion.
+			// ADK streaming partials carry accumulated thought text, not deltas:
+			// emit only the unseen suffix. A non-partial event that repeats the
+			// streamed accumulation (ADK's trailing final) is skipped; while the
+			// streamed message is still open it may also extend it, in which case
+			// only the unseen suffix is emitted. Any other non-partial thought
+			// text comes from a producer that never streamed (e.g. a remote A2A
+			// sub-agent aggregating server-side) and is emitted whole. Once the
+			// message is closed, a prefix match no longer implies continuation,
+			// so the stale accumulation is dropped instead of slicing new text.
 			if part.Thought && part.Text != "" {
-				if state.currentReasoningMessageID == "" {
-					if ev.Partial || len(part.Text) > state.emittedReasoningLen {
-						state.emittedReasoningLen = 0
+				text := part.Text
+				if ev.Partial {
+					if state.currentReasoningMessageID == "" {
+						// A new streamed message restarts accumulation.
+						state.streamedReasoning = ""
+					}
+					if len(text) <= len(state.streamedReasoning) {
+						continue
+					}
+					text = text[len(state.streamedReasoning):]
+					state.streamedReasoning = part.Text
+				} else if streamed := state.streamedReasoning; streamed != "" {
+					switch {
+					case text == streamed:
+						// Trailing final repeating the streamed thought exactly.
+						continue
+					case state.currentReasoningMessageID != "" && strings.HasPrefix(text, streamed):
+						// Mid-message final extending the stream: emit the tail.
+						// An independent chunk sharing the streamed prefix is
+						// indistinguishable from this and treated as extension.
+						text = text[len(streamed):]
+						state.streamedReasoning = part.Text
+					case state.currentReasoningMessageID == "":
+						// New thought after the streamed message closed.
+						state.streamedReasoning = ""
 					}
 				}
-				if len(part.Text) <= state.emittedReasoningLen {
-					continue
-				}
-				delta := part.Text[state.emittedReasoningLen:]
-				state.emittedReasoningLen = len(part.Text)
 
 				closeTextMessage(e, state)
 
@@ -216,11 +245,10 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 					e.emit(events.NewReasoningStartEvent(state.currentReasoningPhaseID))
 				}
 				if state.currentReasoningMessageID == "" {
-					state.emittedReasoningLen = len(part.Text)
 					state.currentReasoningMessageID = events.GenerateMessageID()
 					e.emit(events.NewReasoningMessageStartEvent(state.currentReasoningMessageID, "reasoning"))
 				}
-				e.emit(events.NewReasoningMessageContentEvent(state.currentReasoningMessageID, delta))
+				e.emit(events.NewReasoningMessageContentEvent(state.currentReasoningMessageID, text))
 				continue
 			}
 
@@ -229,32 +257,43 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 				// Close any open reasoning message before emitting text.
 				closeReasoningMessage(e, state)
 
-				// ADK streaming emits partial events with delta text, then a final
-				// non-partial event with the full accumulated text. Remote sub-agents
-				// may deliver only the final event; emit any text not yet streamed.
-				var delta string
+				// ADK streaming emits partial events with delta text, then a
+				// trailing non-partial event repeating the accumulated text —
+				// skipped as an exact repeat, or deduped down to its unseen tail
+				// while the streamed message is still open (streaming stopped
+				// short). Any other non-partial text is an independent chunk
+				// from a producer that never streamed (a remote A2A sub-agent
+				// aggregating server-side, or a root agent with streaming
+				// disabled) and is emitted whole, never sliced. streamedText —
+				// populated only by partial deltas and their tails — tells the
+				// two apart by content. Once the message is closed, a prefix
+				// match no longer implies continuation, so the stale
+				// accumulation is dropped instead of slicing a new message.
+				text := part.Text
 				if ev.Partial {
 					if state.currentTextMessageID == "" {
-						state.emittedTextLen = 0
+						// A new streamed message restarts accumulation.
+						state.streamedText.Reset()
 					}
-					delta = part.Text
-					state.emittedTextLen += len(delta)
-				} else {
-					if len(part.Text) <= state.emittedTextLen {
+					state.streamedText.WriteString(text)
+				} else if streamed := state.streamedText.String(); streamed != "" {
+					switch {
+					case text == streamed:
+						// Trailing final repeating the streamed text exactly.
 						continue
+					case state.currentTextMessageID != "" && strings.HasPrefix(text, streamed):
+						// Mid-message final extending the stream: emit the tail.
+						// An independent chunk sharing the streamed prefix is
+						// indistinguishable from this and treated as extension.
+						text = text[len(streamed):]
+						state.streamedText.WriteString(text)
+					case state.currentTextMessageID == "":
+						// New message after the streamed one closed.
+						state.streamedText.Reset()
 					}
-					if state.currentTextMessageID == "" {
-						state.emittedTextLen = 0
-					}
-					delta = part.Text[state.emittedTextLen:]
-					state.emittedTextLen = len(part.Text)
-				}
-				if delta == "" {
-					continue
 				}
 
 				if state.currentTextMessageID == "" {
-					state.emittedTextLen = len(part.Text)
 					state.currentTextMessageID = events.GenerateMessageID()
 					// Blank / whitespace-only authors are trimmed so the wire
 					// JSON omits "name" via omitempty on the upstream field.
@@ -264,7 +303,7 @@ func (l *aguiLauncher) processEvent(e *emitter, ev *session.Event, state *stream
 						events.WithName(strings.TrimSpace(ev.Author)),
 					))
 				}
-				e.emit(events.NewTextMessageContentEvent(state.currentTextMessageID, delta))
+				e.emit(events.NewTextMessageContentEvent(state.currentTextMessageID, text))
 				continue
 			}
 
@@ -373,6 +412,10 @@ func finalizeLifecycle(e *emitter, state *streamState) {
 
 // closeTextMessage emits a TextMessageEndEvent for the currently open text message
 // and records it as lastTextMessageID for use as parentMessageID on subsequent tool calls.
+//
+// streamedText deliberately survives the close: ADK's trailing non-partial final
+// can arrive after a tool call or TurnComplete already closed the message, and
+// must still be recognized as an exact repeat of the streamed text.
 func closeTextMessage(e *emitter, state *streamState) {
 	if state.currentTextMessageID == "" {
 		return
@@ -384,6 +427,10 @@ func closeTextMessage(e *emitter, state *streamState) {
 
 // closeReasoningMessage emits ReasoningMessageEnd and ReasoningEnd events
 // to close the currently open reasoning message and phase.
+//
+// streamedReasoning deliberately survives the close for the same reason as
+// streamedText in [closeTextMessage]: the trailing final's exact repeat must
+// still be deduped after the message has closed.
 func closeReasoningMessage(e *emitter, state *streamState) {
 	if state.currentReasoningMessageID != "" {
 		e.emit(events.NewReasoningMessageEndEvent(state.currentReasoningMessageID))
