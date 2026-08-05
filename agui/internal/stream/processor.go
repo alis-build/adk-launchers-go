@@ -134,8 +134,8 @@ type State struct {
 	LastTextMessageID         string
 	CurrentStepAuthor         string
 	RootAppName               string
-	EmittedReasoningLen       int
-	EmittedTextLen            int
+	StreamedReasoning         string          // accumulated partial reasoning text of the current streamed message; classifies non-partial thought events as repeat vs independent
+	StreamedText              strings.Builder // partial text deltas streamed for the current message; classifies non-partial text events as repeat vs independent
 	RunFinalized              bool
 	EmittedInterrupts         []types.Interrupt
 	EmittedToolCallArgsJSON   map[string]string
@@ -206,6 +206,11 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 	}
 	if ev.Author != "" && stepAuthor != state.CurrentStepAuthor {
 		closeTextMessage(sink, state)
+		closeReasoningMessage(sink, state)
+		// A different producer follows its own streaming convention; its text
+		// must not be deduped against the previous author's streamed content.
+		state.StreamedText.Reset()
+		state.StreamedReasoning = ""
 		if state.CurrentStepAuthor != "" {
 			sink.Emit(events.NewStepFinishedEvent(state.CurrentStepAuthor))
 		}
@@ -247,19 +252,43 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 			// bracket individual messages within it. Per the AG-UI spec, these use
 			// separate IDs.
 			//
-			// ADK partial and final events carry accumulated thought text, not
-			// deltas. Track how much has been emitted and only send the new portion.
+			// ADK streaming partials carry accumulated thought text, not deltas:
+			// emit only the unseen suffix. A non-partial event that repeats the
+			// streamed accumulation (ADK's trailing final) is skipped; while the
+			// streamed message is still open it may also extend it, in which case
+			// only the unseen suffix is emitted. Any other non-partial thought
+			// text comes from a producer that never streamed (e.g. a remote A2A
+			// sub-agent aggregating server-side) and is emitted whole. Once the
+			// message is closed, a prefix match no longer implies continuation,
+			// so the stale accumulation is dropped instead of slicing new text.
 			if part.Thought && part.Text != "" {
-				if state.CurrentReasoningMessageID == "" {
-					if ev.Partial || len(part.Text) > state.EmittedReasoningLen {
-						state.EmittedReasoningLen = 0
+				text := part.Text
+				if ev.Partial {
+					if state.CurrentReasoningMessageID == "" {
+						// A new streamed message restarts accumulation.
+						state.StreamedReasoning = ""
+					}
+					if len(text) <= len(state.StreamedReasoning) {
+						continue
+					}
+					text = text[len(state.StreamedReasoning):]
+					state.StreamedReasoning = part.Text
+				} else if streamed := state.StreamedReasoning; streamed != "" {
+					switch {
+					case text == streamed:
+						// Trailing final repeating the streamed thought exactly.
+						continue
+					case state.CurrentReasoningMessageID != "" && strings.HasPrefix(text, streamed):
+						// Mid-message final extending the stream: emit the tail.
+						// An independent chunk sharing the streamed prefix is
+						// indistinguishable from this and treated as extension.
+						text = text[len(streamed):]
+						state.StreamedReasoning = part.Text
+					case state.CurrentReasoningMessageID == "":
+						// New thought after the streamed message closed.
+						state.StreamedReasoning = ""
 					}
 				}
-				if len(part.Text) <= state.EmittedReasoningLen {
-					continue
-				}
-				delta := part.Text[state.EmittedReasoningLen:]
-				state.EmittedReasoningLen = len(part.Text)
 
 				closeTextMessage(sink, state)
 
@@ -268,11 +297,10 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 					sink.Emit(events.NewReasoningStartEvent(state.CurrentReasoningPhaseID))
 				}
 				if state.CurrentReasoningMessageID == "" {
-					state.EmittedReasoningLen = len(part.Text)
 					state.CurrentReasoningMessageID = events.GenerateMessageID()
 					sink.Emit(events.NewReasoningMessageStartEvent(state.CurrentReasoningMessageID, "reasoning"))
 				}
-				sink.Emit(events.NewReasoningMessageContentEvent(state.CurrentReasoningMessageID, delta))
+				sink.Emit(events.NewReasoningMessageContentEvent(state.CurrentReasoningMessageID, text))
 				continue
 			}
 
@@ -281,32 +309,43 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 				// Close any open reasoning message before emitting text.
 				closeReasoningMessage(sink, state)
 
-				// ADK streaming emits partial events with delta text, then a final
-				// non-partial event with the full accumulated text. Remote sub-agents
-				// may deliver only the final event; emit any text not yet streamed.
-				var delta string
+				// ADK streaming emits partial events with delta text, then a
+				// trailing non-partial event repeating the accumulated text —
+				// skipped as an exact repeat, or deduped down to its unseen tail
+				// while the streamed message is still open (streaming stopped
+				// short). Any other non-partial text is an independent chunk
+				// from a producer that never streamed (a remote A2A sub-agent
+				// aggregating server-side, or a root agent with streaming
+				// disabled) and is emitted whole, never sliced. StreamedText —
+				// populated only by partial deltas and their tails — tells the
+				// two apart by content. Once the message is closed, a prefix
+				// match no longer implies continuation, so the stale
+				// accumulation is dropped instead of slicing a new message.
+				text := part.Text
 				if ev.Partial {
 					if state.CurrentTextMessageID == "" {
-						state.EmittedTextLen = 0
+						// A new streamed message restarts accumulation.
+						state.StreamedText.Reset()
 					}
-					delta = part.Text
-					state.EmittedTextLen += len(delta)
-				} else {
-					if len(part.Text) <= state.EmittedTextLen {
+					state.StreamedText.WriteString(text)
+				} else if streamed := state.StreamedText.String(); streamed != "" {
+					switch {
+					case text == streamed:
+						// Trailing final repeating the streamed text exactly.
 						continue
+					case state.CurrentTextMessageID != "" && strings.HasPrefix(text, streamed):
+						// Mid-message final extending the stream: emit the tail.
+						// An independent chunk sharing the streamed prefix is
+						// indistinguishable from this and treated as extension.
+						text = text[len(streamed):]
+						state.StreamedText.WriteString(text)
+					case state.CurrentTextMessageID == "":
+						// New message after the streamed one closed.
+						state.StreamedText.Reset()
 					}
-					if state.CurrentTextMessageID == "" {
-						state.EmittedTextLen = 0
-					}
-					delta = part.Text[state.EmittedTextLen:]
-					state.EmittedTextLen = len(part.Text)
-				}
-				if delta == "" {
-					continue
 				}
 
 				if state.CurrentTextMessageID == "" {
-					state.EmittedTextLen = len(part.Text)
 					state.CurrentTextMessageID = events.GenerateMessageID()
 					// Blank / whitespace-only authors are trimmed so the wire
 					// JSON omits "name" via omitempty on the upstream field.
@@ -316,7 +355,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 						events.WithName(strings.TrimSpace(ev.Author)),
 					))
 				}
-				sink.Emit(events.NewTextMessageContentEvent(state.CurrentTextMessageID, delta))
+				sink.Emit(events.NewTextMessageContentEvent(state.CurrentTextMessageID, text))
 				continue
 			}
 
@@ -425,6 +464,10 @@ func finalizeLifecycle(sink eventSink, state *State) {
 
 // closeTextMessage emits a TextMessageEndEvent for the currently open text message
 // and records it as lastTextMessageID for use as parentMessageID on subsequent tool calls.
+//
+// StreamedText deliberately survives the close: ADK's trailing non-partial final
+// can arrive after a tool call or TurnComplete already closed the message, and
+// must still be recognized as an exact repeat of the streamed text.
 func closeTextMessage(sink eventSink, state *State) {
 	if state.CurrentTextMessageID == "" {
 		return
@@ -436,6 +479,10 @@ func closeTextMessage(sink eventSink, state *State) {
 
 // closeReasoningMessage emits ReasoningMessageEnd and ReasoningEnd events
 // to close the currently open reasoning message and phase.
+//
+// StreamedReasoning deliberately survives the close for the same reason as
+// StreamedText in [closeTextMessage]: the trailing final's exact repeat must
+// still be deduped after the message has closed.
 func closeReasoningMessage(sink eventSink, state *State) {
 	if state.CurrentReasoningMessageID != "" {
 		sink.Emit(events.NewReasoningMessageEndEvent(state.CurrentReasoningMessageID))

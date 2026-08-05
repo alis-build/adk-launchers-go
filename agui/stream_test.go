@@ -275,6 +275,253 @@ func TestProcessEvent_TextStreaming_SubAgentNonPartialOnly(t *testing.T) {
 	}
 }
 
+// runEvents processes each event with a fresh emitter and returns all SSE
+// events emitted, in order.
+func runEvents(t *testing.T, l *aguiLauncher, state *streamState, evs ...*session.Event) []sseEvent {
+	t.Helper()
+	var out []sseEvent
+	for i, ev := range evs {
+		e, rec := newTestEmitter()
+		if _, err := l.processEvent(e, ev, state, nil); err != nil {
+			t.Fatalf("processEvent() event %d error = %v", i, err)
+		}
+		out = append(out, parseSSEEvents(rec.Body.String())...)
+	}
+	return out
+}
+
+func textEvent(ctx context.Context, author, text string, partial bool) *session.Event {
+	ev := session.NewEvent(ctx, "inv1")
+	ev.Author = author
+	ev.Content = genai.NewContentFromText(text, genai.RoleModel)
+	ev.Partial = partial
+	return ev
+}
+
+func thoughtEvent(ctx context.Context, text string, partial bool) *session.Event {
+	ev := session.NewEvent(ctx, "inv1")
+	ev.Content = &genai.Content{
+		Role:  string(genai.RoleModel),
+		Parts: []*genai.Part{{Text: text, Thought: true}},
+	}
+	ev.Partial = partial
+	return ev
+}
+
+func textDeltas(evts []sseEvent) string {
+	var b strings.Builder
+	for _, ev := range evts {
+		if ev.Type == events.EventTypeTextMessageContent {
+			b.WriteString(ev.str("delta"))
+		}
+	}
+	return b.String()
+}
+
+func reasoningDeltas(evts []sseEvent) string {
+	var b strings.Builder
+	for _, ev := range evts {
+		if ev.Type == events.EventTypeReasoningMessageContent {
+			b.WriteString(ev.str("delta"))
+		}
+	}
+	return b.String()
+}
+
+// A remote A2A sub-agent that aggregates server-side delivers its reply as
+// several independent non-partial events. Each must arrive whole: they are
+// not cumulative and must never be sliced against each other.
+func TestProcessEvent_TextStreaming_MultiArtifactNonPartial(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	artifacts := []string{
+		"Revenue grew 12% quarter over quarter.",
+		"Direct costs stayed flat, so contribution margin expanded from 31% to 38%.",
+		"Freight savings: ~R1.2m/month.",
+	}
+	evts := runEvents(t, l, state,
+		textEvent(t.Context(), "Data_Analyst", artifacts[0], false),
+		textEvent(t.Context(), "Data_Analyst", artifacts[1], false),
+		textEvent(t.Context(), "Data_Analyst", artifacts[2], false),
+	)
+
+	want := artifacts[0] + artifacts[1] + artifacts[2]
+	if got := textDeltas(evts); got != want {
+		t.Errorf("delivered text = %q, want %q", got, want)
+	}
+}
+
+// A non-streaming agent's second reply in the same run must be delivered even
+// when it is shorter than the first (no stale length may suppress it).
+func TestProcessEvent_TextStreaming_NonStreamingTurns_ShorterSecondReply(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	turn1 := textEvent(t.Context(), "test-app", "A fairly long first reply from a non-streaming agent.", false)
+	turn1.TurnComplete = true
+	evts := runEvents(t, l, state,
+		turn1,
+		textEvent(t.Context(), "test-app", "Short answer.", false),
+	)
+
+	want := "A fairly long first reply from a non-streaming agent." + "Short answer."
+	if got := textDeltas(evts); got != want {
+		t.Errorf("delivered text = %q, want %q", got, want)
+	}
+}
+
+// When streaming stops short, the trailing non-partial final extends the
+// streamed text; only the unseen tail may be emitted.
+func TestProcessEvent_TextStreaming_FinalExtendsPartialStream(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	evts := runEvents(t, l, state,
+		textEvent(t.Context(), "test-app", "Hel", true),
+		textEvent(t.Context(), "test-app", "lo wor", true),
+		textEvent(t.Context(), "test-app", "Hello world", false),
+	)
+
+	if got := textDeltas(evts); got != "Hello world" {
+		t.Errorf("delivered text = %q, want %q", got, "Hello world")
+	}
+}
+
+// A non-partial event that does not repeat the streamed text is an independent
+// chunk and must be emitted whole — never sliced by length, whether it is
+// longer or shorter than what was streamed.
+func TestProcessEvent_TextStreaming_IndependentChunkAfterStream(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	evts := runEvents(t, l, state,
+		textEvent(t.Context(), "test-app", "Hello", true),
+		textEvent(t.Context(), "test-app", "Meanwhile, an unrelated longer note.", false),
+		textEvent(t.Context(), "test-app", "Hi.", false),
+	)
+
+	want := "Hello" + "Meanwhile, an unrelated longer note." + "Hi."
+	if got := textDeltas(evts); got != want {
+		t.Errorf("delivered text = %q, want %q", got, want)
+	}
+}
+
+// Root streams its hand-off, transfers, and the remote sub-agent replies with
+// a single non-partial event. Both texts must appear exactly once, and the
+// remote reply's TEXT_MESSAGE_START must carry the remote agent's name.
+func TestProcessEvent_TextStreaming_StreamThenRemoteNonPartial(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	evts := runEvents(t, l, state,
+		textEvent(t.Context(), "test-app", "Handing", true),
+		textEvent(t.Context(), "test-app", " off.", true),
+		textEvent(t.Context(), "test-app", "Handing off.", false), // trailing final: repeat
+		textEvent(t.Context(), "Data_Analyst", "Revenue grew 12%.", false),
+	)
+
+	want := "Handing off." + "Revenue grew 12%."
+	if got := textDeltas(evts); got != want {
+		t.Errorf("delivered text = %q, want %q", got, want)
+	}
+
+	var startNames []string
+	var steps []events.EventType
+	for _, ev := range evts {
+		switch ev.Type {
+		case events.EventTypeTextMessageStart:
+			startNames = append(startNames, ev.str("name"))
+		case events.EventTypeStepStarted, events.EventTypeStepFinished:
+			steps = append(steps, ev.Type)
+		}
+	}
+	if len(startNames) != 2 || startNames[0] != "test-app" || startNames[1] != "Data_Analyst" {
+		t.Errorf("TEXT_MESSAGE_START names = %v, want [test-app Data_Analyst]", startNames)
+	}
+	if len(steps) != 1 || steps[0] != events.EventTypeStepStarted {
+		t.Errorf("step events = %v, want [STEP_STARTED]", steps)
+	}
+}
+
+// A partial tool-call proposal closes the open message before the trailing
+// final arrives. The final's exact repeat must still be deduped, while a new
+// message that merely shares a prefix with the earlier stream must be emitted
+// whole — the stale accumulation must never slice it.
+func TestProcessEvent_TextStreaming_CloseByToolCall_FinalRepeatThenNewText(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	evts := runEvents(t, l, state,
+		textEvent(t.Context(), "test-app", "Hel", true),
+		partialFunctionCallEvent(t.Context(), "call-1", "lookup", map[string]any{"q": "x"}), // closes the message
+		textEvent(t.Context(), "test-app", "Hel", false),                                    // trailing final: exact repeat, deduped
+		textEvent(t.Context(), "test-app", "Help me", false),                                // new message sharing a prefix: whole
+	)
+
+	want := "Hel" + "Help me"
+	if got := textDeltas(evts); got != want {
+		t.Errorf("delivered text = %q, want %q", got, want)
+	}
+}
+
+// After TurnComplete closes the streamed message, a new turn's reply that
+// shares a prefix with the prior stream must be emitted whole.
+func TestProcessEvent_TextStreaming_NewTurnSharesPrefixWithPriorStream(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	final := textEvent(t.Context(), "test-app", "Hello", false) // trailing final: exact repeat
+	final.TurnComplete = true
+	evts := runEvents(t, l, state,
+		textEvent(t.Context(), "test-app", "Hello", true),
+		final,
+		textEvent(t.Context(), "test-app", "Hello there, with more detail.", false),
+	)
+
+	want := "Hello" + "Hello there, with more detail."
+	if got := textDeltas(evts); got != want {
+		t.Errorf("delivered text = %q, want %q", got, want)
+	}
+}
+
+// A text part closes the open reasoning message. The reasoning final's exact
+// repeat must still be deduped, while a new thought sharing a prefix with the
+// earlier reasoning stream must be emitted whole.
+func TestProcessEvent_ReasoningPhase_InterleavedTextThenNewThought(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	evts := runEvents(t, l, state,
+		thoughtEvent(t.Context(), "think", true),
+		textEvent(t.Context(), "test-app", "answer", true),         // closes the reasoning message
+		thoughtEvent(t.Context(), "think", false),                  // trailing final: exact repeat, deduped
+		thoughtEvent(t.Context(), "thinking harder now...", false), // new thought sharing a prefix: whole
+	)
+
+	want := "think" + "thinking harder now..."
+	if got := reasoningDeltas(evts); got != want {
+		t.Errorf("delivered reasoning = %q, want %q", got, want)
+	}
+}
+
+// Independent non-partial thought events (e.g. from an aggregating remote
+// agent) must each be delivered whole, mirroring the text behaviour.
+func TestProcessEvent_ReasoningPhase_MultiArtifactNonPartial(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	evts := runEvents(t, l, state,
+		thoughtEvent(t.Context(), "Considering the revenue trend first.", false),
+		thoughtEvent(t.Context(), "Now costs.", false),
+	)
+
+	want := "Considering the revenue trend first." + "Now costs."
+	if got := reasoningDeltas(evts); got != want {
+		t.Errorf("delivered reasoning = %q, want %q", got, want)
+	}
+}
+
 func TestProcessEvent_ReasoningPhase(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
