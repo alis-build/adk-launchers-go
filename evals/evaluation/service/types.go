@@ -20,11 +20,13 @@ type InferenceConfig struct {
 }
 
 // InferenceRequest loads eval cases and runs agent inference.
+// JSON tags are for programmatic serialization only; HTTP run_eval uses [RunEvalRequest].
 type InferenceRequest struct {
 	AppName         string          `json:"appName"`
 	EvalSetID       string          `json:"evalSetId"`
 	EvalCaseIDs     []string        `json:"evalCaseIds,omitempty"`
 	InferenceConfig InferenceConfig `json:"inferenceConfig"`
+	SessionState    map[string]any  `json:"sessionState,omitempty"`
 }
 
 // InferenceResult holds generated invocations for one eval case.

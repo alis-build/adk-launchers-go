@@ -3,6 +3,7 @@ package evals
 import (
 	"encoding/json"
 
+	"go.alis.build/adk/launchers/evals/evaluation/maps"
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 )
 
@@ -42,9 +43,10 @@ func (r *RunEvalRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var camel struct {
-		EvalIDs     []string            `json:"evalIds"`
-		EvalCaseIDs []string            `json:"evalCaseIds"`
-		EvalMetrics []models.EvalMetric `json:"evalMetrics"`
+		EvalIDs      []string            `json:"evalIds"`
+		EvalCaseIDs  []string            `json:"evalCaseIds"`
+		EvalMetrics  []models.EvalMetric `json:"evalMetrics"`
+		SessionState map[string]any      `json:"sessionState"`
 	}
 	if err := json.Unmarshal(data, &camel); err != nil {
 		return err
@@ -58,5 +60,6 @@ func (r *RunEvalRequest) UnmarshalJSON(data []byte) error {
 	if len(r.EvalMetrics) == 0 {
 		r.EvalMetrics = camel.EvalMetrics
 	}
+	r.SessionState = maps.MergeStringAny(camel.SessionState, r.SessionState)
 	return nil
 }

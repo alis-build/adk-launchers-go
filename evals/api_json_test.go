@@ -94,6 +94,65 @@ func TestRunEvalRequestUnmarshalMixedCase(t *testing.T) {
 	}
 }
 
+func TestRunEvalRequestUnmarshalSessionStateSnakeCase(t *testing.T) {
+	var req RunEvalRequest
+	if err := json.Unmarshal([]byte(`{
+		"session_state": {"idea_name": "ideas/abc", "enabled": true}
+	}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.SessionState["idea_name"] != "ideas/abc" {
+		t.Fatalf("idea_name = %v", req.SessionState["idea_name"])
+	}
+	if req.SessionState["enabled"] != true {
+		t.Fatalf("enabled = %v", req.SessionState["enabled"])
+	}
+}
+
+func TestRunEvalRequestUnmarshalSessionStateCamelCase(t *testing.T) {
+	var req RunEvalRequest
+	if err := json.Unmarshal([]byte(`{
+		"sessionState": {"idea_name": "ideas/abc"}
+	}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.SessionState["idea_name"] != "ideas/abc" {
+		t.Fatalf("sessionState = %#v", req.SessionState)
+	}
+}
+
+func TestRunEvalRequestUnmarshalSessionStateSnakeWinsOverCamel(t *testing.T) {
+	var req RunEvalRequest
+	if err := json.Unmarshal([]byte(`{
+		"session_state": {"idea_name": "ideas/snake"},
+		"sessionState": {"idea_name": "ideas/camel"}
+	}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.SessionState["idea_name"] != "ideas/snake" {
+		t.Fatalf("session_state = %#v, snake_case should win", req.SessionState)
+	}
+}
+
+func TestRunEvalRequestUnmarshalSessionStateMixedCaseKeys(t *testing.T) {
+	var req RunEvalRequest
+	if err := json.Unmarshal([]byte(`{
+		"session_state": {"idea_name": "ideas/snake"},
+		"sessionState": {"account_name": "accounts/camel"}
+	}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.SessionState["idea_name"] != "ideas/snake" {
+		t.Fatalf("idea_name = %v", req.SessionState["idea_name"])
+	}
+	if req.SessionState["account_name"] != "accounts/camel" {
+		t.Fatalf("account_name = %v", req.SessionState["account_name"])
+	}
+	if len(req.SessionState) != 2 {
+		t.Fatalf("session_state = %#v, want both keys merged", req.SessionState)
+	}
+}
+
 func TestCreateEvalSetRequestUnmarshalAdkWebBody(t *testing.T) {
 	var req CreateEvalSetRequest
 	if err := json.Unmarshal([]byte(`{

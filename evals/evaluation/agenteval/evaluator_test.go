@@ -9,7 +9,7 @@ import (
 )
 
 func TestEvaluateEvalSetRequiresService(t *testing.T) {
-	_, err := agenteval.EvaluateEvalSet(context.Background(), nil, "app", &models.EvalSet{EvalSetID: "set1"}, models.DefaultEvalConfig(), 1)
+	_, err := agenteval.EvaluateEvalSet(context.Background(), nil, "app", &models.EvalSet{EvalSetID: "set1"}, models.DefaultEvalConfig(), 1, nil)
 	if err == nil {
 		t.Fatal("expected error for nil service")
 	}

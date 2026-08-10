@@ -11,6 +11,7 @@ import (
 const defaultNumRuns = 2
 
 // EvaluateEvalSet runs inference and evaluation numRuns times and aggregates mean metric scores per case.
+// sessionState is optional run-level ADK session bootstrap state merged into each case before inference.
 func EvaluateEvalSet(
 	ctx context.Context,
 	svc *service.LocalEvalService,
@@ -18,6 +19,7 @@ func EvaluateEvalSet(
 	evalSet *models.EvalSet,
 	cfg models.EvalConfig,
 	numRuns int,
+	sessionState map[string]any,
 ) ([]models.EvalCaseResult, error) {
 	if svc == nil || evalSet == nil {
 		return nil, fmt.Errorf("service and eval set are required")
@@ -33,8 +35,9 @@ func EvaluateEvalSet(
 	var inferences []service.InferenceResult
 	for range numRuns {
 		batch, err := svc.PerformInference(ctx, service.InferenceRequest{
-			AppName:   appName,
-			EvalSetID: evalSet.EvalSetID,
+			AppName:      appName,
+			EvalSetID:    evalSet.EvalSetID,
+			SessionState: sessionState,
 		})
 		if err != nil {
 			return nil, err

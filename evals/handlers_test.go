@@ -226,6 +226,66 @@ func TestRunEvalDeterministicMetric(t *testing.T) {
 	}
 }
 
+func TestRunEvalSessionStateBootstrap(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	_ = sets.AddEvalCase("my_app", "set1", models.EvalCase{
+		EvalID: "case1",
+		SessionInput: &models.SessionInput{
+			State: map[string]any{"idea_name": "ideas/case"},
+		},
+		Conversation: []models.Invocation{{
+			UserContent:   genai.NewContentFromText("hi", genai.RoleUser),
+			FinalResponse: genai.NewContentFromText("ok", genai.RoleModel),
+		}},
+	})
+
+	rec := callHandler(t, l.runEvalLegacyHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/run_eval", map[string]any{
+		"session_state": map[string]any{
+			"idea_name":    "ideas/run",
+			"account_name": "accounts/run",
+		},
+		"evalMetrics": []map[string]any{{
+			"metricName": models.MetricResponseMatchScore,
+			"threshold":  0.5,
+		}},
+	}, map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run eval status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var results []models.RunEvalResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(results) != 1 || results[0].SessionID == "" {
+		t.Fatalf("results = %+v", results)
+	}
+
+	ctx := context.Background()
+	resp, err := l.launcherCfg.SessionService.Get(ctx, &session.GetRequest{
+		AppName:   "my_app",
+		UserID:    "test_user_id",
+		SessionID: results[0].SessionID,
+	})
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	idea, err := resp.Session.State().Get("idea_name")
+	if err != nil {
+		t.Fatalf("idea_name state: %v", err)
+	}
+	if idea != "ideas/case" {
+		t.Fatalf("idea_name = %v, want ideas/case (case overrides run)", idea)
+	}
+	account, err := resp.Session.State().Get("account_name")
+	if err != nil {
+		t.Fatalf("account_name state: %v", err)
+	}
+	if account != "accounts/run" {
+		t.Fatalf("account_name = %v, want accounts/run", account)
+	}
+}
+
 func TestGetEvalSet(t *testing.T) {
 	l, sets := newHandlerTestLauncher(t)
 	_, _ = sets.CreateEvalSet("my_app", "set1")

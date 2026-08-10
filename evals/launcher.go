@@ -773,6 +773,7 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 		EvalSetID:       evalSetID,
 		EvalCaseIDs:     caseIDs,
 		InferenceConfig: service.InferenceConfig{},
+		SessionState:    req.SessionState,
 	})
 	if err != nil {
 		return nil, alismux.BadRequestErr("%s", err.Error())

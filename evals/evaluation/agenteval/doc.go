@@ -3,5 +3,6 @@
 // [EvaluateEvalSet] runs inference and metric evaluation multiple times,
 // aggregates mean scores per eval case, and returns [models.EvalCaseResult]
 // values suitable for persistence or reporting. It wraps [service.LocalEvalService]
-// for callers that need batch evaluation outside the HTTP launcher.
+// for callers that need batch evaluation outside the HTTP launcher. Optional
+// sessionState is run-level ADK session bootstrap state merged into each case.
 package agenteval

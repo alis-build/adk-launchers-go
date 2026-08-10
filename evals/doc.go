@@ -99,4 +99,13 @@
 // [generator.Generator] and [simulation.UserSimulator] implementations; scoring
 // uses [metrics.Registry]. See the evaluation/ subpackages for programmatic use
 // without the HTTP launcher.
+//
+// # Run-level session state
+//
+// POST run_eval / run accepts optional session_state (JSON: session_state or
+// sessionState): a map of ADK session bootstrap values applied to every case
+// in the run (for example idea_name, account_name). Values merge into each
+// case's sessionInput.state before inference; case-level keys override run-level
+// keys. When both snake_case and camelCase session maps appear in one body,
+// keys merge with snake_case winning on conflict.
 package evals

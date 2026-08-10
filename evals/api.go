@@ -18,9 +18,10 @@ type AddSessionToEvalSetRequest struct {
 
 // RunEvalRequest is the POST run request body.
 type RunEvalRequest struct {
-	EvalIDs     []string            `json:"eval_ids,omitempty"`
-	EvalCaseIDs []string            `json:"eval_case_ids,omitempty"`
-	EvalMetrics []models.EvalMetric `json:"eval_metrics"`
+	EvalIDs      []string            `json:"eval_ids,omitempty"`
+	EvalCaseIDs  []string            `json:"eval_case_ids,omitempty"`
+	EvalMetrics  []models.EvalMetric `json:"eval_metrics"`
+	SessionState map[string]any      `json:"session_state,omitempty"`
 }
 
 // RunEvalResponse wraps per-case run results.
