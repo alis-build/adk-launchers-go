@@ -42,9 +42,10 @@ func (r *RunEvalRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var camel struct {
-		EvalIDs     []string            `json:"evalIds"`
-		EvalCaseIDs []string            `json:"evalCaseIds"`
-		EvalMetrics []models.EvalMetric `json:"evalMetrics"`
+		EvalIDs      []string            `json:"evalIds"`
+		EvalCaseIDs  []string            `json:"evalCaseIds"`
+		EvalMetrics  []models.EvalMetric `json:"evalMetrics"`
+		SessionState map[string]any      `json:"sessionState"`
 	}
 	if err := json.Unmarshal(data, &camel); err != nil {
 		return err
@@ -58,5 +59,28 @@ func (r *RunEvalRequest) UnmarshalJSON(data []byte) error {
 	if len(r.EvalMetrics) == 0 {
 		r.EvalMetrics = camel.EvalMetrics
 	}
+	r.SessionState = mergeRunEvalSessionState(camel.SessionState, r.SessionState)
 	return nil
+}
+
+// mergeRunEvalSessionState merges sessionState (camelCase) and session_state
+// (snake_case) key-by-key. Snake_case keys win on conflict.
+func mergeRunEvalSessionState(camel, snake map[string]any) map[string]any {
+	if len(camel) == 0 && len(snake) == 0 {
+		return nil
+	}
+	if len(camel) == 0 {
+		return snake
+	}
+	if len(snake) == 0 {
+		return camel
+	}
+	out := make(map[string]any, len(camel)+len(snake))
+	for k, v := range camel {
+		out[k] = v
+	}
+	for k, v := range snake {
+		out[k] = v
+	}
+	return out
 }

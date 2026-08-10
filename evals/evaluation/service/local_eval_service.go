@@ -76,7 +76,7 @@ func (s *LocalEvalService) PerformInference(ctx context.Context, req InferenceRe
 			}
 		}()
 		for job := range work {
-			res := s.runInference(ctx, req.AppName, req.EvalSetID, job.c, req.InferenceConfig)
+			res := s.runInference(ctx, req.AppName, req.EvalSetID, job.c, req.InferenceConfig, req.SessionState)
 			out[job.idx] = res
 		}
 	}
@@ -125,7 +125,7 @@ func sendJobs[T any](ctx context.Context, work chan<- T, workersDone <-chan stru
 }
 
 // runInference executes agent inference for a single eval case.
-func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID string, evalCase models.EvalCase, cfg InferenceConfig) InferenceResult {
+func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID string, evalCase models.EvalCase, cfg InferenceConfig, runSessionState map[string]any) InferenceResult {
 	sessionID := generator.NewEvalSessionID()
 	if s.NewSessionID != nil {
 		sessionID = s.NewSessionID()
@@ -144,7 +144,7 @@ func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID 
 	}
 	inv, err := s.Generator.GenerateInferences(ctx, generator.InferenceOptions{
 		SessionID:          sessionID,
-		SessionInput:       evalCase.SessionInput,
+		SessionInput:       effectiveSessionInput(runSessionState, evalCase),
 		UserSimulator:      sim,
 		UseLive:            cfg.UseLive,
 		LiveTimeoutSeconds: cfg.LiveTimeoutSeconds,

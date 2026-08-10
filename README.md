@@ -11,9 +11,9 @@ Use this repository when you need extra capabilities beyond the core ADK launche
 | [`agui`](./agui)                       | `agui`      | [AG-UI](https://docs.ag-ui.com) SSE endpoint for CopilotKit and other AG-UI clients; optional [AgentExecutor](https://pkg.go.dev/go.alis.build/adk/launchers/agui#AgentExecutor) via `WithExecutor` |
 | [`agui/clienttool`](./agui/clienttool) | —           | Dynamic `tool.Toolset` for AG-UI client-side tools (agent opt-in, used with `agui`)                                                                                                                 |
 | [`lro`](./lro)                         | `lro`       | HTTP resume routes for [go.alis.build/lro/v2](https://pkg.go.dev/go.alis.build/lro/v2) long-running operations                                                                                      |
-| [`scheduler`](./scheduler)             | `scheduler` | [AG-UI scheduler](https://pkg.go.dev/go.alis.build/agui/scheduler) cron JSON-RPC and Cloud Tasks callback (in-process ADK runner)                                                            |
+| [`scheduler`](./scheduler)             | `scheduler` | [AG-UI scheduler](https://pkg.go.dev/go.alis.build/agui/scheduler) cron JSON-RPC and Cloud Tasks callback (in-process ADK runner)                                                                   |
 | [`console`](./console)                 | `console`   | Embedded Vue operator console SPA, runtime config, and `/auth/me` (register **last** in `web.NewLauncher`)                                                                                          |
-| [`evals`](./evals)                     | `evals`     | Dev evaluation HTTP API (eval sets, run eval, metrics-info) with full adk-python evaluation engine parity                                                                                            |
+| [`evals`](./evals)                     | `evals`     | Dev evaluation HTTP API (eval sets, run eval, metrics-info) with full adk-python evaluation engine parity                                                                                           |
 
 ## Quick start
 
@@ -209,20 +209,20 @@ This sublauncher is separate from [`console`](./console): it serves the dev eval
 
 All routes are under `/api/dev/apps/{appName}/...` by default (match webui `-api_server_address=/api`). Override with `-path_prefix` or [evals.WithPathPrefix](./evals). adk-web uses the legacy underscore paths (`eval_sets`, `run_eval`, etc.); canonical hyphen paths are also registered.
 
-| Method | Path (legacy) | Description |
-| ------ | ------------- | ----------- |
-| GET | `/api/dev/apps/{app}/eval_sets` | List eval set IDs |
-| POST | `/api/dev/apps/{app}/eval-sets` | Create eval set |
-| GET | `/api/dev/apps/{app}/eval_sets/{id}` | Get eval set |
-| DELETE | `/api/dev/apps/{app}/eval_sets/{id}` | Delete eval set |
-| GET | `/api/dev/apps/{app}/eval-sets/{id}/eval-cases` | List eval case IDs (canonical) |
-| GET | `/api/dev/apps/{app}/eval_sets/{id}/evals` | List eval case IDs (legacy) |
-| GET/PUT/DELETE | `/api/dev/apps/{app}/eval_sets/{id}/evals/{caseId}` | CRUD eval case |
-| POST | `/api/dev/apps/{app}/eval_sets/{id}/add_session` | Session → eval case |
-| POST | `/api/dev/apps/{app}/eval_sets/{id}/run_eval` | Run inference + evaluate |
-| GET | `/api/dev/apps/{app}/eval_results` | List result IDs |
-| GET | `/api/dev/apps/{app}/eval_results/{resultId}` | Get eval result |
-| GET | `/api/dev/apps/{app}/metrics-info` | Registered metric metadata |
+| Method         | Path (legacy)                                       | Description                    |
+| -------------- | --------------------------------------------------- | ------------------------------ |
+| GET            | `/api/dev/apps/{app}/eval_sets`                     | List eval set IDs              |
+| POST           | `/api/dev/apps/{app}/eval-sets`                     | Create eval set                |
+| GET            | `/api/dev/apps/{app}/eval_sets/{id}`                | Get eval set                   |
+| DELETE         | `/api/dev/apps/{app}/eval_sets/{id}`                | Delete eval set                |
+| GET            | `/api/dev/apps/{app}/eval-sets/{id}/eval-cases`     | List eval case IDs (canonical) |
+| GET            | `/api/dev/apps/{app}/eval_sets/{id}/evals`          | List eval case IDs (legacy)    |
+| GET/PUT/DELETE | `/api/dev/apps/{app}/eval_sets/{id}/evals/{caseId}` | CRUD eval case                 |
+| POST           | `/api/dev/apps/{app}/eval_sets/{id}/add_session`    | Session → eval case            |
+| POST           | `/api/dev/apps/{app}/eval_sets/{id}/run_eval`       | Run inference + evaluate       |
+| GET            | `/api/dev/apps/{app}/eval_results`                  | List result IDs                |
+| GET            | `/api/dev/apps/{app}/eval_results/{resultId}`       | Get eval result                |
+| GET            | `/api/dev/apps/{app}/metrics-info`                  | Registered metric metadata     |
 
 See [`evals/doc.go`](evals/doc.go) for routes and storage options.
 

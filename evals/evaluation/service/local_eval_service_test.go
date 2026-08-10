@@ -94,6 +94,91 @@ func TestPerformInferenceSessionIDMatchesRunnerSession(t *testing.T) {
 	}
 }
 
+func TestPerformInferenceRunSessionStateMergedIntoRunner(t *testing.T) {
+	ctx := context.Background()
+	sessSvc := session.InMemoryService()
+	const wantSessionID = generator.EvalSessionIDPrefix + "session-state-eval"
+
+	sets := storage.NewInMemoryEvalSetsManager()
+	_, _ = sets.CreateEvalSet("app", "set1")
+	_ = sets.AddEvalCase("app", "set1", models.EvalCase{
+		EvalID: "case1",
+		SessionInput: &models.SessionInput{
+			State: map[string]any{"idea_name": "ideas/case"},
+		},
+		Conversation: []models.Invocation{
+			{UserContent: genai.NewContentFromText("Hello", genai.RoleUser)},
+		},
+	})
+
+	a, err := agent.New(agent.Config{
+		Name: "app",
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				ev := session.NewEvent(ctx, ctx.InvocationID())
+				ev.Author = "app"
+				ev.Content = genai.NewContentFromText("ok", genai.RoleModel)
+				yield(ev, nil)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	rt, err := adkrun.NewRuntime(&launcher.Config{
+		AgentLoader:    agent.NewSingleLoader(a),
+		SessionService: sessSvc,
+	}, "app")
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+
+	svc := &service.LocalEvalService{
+		Generator:    &generator.Generator{Runtime: rt},
+		Sets:         sets,
+		SimProvider:  simulation.UserSimulatorProvider{},
+		Sessions:     sessSvc,
+		NewSessionID: func() string { return wantSessionID },
+	}
+	inf, err := svc.PerformInference(ctx, service.InferenceRequest{
+		AppName:   "app",
+		EvalSetID: "set1",
+		SessionState: map[string]any{
+			"idea_name":    "ideas/run",
+			"account_name": "accounts/run",
+		},
+	})
+	if err != nil {
+		t.Fatalf("PerformInference: %v", err)
+	}
+	if len(inf) != 1 || inf[0].Status != service.InferenceStatusSuccess {
+		t.Fatalf("inf = %+v", inf)
+	}
+
+	resp, err := sessSvc.Get(ctx, &session.GetRequest{
+		AppName:   "app",
+		UserID:    "test_user_id",
+		SessionID: wantSessionID,
+	})
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	idea, err := resp.Session.State().Get("idea_name")
+	if err != nil {
+		t.Fatalf("idea_name state: %v", err)
+	}
+	if idea != "ideas/case" {
+		t.Fatalf("idea_name = %v, want ideas/case (case overrides run)", idea)
+	}
+	account, err := resp.Session.State().Get("account_name")
+	if err != nil {
+		t.Fatalf("account_name state: %v", err)
+	}
+	if account != "accounts/run" {
+		t.Fatalf("account_name = %v, want accounts/run", account)
+	}
+}
+
 func TestLocalEvalServiceEvaluate(t *testing.T) {
 	ctx := context.Background()
 	sets := storage.NewInMemoryEvalSetsManager()

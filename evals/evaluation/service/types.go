@@ -25,6 +25,9 @@ type InferenceRequest struct {
 	EvalSetID       string          `json:"evalSetId"`
 	EvalCaseIDs     []string        `json:"evalCaseIds,omitempty"`
 	InferenceConfig InferenceConfig `json:"inferenceConfig"`
+	// SessionState is run-level ADK session bootstrap state merged into each
+	// case's sessionInput.state before inference; case keys win on conflict.
+	SessionState map[string]any `json:"sessionState,omitempty"`
 }
 
 // InferenceResult holds generated invocations for one eval case.

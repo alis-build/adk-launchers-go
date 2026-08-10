@@ -15,7 +15,7 @@ require (
 	go.alis.build/iam/v3 v3.8.0
 	go.alis.build/lro/v2 v2.9.0
 	go.alis.build/mux v0.4.9
-	google.golang.org/adk/v2 v2.1.0
+	google.golang.org/adk/v2 v2.2.0
 	google.golang.org/api v0.292.0
 	google.golang.org/genai v1.67.0
 	google.golang.org/grpc v1.83.0
