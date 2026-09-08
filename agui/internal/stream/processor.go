@@ -13,9 +13,11 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
+	"github.com/google/jsonschema-go/jsonschema"
 	"go.alis.build/adk/launchers/agui/internal/interrupt"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
+	"google.golang.org/adk/v2/workflow"
 	"google.golang.org/genai"
 )
 
@@ -48,6 +50,10 @@ type Processor struct {
 	BuildMessagesSnapshot  func(ctx context.Context, sess session.Session) ([]types.Message, error)
 	IsInternalStateKey     func(key string) bool
 	BuildStateSnapshot     func(sess session.Session, reqState map[string]any) map[string]any
+
+	// InterruptReasonClassifier optionally overrides the AG-UI reason chosen for
+	// a workflow input request. Nil falls through to the schema-shape rule.
+	InterruptReasonClassifier interrupt.ReasonClassifier
 }
 
 // eventSink is the legacy internal name used within this package.
@@ -521,14 +527,10 @@ type interruptCallHandler func(p *Processor, sink eventSink, state *State, fc *g
 // is what lets ProcessEvent recognise an interrupt without knowing how to emit
 // one.
 //
-// TODO(non-tool-interrupts): register ADK's native pause primitive
-// (adk_request_input) here for AG-UI reasons "input_required" and
-// "confirmation" — no toolCallId, optional responseSchema from ADK. Resume
-// mapping dispatches on interrupt.Record.CallName, and pending validation may
-// need reason-specific schema rules.
 // See https://docs.ag-ui.com/concepts/interrupts#reason-taxonomy
 var interruptCallHandlers = map[string]interruptCallHandler{
-	toolconfirmation.FunctionCallName: buildToolCallInterrupt,
+	toolconfirmation.FunctionCallName:      buildToolCallInterrupt,
+	workflow.WorkflowInputFunctionCallName: buildInputRequestInterrupt,
 }
 
 // buildToolCallInterrupt converts an adk_request_confirmation FunctionCall into
@@ -596,6 +598,98 @@ func buildToolCallInterrupt(p *Processor, sink eventSink, state *State, fc *gena
 		Metadata:       interruptMeta,
 	}
 	return intr, nil
+}
+
+// buildInputRequestInterrupt converts an adk_request_input FunctionCall into an
+// AG-UI non-tool interrupt.
+//
+// No tool lifecycle is emitted and ToolCallID is left empty: per the AG-UI
+// spec a non-tool reason has no bound tool call, and there is no proposed tool
+// here — the agent is asking the human a question directly.
+func buildInputRequestInterrupt(p *Processor, _ eventSink, _ *State, fc *genai.FunctionCall, ev *session.Event) (types.Interrupt, error) {
+	req := inputRequestFrom(ev, fc)
+	responseSchema := interrupt.SchemaToMap(req.ResponseSchema)
+
+	// callName is what resume dispatches on. Reason cannot serve that role: a
+	// host classifier may return any custom string, which says nothing about
+	// which ADK call has to be answered.
+	adkMeta := map[string]any{
+		"callName": workflow.WorkflowInputFunctionCallName,
+	}
+	if ev.InvocationID != "" {
+		adkMeta["invocationId"] = ev.InvocationID
+	}
+	if req.Payload != nil {
+		// Clients render this alongside the prompt: the document to approve,
+		// the parameters being proposed.
+		adkMeta["requestPayload"] = req.Payload
+	}
+
+	return types.Interrupt{
+		ID:             req.InterruptID,
+		Reason:         interrupt.ClassifyReason(req, responseSchema, p.InterruptReasonClassifier),
+		Message:        req.Message,
+		ResponseSchema: responseSchema,
+		Metadata:       map[string]any{"adk": adkMeta},
+	}, nil
+}
+
+// inputRequestFrom reads the workflow input request behind an adk_request_input
+// call, preferring the typed [session.Event.RequestedInput] over the mirrored
+// FunctionCall args.
+//
+// Both carry the same request. The typed field is written by the emitting node,
+// while the args are the copy that survives a session round-trip through
+// clients that do not model RequestedInput, so either may be the only one
+// present and the typed field wins when they disagree.
+func inputRequestFrom(ev *session.Event, fc *genai.FunctionCall) session.RequestInput {
+	if ev.RequestedInput != nil {
+		return *ev.RequestedInput
+	}
+
+	req := session.RequestInput{InterruptID: fc.ID}
+	if fc.Args == nil {
+		return req
+	}
+	if v, ok := fc.Args["interruptId"].(string); ok && v != "" {
+		req.InterruptID = v
+	}
+	if v, ok := fc.Args["message"].(string); ok {
+		req.Message = v
+	}
+	req.Payload = fc.Args["payload"]
+	req.ResponseSchema = schemaFromArg(fc.Args["responseSchema"])
+	return req
+}
+
+// schemaFromArg reads a response schema out of FunctionCall args, which hold a
+// typed *jsonschema.Schema when freshly emitted and a decoded JSON object once
+// the event has round-tripped through session state.
+//
+// The decoded form is re-typed rather than passed straight through so that a
+// host classifier always receives a RequestInput with its schema populated,
+// whichever path the event arrived by.
+func schemaFromArg(v any) *jsonschema.Schema {
+	switch arg := v.(type) {
+	case *jsonschema.Schema:
+		return arg
+	case jsonschema.Schema:
+		return &arg
+	case map[string]any:
+		data, err := json.Marshal(arg)
+		if err == nil {
+			var schema jsonschema.Schema
+			if err = json.Unmarshal(data, &schema); err == nil {
+				return &schema
+			}
+		}
+		// A malformed schema costs the client its form hints. Dropping it beats
+		// failing the run, which would cost the user their turn.
+		log.Printf("agui: input request responseSchema ignored: %v", err)
+		return nil
+	default:
+		return nil
+	}
 }
 
 // finishWithInterrupts emits the single terminal RunFinished carrying every

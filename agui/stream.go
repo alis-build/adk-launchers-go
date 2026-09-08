@@ -50,6 +50,7 @@ func (l *aguiLauncher) streamProcessor() *stream.Processor {
 		BuildStateSnapshot: func(sess session.Session, reqState map[string]any) map[string]any {
 			return stream.BuildStateSnapshot(sess, reqState, isInternalStateKey)
 		},
+		InterruptReasonClassifier: l.config.interruptReasonClassifier,
 	}
 }
 
