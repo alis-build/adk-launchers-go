@@ -1,0 +1,35 @@
+Task: baseline-golden (plan agui_workflow_graph_b7e4d091, phase P1)
+
+Why: the plan marks this a PREREQUISITE, and the reasoning holds. FR1
+adds path-named STEP_* events and FR3 adds a reserved _adk.nodeOutputs
+state key. Steps and state deltas are not new channels; a plain agent
+already emits both. Every later 'no change for plain agents' assertion is
+vacuous without a full-stream golden to compare against.
+
+Changes:
+- agui/graph_baseline_test.go (new): stableStream helper,
+  plainAgentRun driver, TestPlainAgentStreamBaseline.
+
+Method mirrors the tool_call wire baseline from the previous track
+(62ddae1), which caught a real regression there.
+
+Normalisation decisions:
+- timestamp dropped (wall clock).
+- messageId and parentMessageId mapped to msg-N by first appearance, NOT
+  redacted. Redaction would lose the relationships that matter: two
+  partials sharing one message id, and TOOL_CALL_START.parentMessageId
+  pointing at the preceding text message.
+
+Observed behaviour now pinned, worth knowing before P2 touches steps:
+- The root agent gets NO step. ev.Author is normalised to '' when it
+  equals RootAppName, so only sub-agents bracket. FR1's path-based steps
+  must not disturb that.
+- A sub-agent's STEP_FINISHED is emitted by the author change back to the
+  root, not by TurnComplete.
+- The final TurnComplete event emits nothing, everything already closed.
+
+Mutation check: dropped the RootAppName normalisation so the root author
+also opened a step; the golden failed on the extra STEP_* events; then
+reverted.
+
+Verification: go fmt, go vet, CI=true go test ./... all clean.
