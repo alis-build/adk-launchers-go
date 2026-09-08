@@ -51,6 +51,22 @@ func parseSSEEvents(body string) []sseEvent {
 	return out
 }
 
+// withoutSubagentEvents drops SUBAGENT_* events so lifecycle assertions can
+// index by position. Subagent bracketing has its own coverage in
+// subagent_test.go; these tests are about the step and text lifecycles it
+// interleaves with.
+func withoutSubagentEvents(evts []sseEvent) []sseEvent {
+	out := make([]sseEvent, 0, len(evts))
+	for _, ev := range evts {
+		switch ev.Type {
+		case events.EventTypeSubagentStarted, events.EventTypeSubagentFinished:
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
 func TestProcessEvent_TextStreaming(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
@@ -251,7 +267,7 @@ func TestProcessEvent_TextStreaming_SubAgentNonPartialOnly(t *testing.T) {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
-	evts := parseSSEEvents(rec.Body.String())
+	evts := withoutSubagentEvents(parseSSEEvents(rec.Body.String()))
 	if len(evts) != 3 {
 		t.Fatalf("got %d events, want 3 (STEP_STARTED + START + CONTENT)", len(evts))
 	}
@@ -1324,7 +1340,7 @@ func TestProcessEvent_StepEvents(t *testing.T) {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
-	evts := parseSSEEvents(rec.Body.String())
+	evts := withoutSubagentEvents(parseSSEEvents(rec.Body.String()))
 	if evts[0].Type != events.EventTypeStepStarted {
 		t.Errorf("event[0].Type = %v, want STEP_STARTED", evts[0].Type)
 	}
@@ -1343,7 +1359,7 @@ func TestProcessEvent_StepEvents(t *testing.T) {
 		t.Fatalf("processEvent() error = %v", err)
 	}
 
-	evts2 := parseSSEEvents(rec2.Body.String())
+	evts2 := withoutSubagentEvents(parseSSEEvents(rec2.Body.String()))
 	if len(evts2) < 2 {
 		t.Fatalf("got %d events, want at least 2 (TEXT_MESSAGE_END then STEP_FINISHED)", len(evts2))
 	}

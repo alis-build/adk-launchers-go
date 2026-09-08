@@ -11,8 +11,9 @@ import (
 
 // stableStream renders an SSE body as canonical JSON for golden comparison.
 //
-// Timestamps are dropped as wall-clock noise, and generated message ids are
-// rewritten to msg-1, msg-2 ... in first-appearance order. The rewrite is a
+// Timestamps are dropped as wall-clock noise, and generated ids (message and
+// subagent run alike) are rewritten to msg-1, msg-2 ... in first-appearance
+// order. The rewrite is a
 // mapping rather than a blanket redaction, so the golden still pins which
 // events share a message id: that is what proves partials reuse one message and
 // a tool call points at the right parent.
@@ -37,7 +38,7 @@ func stableStream(t *testing.T, body string) string {
 	raws := make([]map[string]any, 0, len(evts))
 	for _, ev := range evts {
 		delete(ev.Raw, "timestamp")
-		for _, key := range []string{"messageId", "parentMessageId"} {
+		for _, key := range []string{"messageId", "parentMessageId", "subagentRunId"} {
 			if v, ok := ev.Raw[key]; ok {
 				if mapped, ok := stableID(v); ok {
 					ev.Raw[key] = mapped
@@ -130,6 +131,12 @@ func plainAgentRun(t *testing.T) string {
 // Every event here comes from an event with a nil NodeInfo, so this stream must
 // be byte-identical when the track is done. The regression-gate todo re-runs it.
 func TestPlainAgentStreamBaseline(t *testing.T) {
+	// UPDATED AGAIN for subagent events: SUBAGENT_STARTED/FINISHED now bracket
+	// each sub-agent activation and subagentRunId attributes their events, so
+	// any stream with a sub-agent gains both. Verified first that nothing else
+	// moved: with the SUBAGENT_* events dropped and subagentRunId stripped, this
+	// golden passed against its previous contents.
+	//
 	// UPDATED for aguiproto_20260908 FR3, which attaches metadata to EVERY
 	// event by design, so byte-identity across that change was never possible.
 	// Before regenerating, the rest of the stream was proven unchanged: with the
@@ -187,11 +194,23 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
         "invocationId": "inv-plain"
       }
     },
+    "name": "researcher",
+    "subagentRunId": "msg-2",
+    "type": "SUBAGENT_STARTED"
+  },
+  {
+    "metadata": {
+      "adk": {
+        "author": "researcher",
+        "invocationId": "inv-plain"
+      }
+    },
     "stepName": "researcher",
+    "subagentRunId": "msg-2",
     "type": "STEP_STARTED"
   },
   {
-    "messageId": "msg-2",
+    "messageId": "msg-3",
     "metadata": {
       "adk": {
         "author": "researcher",
@@ -200,27 +219,30 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
     },
     "name": "researcher",
     "role": "assistant",
+    "subagentRunId": "msg-2",
     "type": "TEXT_MESSAGE_START"
   },
   {
     "delta": "Searching",
-    "messageId": "msg-2",
+    "messageId": "msg-3",
     "metadata": {
       "adk": {
         "author": "researcher",
         "invocationId": "inv-plain"
       }
     },
+    "subagentRunId": "msg-2",
     "type": "TEXT_MESSAGE_CONTENT"
   },
   {
-    "messageId": "msg-2",
+    "messageId": "msg-3",
     "metadata": {
       "adk": {
         "author": "researcher",
         "invocationId": "inv-plain"
       }
     },
+    "subagentRunId": "msg-2",
     "type": "TEXT_MESSAGE_END"
   },
   {
@@ -230,7 +252,8 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
         "invocationId": "inv-plain"
       }
     },
-    "parentMessageId": "msg-2",
+    "parentMessageId": "msg-3",
+    "subagentRunId": "msg-2",
     "toolCallId": "tc-1",
     "toolCallName": "search",
     "type": "TOOL_CALL_START"
@@ -243,6 +266,7 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
         "invocationId": "inv-plain"
       }
     },
+    "subagentRunId": "msg-2",
     "toolCallId": "tc-1",
     "type": "TOOL_CALL_ARGS"
   },
@@ -253,12 +277,13 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
         "invocationId": "inv-plain"
       }
     },
+    "subagentRunId": "msg-2",
     "toolCallId": "tc-1",
     "type": "TOOL_CALL_END"
   },
   {
     "content": "{\"hits\":2}",
-    "messageId": "msg-3",
+    "messageId": "msg-4",
     "metadata": {
       "adk": {
         "author": "researcher",
@@ -266,8 +291,22 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
       }
     },
     "role": "tool",
+    "subagentRunId": "msg-2",
     "toolCallId": "tc-1",
     "type": "TOOL_CALL_RESULT"
+  },
+  {
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-plain"
+      }
+    },
+    "outcome": {
+      "type": "success"
+    },
+    "subagentRunId": "msg-2",
+    "type": "SUBAGENT_FINISHED"
   },
   {
     "metadata": {

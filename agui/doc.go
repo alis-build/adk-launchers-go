@@ -383,6 +383,27 @@
 // each event gets its own copy of the block so a consumer editing one cannot
 // reach its siblings.
 //
+// # Subagents
+//
+// Each sub-agent activation is bracketed by SUBAGENT_STARTED and
+// SUBAGENT_FINISHED, and every event it produces carries its subagentRunId, so
+// a client can tell three concurrent researchers apart instead of rendering one
+// wall of text.
+//
+// An activation is identified by the event author together with ADK's Branch.
+// Branch is what keeps peer sub-agents from seeing each other's history, so two
+// activations of the same agent on different branches are concurrent runs
+// rather than one continuing. The root agent is the run itself, not a sub-agent
+// within it, so its events carry no attribution.
+//
+// A sub-agent still open when the run pauses finishes as "suspended" rather than
+// "success", naming the interrupts it owns, which is how a client shows which
+// branch is waiting on a human.
+//
+// Subagent brackets and STEP_* events mark the same boundary and are both
+// emitted. They are not nested: AG-UI steps are a flat sequence, so the pair
+// simply closes adjacently rather than one containing the other.
+//
 // # Workflow graphs
 //
 // ADK's workflow engine tags every event with graph provenance, and the
