@@ -7,3 +7,4 @@
 !console/app/dist
 .gocache
 .gotmp
+conductor/
