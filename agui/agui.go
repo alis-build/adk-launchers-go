@@ -88,6 +88,10 @@ type AGUIConfig struct {
 	predictStateMappings []PredictStateMapping
 	// enableAgentStateEndpoint registers POST {pathPrefix}/agents/state when true.
 	enableAgentStateEndpoint bool
+	// interruptReasonClassifier optionally overrides how a workflow input
+	// request maps to an AG-UI interrupt reason. Nil, or a classifier returning
+	// "", falls through to the default schema-shape rule.
+	interruptReasonClassifier func(req session.RequestInput) string
 	// appNameResolver optionally extracts app name from RunAgentInput before state/context.
 	appNameResolver AppNameResolver
 	// historyJSONRPCOpts are forwarded to history jsonrpc.Register when WithThreadService is set.
@@ -220,6 +224,23 @@ func WithMessagesSnapshotOnRunEnd() Option {
 func WithPredictState(mappings ...PredictStateMapping) Option {
 	return func(c *AGUIConfig) {
 		c.predictStateMappings = append(c.predictStateMappings, mappings...)
+	}
+}
+
+// WithInterruptReasonClassifier overrides how a workflow input request is
+// mapped to an AG-UI interrupt reason. Returning "" falls back to the default
+// schema-shape rule: a response schema that is a single boolean yields
+// "confirmation", anything else yields "input_required".
+//
+// The returned reason is used verbatim. The AG-UI reason taxonomy is open and
+// clients must not error on reasons they do not recognise, so hosts may return
+// their own namespaced reasons (for example "acme.manager_approval") to drive
+// bespoke UI.
+//
+// This does not affect tool-bound interrupts, which are always "tool_call".
+func WithInterruptReasonClassifier(fn func(req session.RequestInput) string) Option {
+	return func(c *AGUIConfig) {
+		c.interruptReasonClassifier = fn
 	}
 }
 
