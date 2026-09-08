@@ -339,6 +339,35 @@
 // the reply back, so a plain llmagent never emits adk_request_input no matter
 // how it is prompted.
 //
+// # Protocol details: activity, reasoning and metadata
+//
+// Repeated activity updates for the same message id and activity type arrive as
+// ACTIVITY_DELTA carrying a JSON Patch, instead of a full ACTIVITY_SNAPSHOT
+// every time. The first update for a surface is always a snapshot, since a
+// patch needs something to apply against, and an update whose content is not a
+// JSON object falls back to a snapshot. A repeat that changes nothing emits
+// nothing: the protocol rejects a delta with an empty patch. Patches use add,
+// replace and remove only, and a resized array is replaced whole rather than
+// diffed at shifting indices.
+//
+// Activity events reach the stream only through a [WithGenAIPartConverter]
+// converter returning them; the launcher has no activity source of its own.
+//
+// Opaque reasoning blobs survive the round trip. ADK exposes them as
+// genai.Part.ThoughtSignature; the launcher base64-encodes the bytes, emits
+// REASONING_ENCRYPTED_VALUE inside the REASONING_START/REASONING_END bracket,
+// and puts the same value on the reconstructed assistant message in
+// MESSAGES_SNAPSHOT. The assistant message is the turn a client sends back,
+// which is what preserves the model's reasoning continuity. The value stays
+// opaque: the launcher neither reads nor validates it.
+//
+// Every event carries metadata. metadata.adk holds invocationId and author,
+// plus nodePath on workflow events; metadata["ag-ui"].tokenUsage holds token
+// counts when the model reports them. Only the "ag-ui" key is protocol space,
+// so everything ADK-specific stays under "adk". An event with nothing to report
+// carries no metadata at all rather than an empty object, and metadata a part
+// converter set itself is never overwritten.
+//
 // # Workflow graphs
 //
 // ADK's workflow engine tags every event with graph provenance, and the
@@ -511,6 +540,7 @@
 // Workflow graph attribution reads ADK NodeInfo, Routes and Output; a live
 // per-node graph view (ACTIVITY_SNAPSHOT/ACTIVITY_DELTA) is not implemented.
 // [WithCapabilities] or [DefaultInterruptCapabilities] to advertise
-// humanInTheLoop.interrupts, approveWithEdits and interruptReasons. Client-side tools require
+// humanInTheLoop.interrupts, approveWithEdits and interruptReasons, plus
+// output.activityDeltas and output.encryptedReasoning. Client-side tools require
 // agent opt-in via [clienttool.NewToolset]; see the Client-side tools section.
 package agui

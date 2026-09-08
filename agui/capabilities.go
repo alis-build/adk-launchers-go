@@ -59,6 +59,31 @@ type ToolsCapabilities struct {
 type OutputCapabilities struct {
 	StructuredOutput   *bool    `json:"structuredOutput,omitempty"`
 	SupportedMIMETypes []string `json:"supportedMimeTypes,omitempty"`
+
+	// ActivityDeltas reports that repeated activity updates arrive as
+	// ACTIVITY_DELTA patches rather than full snapshots, so a client knows to
+	// apply patches instead of replacing the block.
+	ActivityDeltas *bool `json:"activityDeltas,omitempty"`
+	// EncryptedReasoning reports that the agent round-trips opaque reasoning
+	// blobs, so a client knows to send them back for reasoning continuity.
+	EncryptedReasoning *bool `json:"encryptedReasoning,omitempty"`
+}
+
+// MergeProtocolCapabilities advertises the protocol features this launcher
+// implements, leaving any value the caller already set.
+//
+// An explicit false is a host opting out and is preserved: turning a feature
+// back on would tell clients to expect events the host has suppressed.
+func MergeProtocolCapabilities(caps *Capabilities) {
+	if caps.Output == nil {
+		caps.Output = &OutputCapabilities{}
+	}
+	if caps.Output.ActivityDeltas == nil {
+		caps.Output.ActivityDeltas = new(true)
+	}
+	if caps.Output.EncryptedReasoning == nil {
+		caps.Output.EncryptedReasoning = new(true)
+	}
 }
 
 // StateCapabilities declares state synchronization support.
@@ -197,5 +222,6 @@ func MergeClientToolCapabilities(caps *Capabilities) {
 func DefaultInterruptCapabilities() Capabilities {
 	caps := Capabilities{}
 	MergeInterruptCapabilities(&caps)
+	MergeProtocolCapabilities(&caps)
 	return caps
 }
