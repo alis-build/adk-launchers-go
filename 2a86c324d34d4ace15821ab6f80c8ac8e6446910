@@ -1,0 +1,26 @@
+Task: capabilities + docs + coverage-gate (plan agui_protocol_catchup_c9a2f5e3, phase P4)
+
+FR5 plus the coverage gate.
+
+Gate: >80% on new code with pristine output.
+Result: every function this track added is at 100%.
+
+  RecordActivitySnapshot   LastActivitySnapshot   ClearActivitySnapshots
+  ComputeActivityPatch     appendObjectPatch      appendValuePatch
+  EmitConverterEvent       emitActivityUpdate     emitEncryptedReasoning
+  eventMetadata            tokenUsage             withEventMetadata
+  MergeProtocolCapabilities
+
+Pristine: gofmt -l silent, go vet ./... silent, CI=true go test ./...
+-count=1 with every package ok.
+
+Capabilities design: MergeProtocolCapabilities preserves an explicit
+false rather than only filling nil. A host that turned activity deltas
+off has suppressed those events; advertising them anyway would tell
+clients to expect a stream they will not get.
+
+Docs record the things a host cannot infer from the type signatures:
+that activity reaches the stream only via a part converter, that an
+unchanged repeat emits nothing because the SDK rejects empty patches,
+why the encrypted blob rides the assistant message rather than the
+reasoning message, and that only 'ag-ui' is protocol namespace.
