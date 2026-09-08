@@ -1,0 +1,42 @@
+Task: post-merge follow-up (track aguiproto_20260908, after completion)
+
+A peer session reported ag-ui PR 2678 merged and made three claims. Each
+was checked against the SDK rather than taken on trust.
+
+1. 'Drop the fork, pin v0.0.0-20260908160240-409ad608f702.' Already done
+   in 42a3398, same version. No action.
+
+2. 'RunFinishedOutcome can emit two shapes the TypeScript client rejects;
+   never pass an empty interrupt slice.' Verified not reachable here:
+   WithInterruptOutcome is called only from finishWithInterrupts, which
+   ProcessEvent invokes solely under len(pendingInterrupts) > 0. The
+   success path uses WithSuccessOutcome() and threads.go emits no outcome
+   at all. All three shapes safe, no change needed.
+
+3. 'Put ADK token usage under your OWN keys, not ag-ui.' Correct, and
+   acted on here.
+
+On (3), the peer's advice contradicted spec FR3, which explicitly asked
+for metadata['ag-ui'].tokenUsage 'matching the first-party SDKs'
+token-usage shape'. Checked the claim rather than either side's word:
+- types.AGUIMetadataKey's own doc says it is 'reserved for AG-UI's own
+  use' and 'every other key is user space'.
+- No tokenUsage shape exists anywhere in the Go SDK. The hits are in
+  metadata_test.go, which uses the name at the top level AND under
+  ag-ui in different fixtures — merge-semantics tests, not a contract.
+
+So FR3's justification was unverifiable and its placement put launcher
+data in reserved space. Deviating from the spec was the user's call, not
+mine to make silently; raised it with the evidence and they chose to move.
+
+Changes:
+- agui/internal/stream/metadata.go: aguiMetadataKey removed; tokenUsage
+  folded into the adk block; eventMetadata simplified to one namespace.
+- agui/event_metadata_test.go: usage asserted under adk, plus a new test
+  that nothing is written under types.AGUIMetadataKey at all.
+- agui/doc.go: records why the reserved key is left alone.
+
+Goldens unaffected: none of the three baseline runs set UsageMetadata.
+
+Verification: eventMetadata and tokenUsage both 100%; gofmt -l silent,
+go vet ./... silent, CI=true go test ./... -count=1 all packages ok.
