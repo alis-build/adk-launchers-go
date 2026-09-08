@@ -296,13 +296,13 @@
 // Interrupt metadata.adk.invocationId and resume state.adk.invocationId carry the
 // ADK invocation id for client correlation. Same-invocation resume is handled by
 // ADK v2 runner: FunctionResponse ids in the resume message must match the
-// confirmation FunctionCall id stored on the session (see interrupt.EntriesToConfirmationContent).
+// confirmation FunctionCall id stored on the session (see interrupt.EntriesToResumeContent).
 //
 // Resume validation runs after RunStarted (protocol errors become RunError on
 // the SSE stream). The server enforces AG-UI contract rules when pending state
 // exists: all open interrupts must be addressed, unknown ids rejected, optional
 // expiry and responseSchema checks applied. See [interrupt.ValidateResumeAgainstPending]
-// and [interrupt.EntriesToConfirmationContent].
+// and [interrupt.EntriesToResumeContent].
 //
 // Mapping from AG-UI to ADK uses payload.approved → response.confirmed and
 // optional payload.editedArgs → response.payload, per ADK toolconfirmation

@@ -8,43 +8,43 @@ import (
 	"google.golang.org/genai"
 )
 
-func TestResumeEntriesToConfirmationContent(t *testing.T) {
+func TestResumeEntriesToResumeContent(t *testing.T) {
 	t.Run("resolved approved", func(t *testing.T) {
-		content, err := EntriesToConfirmationContent([]types.ResumeEntry{{
+		content, err := EntriesToResumeContent([]types.ResumeEntry{{
 			InterruptID: "confirm-1",
 			Status:      types.ResumeStatusResolved,
 			Payload:     map[string]any{"approved": true},
-		}})
+		}}, nil)
 		if err != nil {
-			t.Fatalf("EntriesToConfirmationContent() error = %v", err)
+			t.Fatalf("EntriesToResumeContent() error = %v", err)
 		}
 		assertConfirmationPart(t, content, "confirm-1", map[string]any{"confirmed": true})
 	})
 
 	t.Run("resolved denied", func(t *testing.T) {
-		content, err := EntriesToConfirmationContent([]types.ResumeEntry{{
+		content, err := EntriesToResumeContent([]types.ResumeEntry{{
 			InterruptID: "confirm-1",
 			Status:      types.ResumeStatusResolved,
 			Payload:     map[string]any{"approved": false},
-		}})
+		}}, nil)
 		if err != nil {
-			t.Fatalf("EntriesToConfirmationContent() error = %v", err)
+			t.Fatalf("EntriesToResumeContent() error = %v", err)
 		}
 		assertConfirmationPart(t, content, "confirm-1", map[string]any{"confirmed": false})
 	})
 
 	t.Run("resolved with editedArgs", func(t *testing.T) {
 		edited := map[string]any{"to": "b@c.com"}
-		content, err := EntriesToConfirmationContent([]types.ResumeEntry{{
+		content, err := EntriesToResumeContent([]types.ResumeEntry{{
 			InterruptID: "confirm-1",
 			Status:      types.ResumeStatusResolved,
 			Payload: map[string]any{
 				"approved":   true,
 				"editedArgs": edited,
 			},
-		}})
+		}}, nil)
 		if err != nil {
-			t.Fatalf("EntriesToConfirmationContent() error = %v", err)
+			t.Fatalf("EntriesToResumeContent() error = %v", err)
 		}
 		assertConfirmationPart(t, content, "confirm-1", map[string]any{
 			"confirmed": true,
@@ -53,18 +53,18 @@ func TestResumeEntriesToConfirmationContent(t *testing.T) {
 	})
 
 	t.Run("cancelled", func(t *testing.T) {
-		content, err := EntriesToConfirmationContent([]types.ResumeEntry{{
+		content, err := EntriesToResumeContent([]types.ResumeEntry{{
 			InterruptID: "confirm-2",
 			Status:      types.ResumeStatusCancelled,
-		}})
+		}}, nil)
 		if err != nil {
-			t.Fatalf("EntriesToConfirmationContent() error = %v", err)
+			t.Fatalf("EntriesToResumeContent() error = %v", err)
 		}
 		assertConfirmationPart(t, content, "confirm-2", map[string]any{"confirmed": false})
 	})
 
 	t.Run("multiple entries", func(t *testing.T) {
-		content, err := EntriesToConfirmationContent([]types.ResumeEntry{
+		content, err := EntriesToResumeContent([]types.ResumeEntry{
 			{
 				InterruptID: "confirm-a",
 				Status:      types.ResumeStatusResolved,
@@ -74,9 +74,9 @@ func TestResumeEntriesToConfirmationContent(t *testing.T) {
 				InterruptID: "confirm-b",
 				Status:      types.ResumeStatusCancelled,
 			},
-		})
+		}, nil)
 		if err != nil {
-			t.Fatalf("EntriesToConfirmationContent() error = %v", err)
+			t.Fatalf("EntriesToResumeContent() error = %v", err)
 		}
 		if len(content.Parts) != 2 {
 			t.Fatalf("len(parts) = %d, want 2", len(content.Parts))
@@ -84,27 +84,27 @@ func TestResumeEntriesToConfirmationContent(t *testing.T) {
 	})
 
 	t.Run("empty entries", func(t *testing.T) {
-		_, err := EntriesToConfirmationContent(nil)
+		_, err := EntriesToResumeContent(nil, nil)
 		if err == nil {
 			t.Fatal("expected error for empty resume")
 		}
 	})
 
 	t.Run("missing interruptId", func(t *testing.T) {
-		_, err := EntriesToConfirmationContent([]types.ResumeEntry{{
+		_, err := EntriesToResumeContent([]types.ResumeEntry{{
 			Status: types.ResumeStatusCancelled,
-		}})
+		}}, nil)
 		if err == nil {
 			t.Fatal("expected error for missing interruptId")
 		}
 	})
 
 	t.Run("resolved missing approved", func(t *testing.T) {
-		_, err := EntriesToConfirmationContent([]types.ResumeEntry{{
+		_, err := EntriesToResumeContent([]types.ResumeEntry{{
 			InterruptID: "confirm-1",
 			Status:      types.ResumeStatusResolved,
 			Payload:     map[string]any{},
-		}})
+		}}, nil)
 		if err == nil {
 			t.Fatal("expected error for missing approved")
 		}

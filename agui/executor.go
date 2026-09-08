@@ -387,7 +387,7 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 		var msg *genai.Content
 		switch {
 		case isResumeRun:
-			msg, err = interrupt.EntriesToConfirmationContent(req.Resume)
+			msg, err = interrupt.EntriesToResumeContent(req.Resume, pending)
 			if err != nil {
 				emitError(fmt.Errorf("invalid resume payload: %w", err))
 				return

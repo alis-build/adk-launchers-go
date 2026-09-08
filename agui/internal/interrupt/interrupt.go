@@ -159,11 +159,24 @@ func DecodeRecords(raw any) ([]Record, error) {
 	}
 }
 
-// EntriesToConfirmationContent converts AG-UI resume entries into a single ADK
-// user [genai.Content] containing one FunctionResponse part per entry.
-func EntriesToConfirmationContent(entries []types.ResumeEntry) (*genai.Content, error) {
+// EntriesToResumeContent converts AG-UI resume entries into a single ADK user
+// [genai.Content] containing one FunctionResponse part per entry, in entry
+// order.
+//
+// Each entry is answered with the ADK call that produced it, looked up in
+// pending by interrupt id. Dispatch follows [Record.CallName] rather than the
+// reason: a host classifier may return any custom reason string, which says
+// nothing about which ADK call is waiting, so keying on reason would resume
+// into the wrong call. An entry with no pending record falls back to a tool
+// confirmation, which is what a record predating CallName always was.
+func EntriesToResumeContent(entries []types.ResumeEntry, pending []Record) (*genai.Content, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("resume entries must not be empty")
+	}
+
+	pendingByID := make(map[string]Record, len(pending))
+	for _, rec := range pending {
+		pendingByID[rec.ID] = rec
 	}
 
 	parts := make([]*genai.Part, 0, len(entries))
@@ -172,14 +185,25 @@ func EntriesToConfirmationContent(entries []types.ResumeEntry) (*genai.Content, 
 			return nil, fmt.Errorf("resume[%d]: interruptId is required", i)
 		}
 
-		response, err := confirmationResponseFromResumeEntry(entry)
+		rec := pendingByID[entry.InterruptID]
+		callName := ADKCallName(rec)
+
+		var (
+			response map[string]any
+			err      error
+		)
+		if callName == workflow.WorkflowInputFunctionCallName {
+			response, err = inputResponseFromResumeEntry(entry)
+		} else {
+			response, err = confirmationResponseFromResumeEntry(entry)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("resume[%d]: %w", i, err)
 		}
 
 		parts = append(parts, &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{
-				Name:     toolconfirmation.FunctionCallName,
+				Name:     callName,
 				ID:       entry.InterruptID,
 				Response: response,
 			},
@@ -187,6 +211,31 @@ func EntriesToConfirmationContent(entries []types.ResumeEntry) (*genai.Content, 
 	}
 
 	return genai.NewContentFromParts(parts, genai.RoleUser), nil
+}
+
+// inputResponseFromResumeEntry builds the ADK response for a workflow input
+// request. ADK's decodeWorkflowInputResponse reads the "response" key first.
+//
+// A cancelled entry answers with a nil response rather than erroring, mirroring
+// how a cancelled tool confirmation answers confirmed:false. Interpreting a
+// withheld answer is the node's business, not the launcher's.
+func inputResponseFromResumeEntry(entry types.ResumeEntry) (map[string]any, error) {
+	switch entry.Status {
+	case types.ResumeStatusCancelled:
+		return map[string]any{"response": nil}, nil
+
+	case types.ResumeStatusResolved:
+		// The payload is passed through whatever its JSON shape. Unlike a tool
+		// confirmation there is no required "approved" field, and the schema
+		// the node advertised may well describe a scalar.
+		if entry.Payload == nil {
+			return nil, fmt.Errorf("resolved resume requires a payload")
+		}
+		return map[string]any{"response": entry.Payload}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported resume status %q", entry.Status)
+	}
 }
 
 func confirmationResponseFromResumeEntry(entry types.ResumeEntry) (map[string]any, error) {

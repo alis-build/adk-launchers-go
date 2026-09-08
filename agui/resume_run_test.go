@@ -72,13 +72,13 @@ func TestResumeEntriesRunSSEReusesInvocationID(t *testing.T) {
 		t.Fatalf("AppendEvent pause: %v", err)
 	}
 
-	resumeContent, err := interrupt.EntriesToConfirmationContent([]types.ResumeEntry{{
+	resumeContent, err := interrupt.EntriesToResumeContent([]types.ResumeEntry{{
 		InterruptID: callID,
 		Status:      types.ResumeStatusResolved,
 		Payload:     map[string]any{"approved": true},
-	}})
+	}}, nil)
 	if err != nil {
-		t.Fatalf("EntriesToConfirmationContent: %v", err)
+		t.Fatalf("EntriesToResumeContent: %v", err)
 	}
 
 	_, events, err := rt.RunSSE(ctx, adkrun.RunRequest{
