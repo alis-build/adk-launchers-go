@@ -11,7 +11,20 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
+	"google.golang.org/adk/v2/workflow"
 	"google.golang.org/genai"
+)
+
+// AG-UI core interrupt reasons. The wire values are fixed by the protocol's
+// reason taxonomy; hosts may also supply custom reasons, which are passed
+// through verbatim. See https://docs.ag-ui.com/concepts/interrupts#reason-taxonomy
+const (
+	// ReasonToolCall is an interrupt bound to a proposed tool call.
+	ReasonToolCall = "tool_call"
+	// ReasonInputRequired is an interrupt asking for structured input.
+	ReasonInputRequired = "input_required"
+	// ReasonConfirmation is a free-standing yes/no decision not bound to a tool.
+	ReasonConfirmation = "confirmation"
 )
 
 // Record is the JSON-serializable subset of [types.Interrupt] stored in ADK
@@ -22,6 +35,27 @@ type Record struct {
 	ExpiresAt      string         `json:"expiresAt,omitempty"`
 	ResponseSchema map[string]any `json:"responseSchema,omitempty"`
 	InvocationID   string         `json:"invocationId,omitempty"`
+
+	// CallName is the ADK FunctionCall name this interrupt came from, and is
+	// what resume dispatches on. Reason cannot serve that role: a host
+	// classifier may return any custom string, which says nothing about which
+	// ADK call produced it. Empty on records persisted before this field
+	// existed, all of which were tool confirmations.
+	CallName string `json:"callName,omitempty"`
+}
+
+// ADKCallName returns the ADK FunctionCall name to answer when resuming rec.
+func ADKCallName(rec Record) string {
+	if rec.CallName != "" {
+		return rec.CallName
+	}
+	return toolconfirmation.FunctionCallName
+}
+
+// IsInputRequest reports whether rec resumes into a workflow input request
+// rather than a tool confirmation.
+func IsInputRequest(rec Record) bool {
+	return ADKCallName(rec) == workflow.WorkflowInputFunctionCallName
 }
 
 // ToolConfirmationResponseSchema returns the JSON Schema advertised to clients
@@ -51,6 +85,7 @@ func RecordsFromInterrupts(interrupts []types.Interrupt) []Record {
 			ExpiresAt:      intr.ExpiresAt,
 			ResponseSchema: intr.ResponseSchema,
 			InvocationID:   InvocationIDFromMetadata(intr.Metadata),
+			CallName:       adkMetaString(intr.Metadata, "callName"),
 		}
 	}
 	return out
@@ -58,6 +93,11 @@ func RecordsFromInterrupts(interrupts []types.Interrupt) []Record {
 
 // InvocationIDFromMetadata reads metadata.adk.invocationId from an AG-UI interrupt.
 func InvocationIDFromMetadata(metadata map[string]any) string {
+	return adkMetaString(metadata, "invocationId")
+}
+
+// adkMetaString reads a string value from an AG-UI interrupt's metadata.adk block.
+func adkMetaString(metadata map[string]any, key string) string {
 	if metadata == nil {
 		return ""
 	}
@@ -65,8 +105,8 @@ func InvocationIDFromMetadata(metadata map[string]any) string {
 	if !ok {
 		return ""
 	}
-	id, _ := adkMeta["invocationId"].(string)
-	return id
+	v, _ := adkMeta[key].(string)
+	return v
 }
 
 // InvocationIDFromPending returns the invocation id for the first resume entry
