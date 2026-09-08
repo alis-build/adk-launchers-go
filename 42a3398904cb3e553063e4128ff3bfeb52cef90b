@@ -1,0 +1,27 @@
+Task: remove-replace-directive (plan agui_protocol_catchup_c9a2f5e3, phase P3)
+
+The last todo of the track, blocked since 2026-09-08 on upstream ag-ui
+PR 2678. The PR merged, so this closes it.
+
+Changes:
+- go.mod: dropped the replace directive and its TODO(ag-ui-metadata)
+  comment; repinned github.com/ag-ui-protocol/ag-ui/sdks/community/go to
+  v0.0.0-20260908160240-409ad608f702.
+- go.sum, README.md: removed the 'Temporary dependency' section.
+
+Verified BEFORE removing rather than after: resolved upstream main,
+downloaded that version, and confirmed it carries BaseEvent.Metadata,
+MergeMetadata and GetBaseEvent. Removing first and discovering a gap
+afterwards would have left the tree unbuildable with no directive to fall
+back to.
+
+The event metadata tests are the ones that needed the field; they pass on
+stock upstream, as do all three wire goldens (plain-agent, feature-free
+and tool_call). gofmt -l silent, go vet ./... silent, CI=true go test
+./... -count=1 all packages ok.
+
+This was the paired half of f946eec. The pairing did its job: the
+directive was flagged in go.mod, the README, the plan and the tracks
+registry, and the track was deliberately held open rather than closed
+with the removal backlogged, so the temporary dependency stayed visible
+until it was actually gone.
