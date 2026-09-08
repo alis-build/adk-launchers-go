@@ -339,6 +339,47 @@
 // the reply back, so a plain llmagent never emits adk_request_input no matter
 // how it is prompted.
 //
+// # Workflow graphs
+//
+// ADK's workflow engine tags every event with graph provenance, and the
+// launcher surfaces it so a client can tell which node of a multi-node workflow
+// is running and what each node produced. It reads four ADK fields:
+// NodeInfo.Path, NodeInfo.MessageAsOutput, NodeInfo.OutputFor and Event.Routes.
+//
+// Whether an event belongs to a workflow is decided by the NodeInfo pointer
+// alone, per ADK's invariant. An event with a nil NodeInfo produces exactly the
+// stream it did before graph attribution existed.
+//
+// Node activations are bracketed by STEP_STARTED and STEP_FINISHED named by
+// NodeInfo.Path, falling back to the event author for top-level static nodes,
+// which carry no path. AG-UI steps do not nest, so dynamic paths such as
+// "parent/child@run-id" are flat, distinct steps and the path string carries the
+// hierarchy for clients that want to parse it. A step closes when a different
+// node appears or at run finalization, so an interrupt never leaves one open.
+//
+// Unlike the root agent, which gets no step, a workflow node is always
+// bracketed, including when its agent shares the root's name: it is a real graph
+// activation and hiding it would drop a node from the client's view.
+//
+// Node results are published on the state channel under a reserved key:
+//
+//	_adk.nodeOutputs.<node path> = <output>
+//
+// Event.Output is used when present; otherwise MessageAsOutput means the node's
+// model text is its result. OutputFor records one output under every listed
+// path, so a single event stands in for a whole delegation chain rather than
+// each level re-emitting it. Keys use the same identity as step names, so a
+// node appears under one name in both places.
+//
+// The _adk prefix is reserved and treated as internal state. Inbound _adk, from
+// session state or a client request, is stripped rather than echoed; only the
+// launcher writes it. Without that reservation node outputs would be read back
+// as host state and written into the ADK session on the next turn.
+//
+// Attribution is on by default. [WithoutGraphAttribution] turns off all three
+// surfaces together (step events, node outputs and interrupt metadata) for
+// clients that do not expect them; the agent's own output is unaffected.
+//
 // # Multiple interrupts per event
 //
 // An event may carry several interrupt-producing calls. All of them are
@@ -467,6 +508,8 @@
 // interrupt persist/clear failures after the terminal event are logged
 // server-side (not re-emitted as RunError, which would violate the
 // single-terminal-event protocol rule). Use
+// Workflow graph attribution reads ADK NodeInfo, Routes and Output; a live
+// per-node graph view (ACTIVITY_SNAPSHOT/ACTIVITY_DELTA) is not implemented.
 // [WithCapabilities] or [DefaultInterruptCapabilities] to advertise
 // humanInTheLoop.interrupts, approveWithEdits and interruptReasons. Client-side tools require
 // agent opt-in via [clienttool.NewToolset]; see the Client-side tools section.
