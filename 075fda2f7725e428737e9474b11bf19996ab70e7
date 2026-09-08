@@ -1,0 +1,45 @@
+Task: canonical token usage (follow-up to 4c7853d)
+
+I asked peer session agui-go-sdk-missing-fields to verify a TypeScript
+claim. It verified two things and corrected a third, which is the one
+that mattered.
+
+WHAT I GOT WRONG. In 4c7853d I wrote that FR3's 'first-party SDKs'
+token-usage shape' did not exist. It does. I searched the Go SDK only and
+generalised from its absence. The peer checked TS, Python and .NET and
+found TokenUsageSchema (events.ts ~283), class TokenUsage
+(ag_ui/core/events.py ~50) and AGUI.Abstractions.TokenUsage, carried as a
+ array on RUN_FINISHED and RUN_ERROR.
+
+The move off metadata['ag-ui'] still stands: canonical usage is not in
+metadata at all, so the spec's location was wrong too, just differently.
+
+WHAT I VERIFIED RATHER THAN ACCEPTED:
+- Go SDK really has zero TokenUsage/Usage occurrences in pkg/. Confirmed.
+- The peer said RUN_STARTED/FINISHED/ERROR do not declare SubagentRunID.
+  My grep found two hits in run_events.go, which looked like a
+  contradiction; they are StepStartedEvent and StepFinishedEvent, both
+  genuine carriers. Peer was right.
+- ADK's mapping: ThoughtsTokenCount and CachedContentTokenCount were
+  being dropped and map cleanly onto reasoningTokens and
+  cachedInputTokens. ev.Model is NOT promoted through the embedded
+  LLMResponse, so provider and model stay absent rather than guessed.
+
+Peer's other two checks, both SAFE, and both correcting a worry of mine:
+- BaseEventSchema is .passthrough(), so events tolerate unknown keys. The
+  strict-union behaviour applies only to the small outcome objects. My
+  concern generalised their RunFinishedOutcome warning too far.
+- MetadataSchema is z.record(z.any()), so metadata.adk is accepted and
+  preserved verbatim. TS rejects only a null metadata object, which
+  omitempty means we never emit.
+
+Design note: kept the array container even though it holds one entry.
+Field names alone would leave a structural rewrite for later; the
+container costs nothing now.
+
+Still open, and Newton's call: the peer offered to add usage + TokenUsage
+to the Go SDK as a third upstream PR, which would let this move to its
+proper home on the terminal event.
+
+Verification: tokenUsage 90%, the remainder a nil-usage guard; gofmt -l
+silent, go vet ./... silent, CI=true go test ./... -count=1 all ok.
