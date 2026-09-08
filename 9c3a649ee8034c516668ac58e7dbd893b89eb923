@@ -1,0 +1,26 @@
+Task: interrupt-metadata-tests + interrupt-metadata-impl (plan agui_workflow_graph_b7e4d091, phase P2)
+
+Why: FR2.
+
+Changes:
+- agui/internal/stream/nodeinfo.go: annotateNodeProvenance.
+- agui/internal/stream/processor.go: called at the interrupt collection
+  site in ProcessEvent.
+- agui/graph_interrupt_test.go (new): 4 cases across both reasons plus
+  the omission and non-workflow contracts.
+- agui/internal/stream/nodeinfo_test.go: 4 direct cases on the helper.
+
+Design decision: annotate once at the collection site instead of in
+buildToolCallInterrupt and buildInputRequestInterrupt separately. The
+dispatch table is owned by aguihitl_20260908 and this track is meant to
+extend it, not restructure it; annotating outside the handlers adds
+nothing to that table's contract and means a third reason added later
+inherits attribution for free.
+
+The nil-metadata branch in annotateNodeProvenance is unreachable through
+either handler today, since both seed metadata.adk. It is kept as a
+safety net and covered by a direct unit test rather than left as an
+uncovered defensive branch.
+
+Verification: annotateNodeProvenance 100%; TestPlainAgentStreamBaseline
+still byte-identical; go fmt, go vet, CI=true go test ./... clean.
