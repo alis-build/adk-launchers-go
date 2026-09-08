@@ -8,6 +8,7 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
+	"google.golang.org/adk/v2/workflow"
 	"google.golang.org/genai"
 )
 
@@ -237,5 +238,144 @@ func TestProcessEvent_MultipleInterrupts_SnapshotsEmittedOnce(t *testing.T) {
 	}
 	if msgSnaps != 1 {
 		t.Errorf("got %d MESSAGES_SNAPSHOT events for 3 interrupts, want 1", msgSnaps)
+	}
+}
+
+// inputPart builds one adk_request_input FunctionCall part with its request
+// mirrored into args, the form that survives a session round-trip.
+func inputPart(interruptID, message string) *genai.Part {
+	return &genai.Part{
+		FunctionCall: &genai.FunctionCall{
+			ID:   interruptID,
+			Name: workflow.WorkflowInputFunctionCallName,
+			Args: map[string]any{
+				"interruptId": interruptID,
+				"message":     message,
+			},
+		},
+	}
+}
+
+// TestProcessEvent_TwoInputRequestsKeepDistinctIdentities guards the seam
+// between preferring the typed request and collecting every interrupt.
+//
+// Event.RequestedInput is a single pointer, so it describes at most one of the
+// calls on an event. Applying it to all of them gave every interrupt the same
+// id: the client could not address them separately, the duplicate ids collapsed
+// in resume validation's id map, and a resume answering the first one passed
+// while the node waiting on the second was never answered and stalled.
+func TestProcessEvent_TwoInputRequestsKeepDistinctIdentities(t *testing.T) {
+	l := newTestLauncher("test-app")
+	e, rec := newTestEmitter()
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	ev := session.NewEvent(t.Context(), "inv1")
+	ev.InvocationID = "inv-two-inputs"
+	// The typed field names only the first request, as ADK sets one per event.
+	ev.RequestedInput = &session.RequestInput{InterruptID: "input-a", Message: "How many copies?"}
+	ev.Content = &genai.Content{
+		Role: string(genai.RoleModel),
+		Parts: []*genai.Part{
+			inputPart("input-a", "How many copies?"),
+			inputPart("input-b", "Which printer?"),
+		},
+	}
+
+	done, err := l.processEvent(e, ev, state, nil)
+	if err != nil {
+		t.Fatalf("processEvent() error = %v, want nil", err)
+	}
+	if !done {
+		t.Fatal("processEvent() done = false, want true")
+	}
+
+	evts := parseSSEEvents(rec.Body.String())
+	outcome := interruptsFromRunFinished(t, evts[len(evts)-1])
+	if len(outcome.Interrupts) != 2 {
+		t.Fatalf("len(outcome.Interrupts) = %d, want 2", len(outcome.Interrupts))
+	}
+
+	wantIDs := []string{"input-a", "input-b"}
+	wantMessages := []string{"How many copies?", "Which printer?"}
+	for i, intr := range outcome.Interrupts {
+		if intr.ID != wantIDs[i] {
+			t.Errorf("interrupt[%d].ID = %q, want %q", i, intr.ID, wantIDs[i])
+		}
+		if intr.Message != wantMessages[i] {
+			t.Errorf("interrupt[%d].Message = %q, want %q", i, intr.Message, wantMessages[i])
+		}
+	}
+
+	// Duplicate ids are the failure this guards: resume validation keys pending
+	// records by id, so two records sharing one would collapse into a single
+	// entry and leave the other request permanently unanswerable.
+	if outcome.Interrupts[0].ID == outcome.Interrupts[1].ID {
+		t.Errorf("both interrupts share id %q; each request needs its own", outcome.Interrupts[0].ID)
+	}
+}
+
+// TestProcessEvent_PlainToolCallAfterInterrupt pins a behaviour change from
+// interrupt collection.
+//
+// ProcessEvent used to return on the first interrupt, dropping later parts.
+// Scanning every part to find all interrupts means a plain tool call sharing the
+// event now gets a full lifecycle emitted before the terminal event, and it can
+// never receive a TOOL_CALL_RESULT in this run because the run is ending. A
+// client rendering tool progress will show it as still running.
+//
+// Pinned rather than changed: suppressing it would mean deciding that a
+// proposal ADK may still execute should be hidden from the stream, which is a
+// protocol question this track did not settle.
+func TestProcessEvent_PlainToolCallAfterInterrupt(t *testing.T) {
+	l := newTestLauncher("test-app")
+	e, rec := newTestEmitter()
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	ev := session.NewEvent(t.Context(), "inv1")
+	ev.InvocationID = "inv-mixed"
+	ev.Content = &genai.Content{
+		Role: string(genai.RoleModel),
+		Parts: []*genai.Part{
+			confirmationPart("confirm-1", "Send the email?", "orig-1", "send_email"),
+			{FunctionCall: &genai.FunctionCall{
+				ID:   "plain-1",
+				Name: "lookup_address",
+				Args: map[string]any{"q": "head office"},
+			}},
+		},
+	}
+
+	done, err := l.processEvent(e, ev, state, nil)
+	if err != nil {
+		t.Fatalf("processEvent() error = %v, want nil", err)
+	}
+	if !done {
+		t.Fatal("processEvent() done = false, want true")
+	}
+
+	evts := parseSSEEvents(rec.Body.String())
+
+	// The interrupt still carries only the confirmation.
+	outcome := interruptsFromRunFinished(t, evts[len(evts)-1])
+	if len(outcome.Interrupts) != 1 {
+		t.Fatalf("len(outcome.Interrupts) = %d, want 1", len(outcome.Interrupts))
+	}
+	if outcome.Interrupts[0].ID != "confirm-1" {
+		t.Errorf("interrupt.ID = %q, want confirm-1", outcome.Interrupts[0].ID)
+	}
+
+	// The plain call is emitted rather than dropped, and has no result.
+	if n := countToolCallStarts(evts, "plain-1"); n != 1 {
+		t.Errorf("TOOL_CALL_START count for plain-1 = %d, want 1", n)
+	}
+	for _, x := range evts {
+		if x.Type == events.EventTypeToolCallResult {
+			t.Errorf("unexpected TOOL_CALL_RESULT in an interrupted run: %v", x.Raw)
+		}
+	}
+
+	// The terminal event stays last.
+	if evts[len(evts)-1].Type != events.EventTypeRunFinished {
+		t.Errorf("last event = %v, want RUN_FINISHED", evts[len(evts)-1].Type)
 	}
 }

@@ -642,8 +642,14 @@ func buildInputRequestInterrupt(p *Processor, _ eventSink, _ *State, fc *genai.F
 // while the args are the copy that survives a session round-trip through
 // clients that do not model RequestedInput, so either may be the only one
 // present and the typed field wins when they disagree.
+//
+// An event carries at most one typed request but may carry several
+// adk_request_input calls, so the typed field is authoritative only for the call
+// it names. Applying it to every call would give each interrupt the same id,
+// which collapses in resume validation's id map and strands every request but
+// the first.
 func inputRequestFrom(ev *session.Event, fc *genai.FunctionCall) session.RequestInput {
-	if ev.RequestedInput != nil {
+	if ev.RequestedInput != nil && ev.RequestedInput.InterruptID == fc.ID {
 		return *ev.RequestedInput
 	}
 

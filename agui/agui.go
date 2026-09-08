@@ -238,6 +238,9 @@ func WithPredictState(mappings ...PredictStateMapping) Option {
 // bespoke UI.
 //
 // This does not affect tool-bound interrupts, which are always "tool_call".
+//
+// When [WithExecutor] is set, this option is ignored — the factory owns all
+// executor configuration, including how events are mapped to interrupts.
 func WithInterruptReasonClassifier(fn func(req session.RequestInput) string) Option {
 	return func(c *AGUIConfig) {
 		c.interruptReasonClassifier = fn
