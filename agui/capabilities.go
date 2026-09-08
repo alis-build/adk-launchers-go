@@ -1,5 +1,7 @@
 package agui
 
+import "go.alis.build/adk/launchers/agui/internal/interrupt"
+
 // Capabilities mirrors the AG-UI AgentCapabilities interface returned from
 // GET /capabilities. Only populate fields the agent actually supports; omitted
 // fields mean the capability is undeclared ("absent = unknown" to clients).
@@ -126,6 +128,21 @@ type HumanInTheLoopCapabilities struct {
 	Feedback         *bool `json:"feedback,omitempty"`
 	Interrupts       *bool `json:"interrupts,omitempty"`
 	ApproveWithEdits *bool `json:"approveWithEdits,omitempty"`
+
+	// InterruptReasons lists the interrupt reasons this agent can emit, so a
+	// client knows which pause UIs to prepare. Hosts using
+	// [WithInterruptReasonClassifier] should list their custom reasons here.
+	InterruptReasons []string `json:"interruptReasons,omitempty"`
+}
+
+// SupportedInterruptReasons returns the interrupt reasons this launcher emits
+// out of the box: tool confirmations, and the two shapes a workflow input
+// request is classified into.
+//
+// A host classifier can return reasons outside this set; those are the host's
+// to advertise.
+func SupportedInterruptReasons() []string {
+	return []string{interrupt.ReasonToolCall, interrupt.ReasonInputRequired, interrupt.ReasonConfirmation}
 }
 
 // MergeInterruptCapabilities ensures humanInTheLoop.interrupts and
@@ -138,6 +155,9 @@ type HumanInTheLoopCapabilities struct {
 // still get this merge so discovery stays accurate; set Interrupts or
 // ApproveWithEdits explicitly to false to opt out.
 //
+// It also fills humanInTheLoop.interruptReasons with the reasons this launcher
+// emits, unless the caller already listed their own.
+//
 // MergeInterruptCapabilities does not set humanInTheLoop.supported or other
 // HITL fields—only the interrupt-protocol-specific flags from the AG-UI spec.
 func MergeInterruptCapabilities(caps *Capabilities) {
@@ -149,6 +169,11 @@ func MergeInterruptCapabilities(caps *Capabilities) {
 	}
 	if caps.HumanInTheLoop.ApproveWithEdits == nil {
 		caps.HumanInTheLoop.ApproveWithEdits = new(true)
+	}
+	// Left alone when already populated: a host with a custom classifier
+	// advertises reasons this launcher knows nothing about.
+	if caps.HumanInTheLoop.InterruptReasons == nil {
+		caps.HumanInTheLoop.InterruptReasons = SupportedInterruptReasons()
 	}
 }
 
@@ -165,9 +190,10 @@ func MergeClientToolCapabilities(caps *Capabilities) {
 }
 
 // DefaultInterruptCapabilities returns a minimal [Capabilities] value suitable
-// for agents that only need to advertise AG-UI interrupt resume for ADK tool
-// confirmations. Combine with other capability structs via manual field assignment
-// if you need a fuller discovery document.
+// for agents that only need to advertise AG-UI interrupt emit and resume, for
+// both ADK tool confirmations and workflow input requests. Combine with other
+// capability structs via manual field assignment if you need a fuller discovery
+// document.
 func DefaultInterruptCapabilities() Capabilities {
 	caps := Capabilities{}
 	MergeInterruptCapabilities(&caps)

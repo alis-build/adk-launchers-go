@@ -308,10 +308,44 @@
 // optional payload.editedArgs → response.payload, per ADK toolconfirmation
 // conventions and the AG-UI approve-with-edits pattern.
 //
-// Only interrupts with reason "tool_call" are emitted (from ADK tool confirmations).
-// AG-UI core reasons "input_required" and "confirmation" are deferred until ADK
-// exposes a native pause primitive; see the TODO in internal/stream. Non-tool
-// resume paths are not implemented.
+// # Non-tool interrupts (input_required and confirmation)
+//
+// ADK workflow nodes can pause for human input directly, without proposing a
+// tool, by emitting a request through workflow.NewRequestInputEvent
+// (FunctionCall name adk_request_input). The launcher maps those to AG-UI
+// interrupts with reason "input_required" or "confirmation".
+//
+// The reason is chosen from the response schema the node advertised: a bare
+// boolean, or an object wrapping exactly one boolean property, is a yes/no and
+// becomes "confirmation"; anything else needs a real input form and becomes
+// "input_required". [WithInterruptReasonClassifier] overrides that per request,
+// and its result is used verbatim, so hosts may return their own namespaced
+// reasons.
+//
+// These interrupts carry no toolCallId, since nothing is being proposed, and
+// carry the node's response schema on responseSchema when it advertised one.
+// metadata.adk.requestPayload holds any context the node attached, such as the
+// document under review. Clients resume them the same way:
+//
+//	resume: [{ interruptId: "<interrupt-id>", status: "resolved", payload: { copies: 3 } }]
+//
+// The payload is whatever shape the advertised schema describes, including a
+// bare scalar; unlike a tool confirmation it needs no "approved" field. A
+// "cancelled" status resumes with a nil response and lets the node decide what a
+// withheld answer means.
+//
+// Only workflow agents produce this reason. resumeInputs is populated solely by
+// the workflow scheduler, and agent/workflowagent.detectResume is what routes
+// the reply back, so a plain llmagent never emits adk_request_input no matter
+// how it is prompted.
+//
+// # Multiple interrupts per event
+//
+// An event may carry several interrupt-producing calls. All of them are
+// collected in part order and delivered in a single RunFinished, because the
+// protocol allows exactly one terminal event per run. Clients must therefore
+// answer every interrupt in outcome.interrupts, not just the first: resume
+// validation rejects a resume that leaves any pending interrupt unaddressed.
 //
 // At run start and before interrupt RunFinished, the launcher emits StateSnapshot
 // (and MessagesSnapshot at interrupt boundaries) so clients have baseline context.
@@ -422,10 +456,11 @@
 //
 // # Limitations
 //
-// AG-UI interrupt resume is supported for ADK tool
-// confirmations (adk_request_confirmation) with reason "tool_call" only.
-// Core AG-UI reasons "input_required" and "confirmation" are not implemented;
-// support depends on a future ADK pause/HITL API (see TODO in internal/stream).
+// AG-UI interrupt emit and resume cover ADK tool confirmations (reason
+// "tool_call") and workflow input requests (reasons "input_required" and
+// "confirmation"). The latter come only from workflow agents; a plain llmagent
+// cannot produce them. The launcher never emits adk_request_input itself, so a
+// host wanting non-tool interrupts has to emit them from a workflow node.
 // Resume without matching pending session state is rejected. Resume idempotency
 // (replay of the same resume tuple) is not deduplicated server-side. Payload
 // validation uses a minimal JSON Schema subset, not a full validator. Pending
@@ -433,6 +468,6 @@
 // server-side (not re-emitted as RunError, which would violate the
 // single-terminal-event protocol rule). Use
 // [WithCapabilities] or [DefaultInterruptCapabilities] to advertise
-// humanInTheLoop.interrupts and approveWithEdits. Client-side tools require
+// humanInTheLoop.interrupts, approveWithEdits and interruptReasons. Client-side tools require
 // agent opt-in via [clienttool.NewToolset]; see the Client-side tools section.
 package agui
