@@ -1,0 +1,34 @@
+Task: classifier-tests + classifier-impl (plan agui_hitl_interrupts_a1f3c2d8, phase P1)
+
+Why: spec FR2. The processor needs a reason before it can build an
+input_required interrupt, and hosts need a hook because the yes/no vs
+form distinction is a UI judgement the launcher cannot always make.
+
+Changes:
+- agui/internal/interrupt/classify.go (new): ReasonClassifier type,
+  ClassifyReason (host classifier first, empty falls through),
+  ReasonForSchema and isBooleanShaped (the default shape rule).
+- agui/internal/interrupt/classify_test.go (new): 9 shape cases plus 5
+  ClassifyReason cases covering nil classifier, custom reason wins,
+  empty falls through, and the classifier receiving the request.
+- agui/agui.go: AGUIConfig.interruptReasonClassifier field and the
+  WithInterruptReasonClassifier option.
+- agui/interrupt_classifier_test.go (new): option stores the classifier;
+  zero config leaves it nil.
+
+Design notes:
+- ClassifyReason takes the already-converted responseSchema map rather
+  than re-deriving it from req.ResponseSchema, because the caller needs
+  the same map to build the interrupt and SchemaToMap logs on failure.
+- The option signature takes a plain func rather than an exported alias
+  of interrupt.ReasonClassifier, since that type lives in an internal
+  package external callers cannot name.
+- isBooleanShaped extracts the single property without a loop-and-return,
+  which removed an unreachable trailing return and took the function to
+  100% coverage.
+- A property schema may legally be a bare JSON 'true'; that is not an
+  object and does not pin the property to a boolean, so it stays
+  input_required.
+
+Coverage: all new functions 100%; interrupt package 71.8% -> 75.5%.
+Verification: go fmt, go vet, CI=true go test ./... all clean.
