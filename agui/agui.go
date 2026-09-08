@@ -88,6 +88,8 @@ type AGUIConfig struct {
 	predictStateMappings []PredictStateMapping
 	// enableAgentStateEndpoint registers POST {pathPrefix}/agents/state when true.
 	enableAgentStateEndpoint bool
+	// graphAttributionDisabled suppresses workflow graph attribution when true.
+	graphAttributionDisabled bool
 	// interruptReasonClassifier optionally overrides how a workflow input
 	// request maps to an AG-UI interrupt reason. Nil, or a classifier returning
 	// "", falls through to the default schema-shape rule.
@@ -224,6 +226,19 @@ func WithMessagesSnapshotOnRunEnd() Option {
 func WithPredictState(mappings ...PredictStateMapping) Option {
 	return func(c *AGUIConfig) {
 		c.predictStateMappings = append(c.predictStateMappings, mappings...)
+	}
+}
+
+// WithoutGraphAttribution disables workflow graph attribution: the per-node
+// STEP_STARTED/STEP_FINISHED events, the node outputs published under the
+// reserved _adk state key, and the nodePath/routes metadata on interrupts.
+//
+// Use it for clients that choke on step events they did not expect. The agent's
+// own output is unaffected, and the sub-agent step behaviour that predates
+// graph attribution keeps working.
+func WithoutGraphAttribution() Option {
+	return func(c *AGUIConfig) {
+		c.graphAttributionDisabled = true
 	}
 }
 

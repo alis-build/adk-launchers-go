@@ -211,15 +211,15 @@ func TestNodeOutputValue(t *testing.T) {
 }
 
 func TestAnnotateNodeProvenance(t *testing.T) {
-	nodeEv := func(path string, routes []string) *session.Event {
-		return &session.Event{NodeInfo: &session.NodeInfo{Path: path}, Routes: routes}
+	prov := func(path string, routes []string) NodeProvenance {
+		return NodeProvenance{Path: path, Routes: routes}
 	}
 
 	t.Run("seeds metadata.adk when a handler left none", func(t *testing.T) {
 		// Every handler today sets metadata.adk, so this covers the safety net
 		// that keeps a future one from silently dropping attribution.
 		intr := types.Interrupt{ID: "i-1"}
-		annotateNodeProvenance(&intr, nodeEv("review", []string{"publish"}))
+		annotateNodeProvenance(&intr, prov("review", []string{"publish"}))
 
 		adkMeta, ok := intr.Metadata["adk"].(map[string]any)
 		if !ok {
@@ -235,7 +235,7 @@ func TestAnnotateNodeProvenance(t *testing.T) {
 			ID:       "i-1",
 			Metadata: map[string]any{"adk": map[string]any{"invocationId": "inv-1"}},
 		}
-		annotateNodeProvenance(&intr, nodeEv("review", nil))
+		annotateNodeProvenance(&intr, prov("review", nil))
 
 		adkMeta, _ := intr.Metadata["adk"].(map[string]any)
 		if adkMeta["invocationId"] != "inv-1" {
@@ -249,17 +249,9 @@ func TestAnnotateNodeProvenance(t *testing.T) {
 		}
 	})
 
-	t.Run("a non-workflow event adds nothing", func(t *testing.T) {
-		intr := types.Interrupt{ID: "i-1"}
-		annotateNodeProvenance(&intr, &session.Event{Routes: []string{"publish"}})
-		if intr.Metadata != nil {
-			t.Errorf("Metadata = %v, want untouched", intr.Metadata)
-		}
-	})
-
 	t.Run("a node with nothing to say adds nothing", func(t *testing.T) {
 		intr := types.Interrupt{ID: "i-1"}
-		annotateNodeProvenance(&intr, &session.Event{NodeInfo: &session.NodeInfo{MessageAsOutput: true}})
+		annotateNodeProvenance(&intr, NodeProvenance{MessageAsOutput: true})
 		if intr.Metadata != nil {
 			t.Errorf("Metadata = %v, want untouched", intr.Metadata)
 		}

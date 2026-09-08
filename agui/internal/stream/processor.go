@@ -54,6 +54,21 @@ type Processor struct {
 	// InterruptReasonClassifier optionally overrides the AG-UI reason chosen for
 	// a workflow input request. Nil falls through to the schema-shape rule.
 	InterruptReasonClassifier interrupt.ReasonClassifier
+
+	// GraphAttributionDisabled suppresses workflow graph attribution: node step
+	// events, node outputs in state, and node metadata on interrupts. The
+	// agent's own output is unaffected.
+	GraphAttributionDisabled bool
+}
+
+// nodeProvenance reads graph attribution for an event, honouring the launcher's
+// opt-out. Every attribution site goes through here so a single flag turns all
+// of them off together and none can drift out of step.
+func (p *Processor) nodeProvenance(ev *session.Event) (NodeProvenance, bool) {
+	if p.GraphAttributionDisabled {
+		return NodeProvenance{}, false
+	}
+	return NodeProvenanceFrom(ev)
 }
 
 // eventSink is the legacy internal name used within this package.
@@ -215,7 +230,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 	// TEXT_MESSAGE_START with the new author's name (do not rely on ADK turn boundaries).
 	stepName := ev.Author
 	stepMayChange := ev.Author != ""
-	if prov, ok := NodeProvenanceFrom(ev); ok {
+	if prov, ok := p.nodeProvenance(ev); ok {
 		stepName = prov.StepName(ev.Author)
 		// A node is a real graph activation even when its agent shares the
 		// root's name, so it is not normalized away; hiding it would drop a
@@ -240,7 +255,9 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 		state.CurrentStepName = stepName
 	}
 
-	recordNodeOutput(sink, state, ev)
+	if prov, ok := p.nodeProvenance(ev); ok {
+		recordNodeOutput(sink, state, ev, prov)
+	}
 
 	if ev.Content != nil {
 		// Interrupts are collected across every part and emitted together: the
@@ -409,7 +426,9 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 					if err != nil {
 						return false, err
 					}
-					annotateNodeProvenance(&intr, ev)
+					if prov, ok := p.nodeProvenance(ev); ok {
+						annotateNodeProvenance(&intr, prov)
+					}
 					pendingInterrupts = append(pendingInterrupts, intr)
 					continue
 				}

@@ -51,6 +51,7 @@ func (l *aguiLauncher) streamProcessor() *stream.Processor {
 			return stream.BuildStateSnapshot(sess, reqState, isInternalStateKey)
 		},
 		InterruptReasonClassifier: l.config.interruptReasonClassifier,
+		GraphAttributionDisabled:  l.config.graphAttributionDisabled,
 	}
 }
 

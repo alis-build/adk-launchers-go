@@ -133,11 +133,7 @@ func modelTextOf(ev *session.Event) string {
 //
 // Empty values are omitted rather than written as blanks, so a client can tell
 // "no routes" from "routes unknown".
-func annotateNodeProvenance(intr *types.Interrupt, ev *session.Event) {
-	prov, ok := NodeProvenanceFrom(ev)
-	if !ok {
-		return
-	}
+func annotateNodeProvenance(intr *types.Interrupt, prov NodeProvenance) {
 	if prov.Path == "" && len(prov.Routes) == 0 {
 		return
 	}
@@ -175,11 +171,7 @@ const NodeOutputsStateKey = "_adk"
 // until the first node reports, so a per-path patch would fail on the very
 // first output. Node results are few and small, so resending the map is cheaper
 // than tracking whether the client has the parent yet.
-func recordNodeOutput(sink eventSink, state *State, ev *session.Event) {
-	prov, ok := NodeProvenanceFrom(ev)
-	if !ok {
-		return
-	}
+func recordNodeOutput(sink eventSink, state *State, ev *session.Event, prov NodeProvenance) {
 	value, ok := NodeOutputValue(ev)
 	if !ok {
 		return
