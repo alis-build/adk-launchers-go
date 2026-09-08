@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"go.alis.build/adk/launchers/evals/evaluation/simulation"
+	"go.alis.build/adk/launchers/internal/adkrun"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/plugin"
 	"google.golang.org/adk/v2/runner"
@@ -57,8 +58,13 @@ func (g *Generator) generateInferencesLive(ctx context.Context, opts InferenceOp
 
 	eventCh := make(chan *session.Event, 64)
 	errCh := make(chan error, 1)
+	// This runner is built here rather than obtained from Runtime.RunSSE, so the
+	// compaction-error handling RunSSE applies has to be applied explicitly.
+	// Without it a failed summary aborts eval inference for a turn the agent
+	// answered.
+	liveEvents := adkrun.WithoutCompactionErrors(ctx, fmt.Sprintf("eval session %q", sessionID), eventIter)
 	go func() {
-		for ev, err := range eventIter {
+		for ev, err := range liveEvents {
 			if err != nil {
 				errCh <- err
 				return
@@ -156,5 +162,6 @@ func (g *Generator) newEvalRunner(appName string, interceptor *RequestIntercepto
 		ArtifactService:   cfg.ArtifactService,
 		PluginConfig:      runner.PluginConfig{Plugins: plugins, CloseTimeout: cfg.PluginConfig.CloseTimeout},
 		AutoCreateSession: true,
+		Compaction:        cfg.Compaction,
 	})
 }

@@ -7,21 +7,32 @@
 // (for example eval request interceptors) without changing the launcher-wide
 // plugin list. Multi-turn callers should use [Runtime.MergeExtraPlugins] once and
 // pass the result to [Runtime.RunSSEWithPluginConfig] on each turn.
+//
+// Context compaction is inherited from [launcher.Config.Compaction], matching
+// how ADK's own launchers pass it to every runner they build; there is no
+// per-launcher override, because ADK defines the setting as process-wide. It is
+// off unless the application sets it. When on, the summaries it produces shrink
+// the model's prompt but never appear in the event stream or in converted
+// message history, so clients keep showing the full conversation. See
+// [WithoutCompactionErrors] for how compaction failures are reported.
 package adkrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"slices"
 	"strings"
 
 	"github.com/google/uuid"
+	"go.alis.build/alog"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/cmd/launcher"
 	"google.golang.org/adk/v2/plugin"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/session/compaction"
 	"google.golang.org/genai"
 )
 
@@ -91,6 +102,17 @@ func NewRuntime(launcherCfg *launcher.Config, appName string) (*Runtime, error) 
 	appName = strings.TrimSpace(appName)
 	if appName == "" {
 		return nil, fmt.Errorf("adkrun: app name is required")
+	}
+	// Compaction is validated inside runner.New, and a runner is built per
+	// request, so without a check here an unusable setting produces a runtime
+	// that constructs cleanly and then fails every run.
+	//
+	// A nil Compaction is valid and means compaction is disabled, which is the
+	// common case. Validate takes a nil receiver and reports no error for it, so
+	// this needs no nil guard: adding one that rejects nil would break every
+	// application that does not ask for compaction.
+	if err := launcherCfg.Compaction.Validate(); err != nil {
+		return nil, fmt.Errorf("adkrun: invalid Compaction: %w", err)
 	}
 	return &Runtime{launcherCfg: launcherCfg, appName: appName}, nil
 }
@@ -190,6 +212,7 @@ func (rt *Runtime) runSSE(ctx context.Context, req RunRequest, pluginConfig runn
 		ArtifactService:   artifactService,
 		PluginConfig:      pluginConfig,
 		AutoCreateSession: true,
+		Compaction:        rt.launcherCfg.Compaction,
 	})
 	if err != nil {
 		return "", nil, fmt.Errorf("adkrun: create runner: %w", err)
@@ -216,5 +239,40 @@ func (rt *Runtime) runSSE(ctx context.Context, req RunRequest, pluginConfig runn
 
 	msg := req.NewMessage
 	msg.Parts = slices.Clone(req.NewMessage.Parts)
-	return sessionID, r.Run(ctx, req.UserID, sessionID, &msg, runCfg, opts...), nil
+	events := r.Run(ctx, req.UserID, sessionID, &msg, runCfg, opts...)
+	label := fmt.Sprintf("app %q session %q", appName, sessionID)
+	return sessionID, WithoutCompactionErrors(ctx, label, events), nil
+}
+
+// WithoutCompactionErrors logs compaction failures and drops them from the
+// event stream, passing everything else through untouched. label identifies the
+// run in the log line.
+//
+// Compaction is post-invocation bookkeeping: the turn's events are persisted
+// before it runs, so a failure costs a smaller prompt on the next turn, not the
+// answer the caller already received. Consumers treat a streamed error as
+// terminal — the AG-UI executor emits RunError in place of RunFinished, and the
+// scheduler records a failed cron tick — so passing the failure on would report
+// a delivered answer as a failed run. Errors that are not
+// [compaction.ErrCompaction] still reach the caller, because those mean the turn
+// itself failed.
+//
+// [Runtime.RunSSE] applies this already. It is exported for callers that build
+// their own runner from [Runtime.LauncherConfig] and so bypass RunSSE.
+func WithoutCompactionErrors(ctx context.Context, label string, events iter.Seq2[*Event, error]) iter.Seq2[*Event, error] {
+	return func(yield func(*Event, error) bool) {
+		for ev, err := range events {
+			if err != nil && errors.Is(err, compaction.ErrCompaction) {
+				// Logged rather than silent: a summarizer that never succeeds
+				// leaves sessions growing unbounded, and the first visible
+				// symptom would otherwise be prompts failing against the
+				// model's context limit, far from the cause.
+				alog.Warnf(ctx, "adkrun: compaction failed for %s: %v", label, err)
+				continue
+			}
+			if !yield(ev, err) {
+				return
+			}
+		}
+	}
 }

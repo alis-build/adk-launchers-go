@@ -511,6 +511,50 @@ func TestConvertSessionToMessages_PartConverterAuthorName(t *testing.T) {
 	}
 }
 
+// TestConvertSessionToMessages_CompactionSummary pins that a context-compaction
+// summary contributes no message to thread history.
+//
+// A summary is authored "user" and carries its prose on Actions.Compaction
+// rather than on Content, so it is skipped only because of the nil-Content
+// guard in ConvertSessionToMessages. Without this test, relaxing that guard
+// would silently render summary prose as a user turn nobody typed, and would
+// truncate the history a client sees to match the model's prompt — the opposite
+// of the intent, which is that the user keeps the full conversation while the
+// prompt shrinks.
+func TestConvertSessionToMessages_CompactionSummary(t *testing.T) {
+	sess := buildSession(func(s *mockSession) {
+		asked := session.NewEvent(t.Context(), "inv1")
+		asked.Content = genai.NewContentFromText("what did we decide?", genai.RoleUser)
+
+		summary := session.NewEvent(t.Context(), "inv1")
+		summary.Author = "user"
+		summary.Content = nil
+		summary.Actions.Compaction = &session.EventCompaction{
+			StartTimestamp:   time.Now().Add(-time.Hour),
+			EndTimestamp:     time.Now().Add(-time.Minute),
+			CompactedContent: genai.NewContentFromText("earlier turns, summarized", genai.RoleModel),
+		}
+
+		answered := session.NewEvent(t.Context(), "inv1")
+		answered.Content = genai.NewContentFromText("we chose the second option", genai.RoleModel)
+
+		s.events = append(s.events, asked, summary, answered)
+	})
+
+	msgs, err := ConvertSessionToMessages(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("got %d messages, want 2 (the summary must not become a message)", len(msgs))
+	}
+	for _, msg := range msgs {
+		if content, ok := msg.Content.(string); ok && content == "earlier turns, summarized" {
+			t.Error("compaction summary prose was rendered as a conversation message")
+		}
+	}
+}
+
 func buildSession(setup func(*mockSession)) session.Session {
 	s := &mockSession{id: "test-session"}
 	setup(s)
