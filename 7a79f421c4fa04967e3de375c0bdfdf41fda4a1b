@@ -1,0 +1,42 @@
+Task: review-fixes (conductor-review of track aguigraph_20260908)
+
+Verdict was Request changes on one High; this commit closes it and the
+Medium.
+
+High — inbound _adk reached ADK session state (acceptance criterion 7):
+  agui/executor.go now wraps reqState in withoutInternalKeys before
+  ensureSessionForSnapshot. Verified red first: a reqState carrying _adk
+  landed in session state on new-thread creation.
+
+  Why the track missed it: FR3's stated concern is node outputs leaking
+  back as host state, and the implementation read that as an OUTBOUND
+  filtering problem (strip _adk from snapshots). The criterion's second
+  clause, 'absent from state written back to the ADK session', is an
+  INBOUND problem on a different code path. TestNodeOutputsInInterruptSnapshot
+  proved the snapshot direction and made the round trip look closed.
+
+  This track is what made it reachable: before it, nothing sent _adk to
+  clients, so nothing would echo it. The pre-existing _agui_ keys share
+  the hole for the same reason and are now covered too.
+
+Medium — emitted deltas aliased the live accumulator:
+  copyNodeOutputs snapshots the map into each STATE_DELTA and each
+  interrupt STATE_SNAPSHOT.
+
+  The wire was never wrong (the SSE writer serialises on Emit), which is
+  why no existing test caught it. The exposure is
+  AfterEventCallback(execCtx, ev, collector.Emitted): a host holding an
+  emitted event saw it grow. Reproduced with a holding sink before fixing.
+
+Design notes:
+- withoutInternalKeys returns the input map unchanged when nothing is
+  internal, so the common path allocates nothing, and never mutates its
+  argument since the caller owns it. Both pinned by test.
+- Copy is shallow. Values are opaque node outputs the launcher does not
+  interpret; a deep copy would impose a structure contract the spec
+  explicitly declines (outputs are carried opaquely).
+
+Verification: withoutInternalKeys, copyNodeOutputs, recordNodeOutput and
+withNodeOutputs all 100%. TestPlainAgentStreamBaseline still
+byte-identical. gofmt -l silent, go vet ./... silent, CI=true go test
+./... -count=1 all packages ok.
