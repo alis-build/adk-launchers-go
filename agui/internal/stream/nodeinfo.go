@@ -191,7 +191,7 @@ func recordNodeOutput(sink eventSink, state *State, ev *session.Event, prov Node
 	sink.Emit(events.NewStateDeltaEvent([]events.JSONPatchOperation{{
 		Op:    "add",
 		Path:  "/" + EscapeJSONPointer(NodeOutputsStateKey),
-		Value: map[string]any{"nodeOutputs": state.NodeOutputs},
+		Value: map[string]any{"nodeOutputs": copyNodeOutputs(state.NodeOutputs)},
 	}}))
 }
 
@@ -210,6 +210,21 @@ func withNodeOutputs(snapshot map[string]any, state *State) map[string]any {
 	if snapshot == nil {
 		snapshot = make(map[string]any, 1)
 	}
-	snapshot[NodeOutputsStateKey] = map[string]any{"nodeOutputs": state.NodeOutputs}
+	snapshot[NodeOutputsStateKey] = map[string]any{"nodeOutputs": copyNodeOutputs(state.NodeOutputs)}
 	return snapshot
+}
+
+// copyNodeOutputs snapshots the accumulated outputs for an outgoing event.
+//
+// The accumulator keeps growing as later nodes report, and emitted events do not
+// stop at the wire: the launcher hands them to hosts through
+// AfterEventCallback. Sharing the live map would let an event a host is holding
+// change after the fact, showing a history it never emitted. Node results are
+// few and small, so copying costs nothing worth measuring.
+func copyNodeOutputs(outputs map[string]any) map[string]any {
+	out := make(map[string]any, len(outputs))
+	for path, value := range outputs {
+		out[path] = value
+	}
+	return out
 }

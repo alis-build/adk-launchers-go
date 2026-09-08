@@ -93,3 +93,33 @@ func (l *aguiLauncher) buildMessagesSnapshot(ctx context.Context, sess session.S
 }
 
 // emitStateSnapshotIfNonEmpty and emitMessagesSnapshotIfNonEmpty are defined in stream.go.
+
+// withoutInternalKeys returns state with launcher-owned keys removed, for use
+// wherever client-supplied state would otherwise become agent-visible.
+//
+// Client state is untrusted. Snapshots publish the _adk namespace to clients, so
+// a client echoing it back is the normal case rather than an attack, and on a
+// thread's first request that state becomes the ADK session's initial state,
+// which is permanent and visible to the agent.
+//
+// The input map is returned unchanged when it holds nothing internal, which is
+// the common case, and is never mutated: the caller still owns it.
+func withoutInternalKeys(state map[string]any) map[string]any {
+	var internal int
+	for key := range state {
+		if isInternalStateKey(key) {
+			internal++
+		}
+	}
+	if internal == 0 {
+		return state
+	}
+
+	out := make(map[string]any, len(state)-internal)
+	for key, val := range state {
+		if !isInternalStateKey(key) {
+			out[key] = val
+		}
+	}
+	return out
+}

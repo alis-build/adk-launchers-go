@@ -366,7 +366,9 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 
 		// Clients expect a baseline StateSnapshot early in the run. ensureSessionForSnapshot
 		// creates the ADK session if needed so snapshot emission matches AutoCreateSession timing.
-		snapSess, snapErr := l.ensureSessionForSnapshot(ctx, appName, userID, sessionID, reqState)
+		// Client state is untrusted: strip launcher-owned keys before they can
+		// become agent-visible session state on a thread's first request.
+		snapSess, snapErr := l.ensureSessionForSnapshot(ctx, appName, userID, sessionID, withoutInternalKeys(reqState))
 		if snapErr != nil {
 			emitError(fmt.Errorf("failed to prepare session for state snapshot: %w", snapErr))
 			return
