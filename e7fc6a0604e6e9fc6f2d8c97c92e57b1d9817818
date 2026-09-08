@@ -1,0 +1,47 @@
+Task: migrate token usage onto the protocol usage field (closes the backlog
+item "Canonical token usage in the Go SDK")
+
+Trigger: peer session agui-go-sdk-missing-fields reported PR 2685 merged at
+v0.0.0-20260908175108-393c20c34ccb. Verified before acting: repinned, then
+confirmed token_usage.go declares TokenUsage with the seven canonical fields
+and run_events.go carries Usage on both RunFinishedEvent and RunErrorEvent.
+Provider and Model are omitempty, so emitting without them is valid; the only
+validation rule is that counts must not be negative.
+
+THE PART THAT WAS NOT A RENAME. The peer flagged that usage belongs on the
+terminal event, not per event. Our shim attached counts to every event that
+carried them, so this was an accumulation change, not a field move:
+
+- State.tokenUsage accumulates across the run (new usage.go).
+- finishWithInterrupts and the executor's success path attach WithUsage.
+- The error path attaches WithErrorUsage, so a run that died after some model
+  calls still reports what it spent.
+- The metadata.adk.tokenUsage shim is deleted.
+
+INVESTIGATED RATHER THAN ASSUMED — whether summing double-counts. If ADK
+reported a running total on every streaming chunk, summing would inflate
+counts badly, and token counts feed cost tracking. Evidence found:
+model/openaimodel/openai.go:213 sets UsageMetadata on the FINAL response, not
+per chunk. The gemini path passes the genai response through and sets nothing
+explicitly, so I could not prove its streaming semantics from source. Chose to
+sum non-partial events only, which matches the openai evidence, and pinned the
+rule in a test named "streaming partials are not counted" so the assumption is
+visible and changeable rather than buried. Recorded in doc.go and the spec that
+inflated counts mean revisiting this rule first.
+
+Decisions carried over from the shim, both still right under *int64:
+- A count ADK reported as zero stays absent rather than becoming TokenCount(0).
+  ADK's own int32 with omitempty cannot distinguish "produced none" from "did
+  not report", so a measured zero is a claim we never observed. The peer's note
+  that zero is meaningful upstream is exactly why this matters: the pointer form
+  lets us say "unknown" properly, and nil is the honest value.
+- A negative count is dropped per field rather than failing the run. Validate
+  rejects negatives and would take the whole terminal event down; a bad figure
+  is not worth losing the run over. Tested.
+
+Limitation recorded, not hidden: one entry with no provider or model, because
+ADK surfaces neither at this layer. A run spanning several models arrives
+summed rather than split per (provider, model) as the protocol allows.
+
+Coverage: RecordTokenUsage and TokenUsage both 100%. gofmt -l silent, go vet
+./... silent, CI=true go test ./... -count=1 all packages ok.
