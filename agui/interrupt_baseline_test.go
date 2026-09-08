@@ -72,22 +72,46 @@ func TestConfirmationInterruptWireBaseline(t *testing.T) {
 			t.Fatal("processEvent() done = false, want true")
 		}
 
+		// UPDATED for aguiproto_20260908 FR3, which attaches metadata to every
+		// event. The interrupt's own metadata.adk block is untouched; only the
+		// new event-level metadata key differs. Verified by stripping that key
+		// and re-running this golden green against its previous contents.
 		const want = `[
   {
+    "metadata": {
+      "adk": {
+        "invocationId": "e-test-invocation"
+      }
+    },
     "toolCallId": "orig-fc-1",
     "toolCallName": "send_email",
     "type": "TOOL_CALL_START"
   },
   {
     "delta": "{\"to\":\"a@b.com\"}",
+    "metadata": {
+      "adk": {
+        "invocationId": "e-test-invocation"
+      }
+    },
     "toolCallId": "orig-fc-1",
     "type": "TOOL_CALL_ARGS"
   },
   {
+    "metadata": {
+      "adk": {
+        "invocationId": "e-test-invocation"
+      }
+    },
     "toolCallId": "orig-fc-1",
     "type": "TOOL_CALL_END"
   },
   {
+    "metadata": {
+      "adk": {
+        "invocationId": "e-test-invocation"
+      }
+    },
     "outcome": {
       "interrupts": [
         {
@@ -173,22 +197,46 @@ func TestConfirmationInterruptWireBaseline(t *testing.T) {
 			t.Fatalf("processEvent() error = %v, want nil", err)
 		}
 
+		// UPDATED for aguiproto_20260908 FR3, which attaches metadata to every
+		// event. The interrupt's own metadata.adk block is untouched; only the
+		// new event-level metadata key differs. Verified by stripping that key
+		// and re-running this golden green against its previous contents.
 		const want = `[
   {
+    "metadata": {
+      "adk": {
+        "invocationId": "inv-2"
+      }
+    },
     "toolCallId": "orig-fc-2",
     "toolCallName": "charge_card",
     "type": "TOOL_CALL_START"
   },
   {
     "delta": "null",
+    "metadata": {
+      "adk": {
+        "invocationId": "inv-2"
+      }
+    },
     "toolCallId": "orig-fc-2",
     "type": "TOOL_CALL_ARGS"
   },
   {
+    "metadata": {
+      "adk": {
+        "invocationId": "inv-2"
+      }
+    },
     "toolCallId": "orig-fc-2",
     "type": "TOOL_CALL_END"
   },
   {
+    "metadata": {
+      "adk": {
+        "invocationId": "inv-2"
+      }
+    },
     "outcome": {
       "interrupts": [
         {

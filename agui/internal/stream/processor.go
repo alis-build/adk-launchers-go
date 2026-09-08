@@ -224,6 +224,10 @@ func emitToolCallLifecycle(sink eventSink, state *State, toolCallID, toolCallNam
 // Returns (done, err). When done is true the run has been finalized (e.g. an
 // interrupt was emitted) and the caller should stop processing events.
 func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State, partConverter PartConverter) (bool, error) {
+	// Everything emitted for this ADK event carries its metadata. Stamping at
+	// the sink rather than at each emit site is what makes "every event" hold.
+	sink = withEventMetadata(sink, ev)
+
 	// Emit step events when the active producer changes.
 	//
 	// A workflow event is bracketed by its graph node, named by node path, or by

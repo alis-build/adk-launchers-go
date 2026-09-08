@@ -130,9 +130,20 @@ func plainAgentRun(t *testing.T) string {
 // Every event here comes from an event with a nil NodeInfo, so this stream must
 // be byte-identical when the track is done. The regression-gate todo re-runs it.
 func TestPlainAgentStreamBaseline(t *testing.T) {
+	// UPDATED for aguiproto_20260908 FR3, which attaches metadata to EVERY
+	// event by design, so byte-identity across that change was never possible.
+	// Before regenerating, the rest of the stream was proven unchanged: with the
+	// metadata key stripped, this golden passed against its previous contents.
+	// That is the only edit this golden has had.
 	const want = `[
   {
     "messageId": "msg-1",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-plain"
+      }
+    },
     "name": "test-app",
     "role": "assistant",
     "type": "TEXT_MESSAGE_START"
@@ -140,23 +151,53 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
   {
     "delta": "Looking",
     "messageId": "msg-1",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-plain"
+      }
+    },
     "type": "TEXT_MESSAGE_CONTENT"
   },
   {
     "delta": " it up",
     "messageId": "msg-1",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-plain"
+      }
+    },
     "type": "TEXT_MESSAGE_CONTENT"
   },
   {
     "messageId": "msg-1",
+    "metadata": {
+      "adk": {
+        "author": "researcher",
+        "invocationId": "inv-plain"
+      }
+    },
     "type": "TEXT_MESSAGE_END"
   },
   {
+    "metadata": {
+      "adk": {
+        "author": "researcher",
+        "invocationId": "inv-plain"
+      }
+    },
     "stepName": "researcher",
     "type": "STEP_STARTED"
   },
   {
     "messageId": "msg-2",
+    "metadata": {
+      "adk": {
+        "author": "researcher",
+        "invocationId": "inv-plain"
+      }
+    },
     "name": "researcher",
     "role": "assistant",
     "type": "TEXT_MESSAGE_START"
@@ -164,13 +205,31 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
   {
     "delta": "Searching",
     "messageId": "msg-2",
+    "metadata": {
+      "adk": {
+        "author": "researcher",
+        "invocationId": "inv-plain"
+      }
+    },
     "type": "TEXT_MESSAGE_CONTENT"
   },
   {
     "messageId": "msg-2",
+    "metadata": {
+      "adk": {
+        "author": "researcher",
+        "invocationId": "inv-plain"
+      }
+    },
     "type": "TEXT_MESSAGE_END"
   },
   {
+    "metadata": {
+      "adk": {
+        "author": "researcher",
+        "invocationId": "inv-plain"
+      }
+    },
     "parentMessageId": "msg-2",
     "toolCallId": "tc-1",
     "toolCallName": "search",
@@ -178,21 +237,45 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
   },
   {
     "delta": "{\"q\":\"adk\"}",
+    "metadata": {
+      "adk": {
+        "author": "researcher",
+        "invocationId": "inv-plain"
+      }
+    },
     "toolCallId": "tc-1",
     "type": "TOOL_CALL_ARGS"
   },
   {
+    "metadata": {
+      "adk": {
+        "author": "researcher",
+        "invocationId": "inv-plain"
+      }
+    },
     "toolCallId": "tc-1",
     "type": "TOOL_CALL_END"
   },
   {
     "content": "{\"hits\":2}",
     "messageId": "msg-3",
+    "metadata": {
+      "adk": {
+        "author": "researcher",
+        "invocationId": "inv-plain"
+      }
+    },
     "role": "tool",
     "toolCallId": "tc-1",
     "type": "TOOL_CALL_RESULT"
   },
   {
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-plain"
+      }
+    },
     "stepName": "researcher",
     "type": "STEP_FINISHED"
   },
@@ -204,6 +287,12 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
         "value": 1
       }
     ],
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-plain"
+      }
+    },
     "type": "STATE_DELTA"
   }
 ]`

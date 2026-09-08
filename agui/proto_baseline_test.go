@@ -55,31 +55,72 @@ func protoBaselineRun(t *testing.T) string {
 // A run without any of them must therefore be byte-identical when the track is
 // done, which the phase12-regression-gate todo re-checks.
 func TestProtoFeatureFreeStreamBaseline(t *testing.T) {
+	// UPDATED for aguiproto_20260908 FR3, which attaches metadata to EVERY
+	// event by design, so byte-identity across that change was never possible.
+	// Before regenerating, the rest of the stream was proven unchanged: with the
+	// metadata key stripped, this golden passed against its previous contents.
+	// That is the only edit this golden has had.
 	const want = `[
   {
     "messageId": "msg-1",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-proto"
+      }
+    },
     "type": "REASONING_START"
   },
   {
     "messageId": "msg-2",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-proto"
+      }
+    },
     "role": "reasoning",
     "type": "REASONING_MESSAGE_START"
   },
   {
     "delta": "weighing options",
     "messageId": "msg-2",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-proto"
+      }
+    },
     "type": "REASONING_MESSAGE_CONTENT"
   },
   {
     "messageId": "msg-2",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-proto"
+      }
+    },
     "type": "REASONING_MESSAGE_END"
   },
   {
     "messageId": "msg-1",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-proto"
+      }
+    },
     "type": "REASONING_END"
   },
   {
     "messageId": "msg-3",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-proto"
+      }
+    },
     "name": "test-app",
     "role": "assistant",
     "type": "TEXT_MESSAGE_START"
@@ -87,10 +128,22 @@ func TestProtoFeatureFreeStreamBaseline(t *testing.T) {
   {
     "delta": "Here you go",
     "messageId": "msg-3",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-proto"
+      }
+    },
     "type": "TEXT_MESSAGE_CONTENT"
   },
   {
     "messageId": "msg-3",
+    "metadata": {
+      "adk": {
+        "author": "test-app",
+        "invocationId": "inv-proto"
+      }
+    },
     "type": "TEXT_MESSAGE_END"
   }
 ]`
