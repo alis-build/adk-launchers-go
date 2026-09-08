@@ -1,0 +1,37 @@
+Task: activity-state, activity-patch, activity-first-snapshot (plan agui_protocol_catchup_c9a2f5e3, phase P1)
+
+Why: FR1.
+
+Changes:
+- agui/internal/stream/activity.go (new): activityKey, State tracking
+  methods, ComputeActivityPatch and its two walkers, EmitConverterEvent,
+  emitActivityUpdate.
+- agui/internal/stream/processor.go: State.ActivitySnapshots; converter
+  relay routed through EmitConverterEvent; ClearActivitySnapshots on
+  run finalization.
+- agui/internal/stream/activity_test.go, agui/activity_delta_test.go (new).
+
+ASSUMPTION CORRECTED BY THE SDK. The first implementation emitted a delta
+with an empty patch for an unchanged repeat, reasoning that one host
+event should stay one wire event. The SDK rejected it at encode time:
+'ActivityDeltaEvent validation failed: patch field must contain at least
+one operation'. That is the protocol refusing to carry no-ops, so the
+behaviour is now to drop the repeat, and the test and comment record the
+SDK's rule rather than my original guess. Worth noting the design
+decision was wrong and the tests are what caught it.
+
+Design decisions:
+- Patch ops limited to add/replace/remove per the plan. move/copy would
+  need index bookkeeping for no meaningful saving here.
+- A resized array is replaced whole rather than diffed element-wise.
+  Cross-length diffing needs adds and removes at shifting indices, the
+  classic source of wrong hand-written patches, and a whole-array replace
+  is never larger than the array.
+- A fallback snapshot re-arms tracking, so a non-object update does not
+  permanently disable deltas for that surface. Pinned by test.
+- Keys are escaped with EscapeJSONPointer, so a content key containing a
+  slash cannot forge a deeper path. Pinned by test.
+
+Verification: all eight new functions 100%; the feature-free golden from
+9b0dbd7 is unchanged, so this is additive as claimed. go fmt, go vet,
+CI=true go test ./... clean.
