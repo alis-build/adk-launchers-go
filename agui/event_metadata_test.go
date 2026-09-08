@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
@@ -78,9 +79,7 @@ func TestEventMetadata(t *testing.T) {
 		}
 	})
 
-	t.Run("token usage is namespaced under ag-ui", func(t *testing.T) {
-		// Only the ag-ui key is protocol space; everything ADK-specific stays
-		// under adk so the two namespaces cannot collide.
+	t.Run("token usage rides our own adk key", func(t *testing.T) {
 		evts := run(t, func(ev *session.Event) {
 			ev.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
 				PromptTokenCount:     11,
@@ -89,10 +88,10 @@ func TestEventMetadata(t *testing.T) {
 			}
 		})
 		meta := eventMetadata(t, evts, events.EventTypeTextMessageContent)
-		agui, _ := meta["ag-ui"].(map[string]any)
-		usage, _ := agui["tokenUsage"].(map[string]any)
+		adk, _ := meta["adk"].(map[string]any)
+		usage, _ := adk["tokenUsage"].(map[string]any)
 		if usage == nil {
-			t.Fatalf("metadata['ag-ui'].tokenUsage missing; got %v", meta)
+			t.Fatalf("metadata.adk.tokenUsage missing; got %v", meta)
 		}
 		for key, want := range map[string]float64{"promptTokens": 11, "completionTokens": 22, "totalTokens": 33} {
 			if usage[key] != want {
@@ -101,11 +100,27 @@ func TestEventMetadata(t *testing.T) {
 		}
 	})
 
-	t.Run("no usage means no ag-ui block", func(t *testing.T) {
+	t.Run("nothing is written under the reserved ag-ui key", func(t *testing.T) {
+		// types.AGUIMetadataKey is reserved for AG-UI's own use and every other
+		// key is user space, so launcher data stays out of it entirely. Writing
+		// there would collide the day the protocol defines a field of its own.
+		evts := run(t, func(ev *session.Event) {
+			ev.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{TotalTokenCount: 33}
+		})
+		for _, ev := range evts {
+			meta, _ := ev.Raw["metadata"].(map[string]any)
+			if v, present := meta[types.AGUIMetadataKey]; present {
+				t.Errorf("%s wrote %v under the reserved %q key", ev.Type, v, types.AGUIMetadataKey)
+			}
+		}
+	})
+
+	t.Run("no usage means no tokenUsage key", func(t *testing.T) {
 		evts := run(t, func(*session.Event) {})
 		meta := eventMetadata(t, evts, events.EventTypeTextMessageContent)
-		if v, present := meta["ag-ui"]; present {
-			t.Errorf("metadata['ag-ui'] present as %v with no usage reported", v)
+		adk, _ := meta["adk"].(map[string]any)
+		if v, present := adk["tokenUsage"]; present {
+			t.Errorf("adk.tokenUsage present as %v with no usage reported", v)
 		}
 	})
 

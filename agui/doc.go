@@ -369,14 +369,19 @@
 // validates it.
 //
 // Every event carries metadata. metadata.adk holds invocationId and author,
-// plus nodePath on workflow events; metadata["ag-ui"].tokenUsage holds token
-// counts when the model reports them. nodePath follows [WithoutGraphAttribution]
-// along with every other attribution site, so opting out keeps node topology off
-// the wire entirely. Only the "ag-ui" key is protocol space, so everything
-// ADK-specific stays under "adk". An event with nothing to report carries no
-// metadata at all rather than an empty object, metadata a part converter set
-// itself is never overwritten, and each event gets its own copy of the block so
-// a consumer editing one cannot reach its siblings.
+// nodePath on workflow events, and tokenUsage when the model reports it.
+// nodePath follows [WithoutGraphAttribution] along with every other attribution
+// site, so opting out keeps node topology off the wire entirely.
+//
+// Everything the launcher writes lives under "adk". The "ag-ui" key
+// ([types.AGUIMetadataKey]) is reserved for AG-UI's own use and every other key
+// is user space, so the launcher writes nothing there — including token usage,
+// which looks protocol-shaped but has no shape the SDK defines.
+//
+// An event with nothing to report carries no metadata at all rather than an
+// empty object, metadata a part converter set itself is never overwritten, and
+// each event gets its own copy of the block so a consumer editing one cannot
+// reach its siblings.
 //
 // # Workflow graphs
 //

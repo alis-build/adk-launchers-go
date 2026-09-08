@@ -6,13 +6,14 @@ import (
 	"google.golang.org/adk/v2/session"
 )
 
-// aguiMetadataKey is the only protocol-owned metadata namespace. Everything
-// ADK-specific lives under adkMetadataKey so the two cannot collide as either
-// side grows.
-const (
-	aguiMetadataKey = "ag-ui"
-	adkMetadataKey  = "adk"
-)
+// adkMetadataKey namespaces everything this launcher writes.
+//
+// [types.AGUIMetadataKey] ("ag-ui") is reserved for AG-UI's own use and every
+// other key is user space, so the launcher writes nothing there. Token usage in
+// particular looks like it belongs to the protocol, but nothing in the SDK
+// defines a shape for it, and claiming the reserved key would collide the day
+// AG-UI does.
+const adkMetadataKey = "adk"
 
 // eventMetadata builds the metadata block for everything emitted while
 // processing one ADK event, or nil when the event has nothing to report.
@@ -37,17 +38,14 @@ func eventMetadata(ev *session.Event, nodePath string) types.Metadata {
 		adk["nodePath"] = nodePath
 	}
 
-	meta := types.Metadata{}
-	if len(adk) > 0 {
-		meta[adkMetadataKey] = adk
-	}
 	if usage := tokenUsage(ev); usage != nil {
-		meta[aguiMetadataKey] = map[string]any{"tokenUsage": usage}
+		adk["tokenUsage"] = usage
 	}
-	if len(meta) == 0 {
+
+	if len(adk) == 0 {
 		return nil
 	}
-	return meta
+	return types.Metadata{adkMetadataKey: adk}
 }
 
 // tokenUsage maps ADK's usage report onto the token-usage shape the first-party
