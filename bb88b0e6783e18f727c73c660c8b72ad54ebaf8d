@@ -1,0 +1,47 @@
+Task: metadata-tests + metadata-impl (plan agui_protocol_catchup_c9a2f5e3, phase P3)
+
+Why: FR3, unblocked by the replace directive in f946eec.
+
+Changes:
+- agui/internal/stream/metadata.go (new): eventMetadata, tokenUsage,
+  metadataSink, withEventMetadata.
+- agui/internal/stream/processor.go: ProcessEvent wraps its sink.
+- agui/event_metadata_test.go (new): 6 cases.
+- Three goldens regenerated (see below).
+
+Design decisions:
+- Sink wrapping over per-emit-site passing. FR3 says every event in a
+  run; there are roughly two dozen emit sites and the first one missed
+  would be an invisible gap. The wrapper makes the claim structural.
+- Existing metadata wins on merge: MergeMetadata(launcher, existing). A
+  host part converter setting its own metadata knows something the
+  launcher does not.
+- eventMetadata returns nil rather than an empty Metadata when there is
+  nothing to report, so the omitempty field stays absent instead of
+  serializing as {}.
+- nodePath reads NodeProvenanceFrom, the field aguigraph plumbs, rather
+  than re-deriving provenance, per the plan's instruction not to
+  duplicate that track's ownership.
+
+GOLDEN UPDATES — three, and worth scrutiny since editing a golden to fit
+the code is the failure mode this practice exists to prevent:
+- agui/graph_baseline_test.go (plain-agent, from track 2)
+- agui/proto_baseline_test.go (feature-free, from this track)
+- agui/interrupt_baseline_test.go (tool_call wire, from track 1)
+
+Attaching metadata to EVERY event cannot be byte-identical by
+construction, so these could not survive FR3 unchanged. Before
+regenerating each, the rest of the stream was proven untouched: a
+temporary 'delete(ev.Raw, "metadata")' in each normalizer made all three
+pass against their PREVIOUS contents, showing no reordering and no
+dropped fields. Each golden now carries a comment recording what changed
+and why.
+
+Note this also breaks aguihitl_20260908 acceptance criterion 6
+('tool_call resume byte-identical'). That criterion scoped a refactor
+that was meant to change nothing; FR3 is a deliberate later protocol
+addition. The interrupt's own metadata.adk block is untouched — only the
+new event-level key differs.
+
+Verification: eventMetadata, tokenUsage and withEventMetadata all 100%.
+go fmt, go vet, CI=true go test ./... clean.
