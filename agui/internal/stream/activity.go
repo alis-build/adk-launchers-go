@@ -1,10 +1,12 @@
 package stream
 
 import (
+	"encoding/base64"
 	"reflect"
 	"strconv"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"google.golang.org/genai"
 )
 
 // activityKey identifies one activity surface within a run.
@@ -150,4 +152,30 @@ func emitActivityUpdate(sink eventSink, state *State, snap *events.ActivitySnaps
 	}
 	sink.Emit(snap)
 	state.RecordActivitySnapshot(snap.MessageID, snap.ActivityType, snap.Content)
+}
+
+// emitEncryptedReasoning emits the opaque reasoning blob a model returned
+// alongside its thoughts, so the reasoning state survives to the client and back.
+//
+// ADK surfaces it as genai.Part.ThoughtSignature, raw bytes; AG-UI carries a
+// string, so it is base64-encoded. The value is opaque to both: the launcher
+// neither reads nor validates it.
+//
+// Emitted after the reasoning content so it sits inside the REASONING_START /
+// REASONING_END bracket. ADK partials carry accumulated state, so the same blob
+// can arrive on several events for one message and is sent only when it changes.
+func emitEncryptedReasoning(sink eventSink, state *State, part *genai.Part) {
+	if len(part.ThoughtSignature) == 0 {
+		return
+	}
+	encoded := base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+	if encoded == state.EmittedThoughtSignature {
+		return
+	}
+	state.EmittedThoughtSignature = encoded
+	sink.Emit(events.NewReasoningEncryptedValueEvent(
+		events.ReasoningEncryptedValueSubtypeMessage,
+		state.CurrentReasoningMessageID,
+		encoded,
+	))
 }

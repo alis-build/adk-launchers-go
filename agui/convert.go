@@ -2,6 +2,7 @@ package agui
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -126,6 +127,8 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 	var textBuf string
 	var toolCalls []types.ToolCall
 	var thoughtBuf string
+	// encryptedValue is the model's opaque reasoning blob for this event, if any.
+	var encryptedValue string
 	// partIndex counts messages produced so far from this event, used to
 	// generate stable IDs: first message reuses the event ID, subsequent
 	// ones get "{eventID}-{partIndex}" suffixes.
@@ -147,6 +150,13 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 				partIndex += len(msgs)
 				continue
 			}
+		}
+
+		// The encrypted reasoning blob rides the thought part but belongs on the
+		// assistant message, which is the turn a client sends back. Losing it
+		// would cost the model its reasoning continuity on the next turn.
+		if len(part.ThoughtSignature) > 0 {
+			encryptedValue = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
 		}
 
 		if part.Thought && part.Text != "" {
@@ -221,12 +231,14 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 
 	if textBuf != "" {
 		messages = append(messages, types.Message{
-			ID:      messageID(ev.ID, partIndex),
-			Role:    role,
-			Content: textBuf,
-			Name:    senderName,
+			ID:             messageID(ev.ID, partIndex),
+			Role:           role,
+			Content:        textBuf,
+			Name:           senderName,
+			EncryptedValue: encryptedValue,
 		})
 		partIndex++
+		encryptedValue = ""
 	}
 
 	if thoughtBuf != "" {

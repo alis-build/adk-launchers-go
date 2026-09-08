@@ -162,6 +162,9 @@ type State struct {
 	EmittedToolCallArgsJSON   map[string]string
 	PredictStateMappings      map[string][]PredictStateMapping
 	EmittedPredictStateTools  map[string]bool
+	// EmittedThoughtSignature is the encrypted reasoning blob last sent, so an
+	// accumulated partial repeating it does not re-send it.
+	EmittedThoughtSignature string
 	// ActivitySnapshots holds the content last sent for each activity surface in
 	// the run, so a repeat update can be sent as a patch instead of in full.
 	ActivitySnapshots map[activityKey]any
@@ -348,6 +351,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 					sink.Emit(events.NewReasoningMessageStartEvent(state.CurrentReasoningMessageID, "reasoning"))
 				}
 				sink.Emit(events.NewReasoningMessageContentEvent(state.CurrentReasoningMessageID, text))
+				emitEncryptedReasoning(sink, state, part)
 				continue
 			}
 
