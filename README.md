@@ -271,16 +271,6 @@ While the module is below **v1.0.0**, open pull requests and land work on the **
 - Go 1.26+
 - `google.golang.org/adk/v2` (see [go.mod](./go.mod) for the pinned version)
 
-### Temporary dependency
-
-`go.mod` currently carries a `replace` directive pointing the AG-UI Go SDK at
-[a fork](https://github.com/newtonnthiga/ag-ui/tree/feat/go-metadata-subagents).
-The upstream SDK has no `BaseEvent.Metadata`, which the `agui` launcher needs to
-attach namespaced event metadata to the SSE stream.
-
-This is temporary. Once [ag-ui PR 2678](https://github.com/ag-ui-protocol/ag-ui/pull/2678)
-merges, remove the directive and repin to an upstream version.
-
 ## License
 
 Apache 2.0 — see [LICENSE](./LICENSE).

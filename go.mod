@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	cloud.google.com/go/storage v1.67.1
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260907120946-bb34bb684cec
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260908160240-409ad608f702
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
@@ -91,11 +91,3 @@ require (
 	rsc.io/omap v1.2.0 // indirect
 	rsc.io/ordered v1.1.1 // indirect
 )
-
-// TEMPORARY: the upstream ag-ui Go SDK has no BaseEvent.Metadata, which the
-// AG-UI launcher needs to attach namespaced event metadata. Points at the fork
-// backing the PR below (branch feat/go-metadata-subagents).
-//
-// TODO(ag-ui-metadata): remove this replace and repin to an upstream version
-// once https://github.com/ag-ui-protocol/ag-ui/pull/2678 merges.
-replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/newtonnthiga/ag-ui/sdks/community/go v0.0.0-20260908112531-f2c4fc7628c9

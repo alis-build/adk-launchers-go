@@ -42,6 +42,8 @@ github.com/a2aproject/a2a-go v0.3.15 h1:h5YpCiPq3jxQ5rIns7oDjPag3ivP8u817AzdA4F+
 github.com/a2aproject/a2a-go v0.3.15/go.mod h1:I7Cm+a1oL+UT6zMoP+roaRE5vdfUa1iQGVN8aSOuZ0I=
 github.com/a2aproject/a2a-go/v2 v2.5.0 h1:ZdcFoxv+nZTUV0i2ue5hES76YCANFPG9vjqd7vK8yWM=
 github.com/a2aproject/a2a-go/v2 v2.5.0/go.mod h1:NcRp/ZHxgMzDj12/BteIC2gOjljuEBKaGRfEdJ2lNSI=
+github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260908160240-409ad608f702 h1:thkJSiRinMR/fi1AzctL0nl/ZBXnPbioUe56YEpGwjQ=
+github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260908160240-409ad608f702/go.mod h1:ERAMOexUee4AIuoxksuuGoEcHl3aqLwaazjGwlR9ZCI=
 github.com/awalterschulze/gographviz v2.0.3+incompatible h1:9sVEXJBJLwGX7EQVhLm2elIKCm7P2YHFC8v6096G09E=
 github.com/awalterschulze/gographviz v2.0.3+incompatible/go.mod h1:GEV5wmg4YquNw7v1kkyoX9etIk8yVmXj+AkDHuuETHs=
 github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1xcsSM=
@@ -129,8 +131,6 @@ github.com/mennanov/fmutils v0.4.1 h1:RDsdh/0Zf20iATJwhjr+QDqZXDHSpO3ZwcNlIhLyme
 github.com/mennanov/fmutils v0.4.1/go.mod h1:XlZAw1XIDjV0Kt0LYpv8leyGVoHVg3i7ma5EngZdQ7I=
 github.com/mitchellh/mapstructure v1.5.0 h1:jeMsZIYE/09sWLaz43PL7Gy6RuMjD2eJVyuac5Z2hdY=
 github.com/mitchellh/mapstructure v1.5.0/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=
-github.com/newtonnthiga/ag-ui/sdks/community/go v0.0.0-20260908112531-f2c4fc7628c9 h1:BGNqCDA1EaRD6xpe2sRoMfCGqbvUK9g2KqtB1Ki3Cp0=
-github.com/newtonnthiga/ag-ui/sdks/community/go v0.0.0-20260908112531-f2c4fc7628c9/go.mod h1:ERAMOexUee4AIuoxksuuGoEcHl3aqLwaazjGwlR9ZCI=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 h1:GFCKgmp0tecUJ0sJuv4pzYCqS9+RGSn52M3FUwPs+uo=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10/go.mod h1:t/avpk3KcrXxUnYOhZhMXJlSEyie6gQbtLq5NM3loB8=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
