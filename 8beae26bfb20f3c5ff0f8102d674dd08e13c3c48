@@ -1,0 +1,32 @@
+Task: step-events-tests + step-events-impl (plan agui_workflow_graph_b7e4d091, phase P2)
+
+Why: FR1. Attribution rides AG-UI's existing STEP_* events because the
+pinned Go SDK has no event-level metadata (that gap belongs to
+aguiproto_20260908), so the step name is the only channel available for
+per-event provenance in this track.
+
+Changes:
+- agui/internal/stream/processor.go: step key computed from node
+  provenance when present, author otherwise; State.CurrentStepAuthor
+  renamed CurrentStepName.
+- agui/graph_steps_test.go (new): 6 cases.
+- Mechanical rename across agui/stream_test.go.
+
+Design decisions:
+- Node steps skip the RootAppName normalisation that plain events get.
+  A workflow node whose agent happens to be named like the root is still
+  a distinct graph activation; normalising it away would silently drop a
+  node. The 'root-named workflow node still gets a step' test pins this,
+  and it was one of the two subtests that failed red.
+- Kept two separate conditions rather than one: stepMayChange preserves
+  the existing 'ev.Author != ""' guard for non-workflow events (so an
+  authorless event cannot close an open step) while letting a workflow
+  event with a path but no author open one.
+- STEP_STARTED now emits the computed step name rather than ev.Author.
+  These are equal for every non-workflow case that reaches the emit (the
+  root is excluded by the non-empty check), which is why the plain-agent
+  golden is unchanged.
+
+Verification: TestPlainAgentStreamBaseline (c635b38) passes byte-identical,
+which is the point of having captured it before any of this landed.
+go fmt, go vet, CI=true go test ./... clean.
