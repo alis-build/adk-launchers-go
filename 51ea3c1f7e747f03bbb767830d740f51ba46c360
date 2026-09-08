@@ -1,0 +1,34 @@
+Task: review-fixes (conductor-review of track aguihitl_20260908)
+
+Verdict was Request changes on one High finding; this commit closes it
+plus both Mediums.
+
+High — duplicate interrupt ids across multiple input requests:
+  agui/internal/stream/processor.go inputRequestFrom now requires
+  ev.RequestedInput.InterruptID == fc.ID before preferring the typed
+  request. Verified red first: two calls produced two interrupts both
+  with id 'input-a'.
+
+  Impact chain traced during review: duplicate ids reach
+  RecordsFromInterrupts, then ValidateResumeAgainstPending's pendingByID
+  map collapses them, so a resume answering one id satisfies the
+  'all pending addressed' check while the second workflow node waits
+  forever.
+
+  Root cause: FR1 (prefer typed RequestedInput) and FR3 (collect all
+  interrupts) were implemented in phases P3 and P2 respectively, and no
+  test exercised both at once. Worth remembering as a pattern — the
+  defect was in the interaction, not in either phase's own code.
+
+Medium — untested behaviour change:
+  TestProcessEvent_PlainToolCallAfterInterrupt pins that a plain tool
+  call sharing an event with an interrupt is emitted (previously dropped
+  when ProcessEvent returned early) and receives no TOOL_CALL_RESULT.
+  Deliberately characterization, not a fix.
+
+Medium — public API doc gap:
+  WithInterruptReasonClassifier godoc now states it is ignored under
+  WithExecutor, matching WithGenAIPartConverter's existing warning.
+
+Verification: inputRequestFrom back to 100% coverage; gofmt -l silent,
+go vet ./... silent, CI=true go test ./... all packages ok.
