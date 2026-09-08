@@ -1,0 +1,35 @@
+Task: encrypted-reasoning + phase12-regression-gate (plan agui_protocol_catchup_c9a2f5e3, phase P2)
+
+Why: FR2.
+
+Changes:
+- agui/internal/stream/activity.go: emitEncryptedReasoning.
+- agui/internal/stream/processor.go: State.EmittedThoughtSignature;
+  called after the reasoning content emit.
+- agui/convert.go: collects ThoughtSignature while walking parts and
+  attaches it to the trailing assistant message.
+- agui/encrypted_reasoning_test.go (new): 6 cases.
+
+Field mapping the spec did not name: FR2 says 'when an ADK event carries
+an encrypted reasoning value' without naming the field. genai.Part.
+ThoughtSignature is the only encrypted-reasoning-shaped thing ADK or
+genai surfaces, so that is the mapping. []byte to string is base64.
+
+Design decisions:
+- Placement in history is the assistant message, per FR2's wording, even
+  though the signature arrives on the thought part. The assistant turn is
+  what a client echoes back, so putting it on the reasoning message would
+  preserve the blob in a message the model never receives.
+- Subtype is 'message' with the reasoning message id as entity id. The
+  SDK's other subtype is 'tool-call', which does not apply to a thought
+  part.
+- Dedup on the encoded value rather than a 'seen once' flag, so a genuine
+  second blob in one run still goes out. Both cases pinned by test.
+
+PHASE 1+2 REGRESSION GATE: both goldens pass unchanged — the feature-free
+stream from 9b0dbd7 and the plain-agent stream from the previous track
+(c635b38). Activity deltas and encrypted reasoning therefore ship
+independently of the gated metadata work, which was the gate's purpose.
+
+Verification: emitEncryptedReasoning 100%; go fmt, go vet, CI=true
+go test ./... clean.
