@@ -1,0 +1,35 @@
+Task: capabilities + docs (plan agui_hitl_interrupts_a1f3c2d8, phase P5)
+
+Why: spec FR6 and FR7.
+
+Changes:
+- agui/capabilities.go: HumanInTheLoopCapabilities.InterruptReasons
+  ([]string, json interruptReasons); SupportedInterruptReasons() helper;
+  MergeInterruptCapabilities fills it only when nil.
+- agui/capabilities_reasons_test.go (new): defaults, merge fills,
+  merge preserves a host's list, and the JSON key.
+- agui/doc.go: new 'Non-tool interrupts' and 'Multiple interrupts per
+  event' sections; Limitations rewritten; capabilities line updated.
+
+Design note: the merge deliberately does not append the defaults to a
+host-supplied list. A host with a custom classifier emits reasons the
+launcher cannot enumerate, and appending tool_call/input_required/
+confirmation would advertise reasons that host may never produce.
+
+Documentation decisions worth keeping:
+- Recorded the workflow-agent constraint from the spec Background. Only
+  the workflow scheduler populates resumeInputs and only
+  agent/workflowagent.detectResume routes the reply, so a plain llmagent
+  cannot produce adk_request_input. Without this, a host would reasonably
+  expect prompting an llmagent to work.
+- Recorded that clients must answer EVERY interrupt in
+  outcome.interrupts. Before this track only one was ever sent, so
+  existing clients may assume a single-element array; validation rejects
+  a resume that leaves any pending interrupt unaddressed.
+- Stated that the launcher never emits adk_request_input itself (spec
+  non-goal), so hosts know the emission is theirs to write.
+
+The TODO(non-tool-interrupts) comment is gone from the tree; it was
+removed in fff6fb3 when the handler was registered.
+
+Verification: go doc renders; go fmt, go vet, CI=true go test ./... clean.
