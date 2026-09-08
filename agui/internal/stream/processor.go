@@ -138,7 +138,7 @@ type State struct {
 	CurrentReasoningPhaseID   string
 	CurrentReasoningMessageID string
 	LastTextMessageID         string
-	CurrentStepAuthor         string
+	CurrentStepName           string
 	RootAppName               string
 	StreamedReasoning         string          // accumulated partial reasoning text of the current streamed message; classifies non-partial thought events as repeat vs independent
 	StreamedText              strings.Builder // partial text deltas streamed for the current message; classifies non-partial text events as repeat vs independent
@@ -199,31 +199,41 @@ func emitToolCallLifecycle(sink eventSink, state *State, toolCallID, toolCallNam
 // Returns (done, err). When done is true the run has been finalized (e.g. an
 // interrupt was emitted) and the caller should stop processing events.
 func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State, partConverter PartConverter) (bool, error) {
-	// Emit step events when the active sub-agent changes.
-	// Root agent (state.RootAppName) doesn't get step events: normalize its author
-	// to "" so consecutive root partials do not repeatedly trip the author-change
-	// block. ev.Author is still passed to STEP_STARTED and TEXT_MESSAGE_START.name
-	// unchanged so the wire carries the raw author label.
+	// Emit step events when the active producer changes.
+	//
+	// A workflow event is bracketed by its graph node, named by node path, or by
+	// the node's agent name for top-level static nodes which carry no path.
+	// Everything else keeps the author-change behaviour: the root agent gets no
+	// step, so its author normalizes to "" and consecutive root partials do not
+	// repeatedly trip the change check.
+	//
 	// Close any open text message first so the next partial opens a fresh
 	// TEXT_MESSAGE_START with the new author's name (do not rely on ADK turn boundaries).
-	stepAuthor := ev.Author
-	if stepAuthor == state.RootAppName {
-		stepAuthor = ""
+	stepName := ev.Author
+	stepMayChange := ev.Author != ""
+	if prov, ok := NodeProvenanceFrom(ev); ok {
+		stepName = prov.StepName(ev.Author)
+		// A node is a real graph activation even when its agent shares the
+		// root's name, so it is not normalized away; hiding it would drop a
+		// node from the client's view of the graph.
+		stepMayChange = stepName != ""
+	} else if stepName == state.RootAppName {
+		stepName = ""
 	}
-	if ev.Author != "" && stepAuthor != state.CurrentStepAuthor {
+	if stepMayChange && stepName != state.CurrentStepName {
 		closeTextMessage(sink, state)
 		closeReasoningMessage(sink, state)
 		// A different producer follows its own streaming convention; its text
 		// must not be deduped against the previous author's streamed content.
 		state.StreamedText.Reset()
 		state.StreamedReasoning = ""
-		if state.CurrentStepAuthor != "" {
-			sink.Emit(events.NewStepFinishedEvent(state.CurrentStepAuthor))
+		if state.CurrentStepName != "" {
+			sink.Emit(events.NewStepFinishedEvent(state.CurrentStepName))
 		}
-		if stepAuthor != "" {
-			sink.Emit(events.NewStepStartedEvent(ev.Author))
+		if stepName != "" {
+			sink.Emit(events.NewStepStartedEvent(stepName))
 		}
-		state.CurrentStepAuthor = stepAuthor
+		state.CurrentStepName = stepName
 	}
 
 	if ev.Content != nil {
@@ -473,9 +483,9 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 func finalizeLifecycle(sink eventSink, state *State) {
 	closeTextMessage(sink, state)
 	closeReasoningMessage(sink, state)
-	if state.CurrentStepAuthor != "" {
-		sink.Emit(events.NewStepFinishedEvent(state.CurrentStepAuthor))
-		state.CurrentStepAuthor = ""
+	if state.CurrentStepName != "" {
+		sink.Emit(events.NewStepFinishedEvent(state.CurrentStepName))
+		state.CurrentStepName = ""
 	}
 }
 

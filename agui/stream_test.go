@@ -1005,10 +1005,10 @@ func TestProcessEvent_ConfirmationInterrupt_ClosesOpenStep(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
 	state := &streamState{
-		RunID:             "r1",
-		ThreadID:          "t1",
-		RootAppName:       "test-app",
-		CurrentStepAuthor: "sub-agent",
+		RunID:           "r1",
+		ThreadID:        "t1",
+		RootAppName:     "test-app",
+		CurrentStepName: "sub-agent",
 	}
 
 	ev := session.NewEvent(t.Context(), "inv1")
@@ -1038,8 +1038,8 @@ func TestProcessEvent_ConfirmationInterrupt_ClosesOpenStep(t *testing.T) {
 	if !done {
 		t.Fatal("processEvent() done = false, want true")
 	}
-	if state.CurrentStepAuthor != "" {
-		t.Errorf("currentStepAuthor = %q, want empty (step should be closed)", state.CurrentStepAuthor)
+	if state.CurrentStepName != "" {
+		t.Errorf("currentStepName = %q, want empty (step should be closed)", state.CurrentStepName)
 	}
 
 	evts := parseSSEEvents(rec.Body.String())
@@ -1268,7 +1268,7 @@ func TestProcessEvent_TurnComplete(t *testing.T) {
 	}
 
 	// Also set a sub-agent step.
-	state.CurrentStepAuthor = "sub-agent"
+	state.CurrentStepName = "sub-agent"
 
 	// Turn complete should close everything.
 	e2, rec2 := newTestEmitter()
@@ -1304,7 +1304,7 @@ func TestProcessEvent_TurnComplete(t *testing.T) {
 	if state.CurrentTextMessageID != "" {
 		t.Error("expected currentTextMessageID to be cleared")
 	}
-	if state.CurrentStepAuthor != "" {
+	if state.CurrentStepName != "" {
 		t.Error("expected currentStepAuthor to be cleared")
 	}
 }
