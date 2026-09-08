@@ -162,6 +162,9 @@ type State struct {
 	EmittedToolCallArgsJSON   map[string]string
 	PredictStateMappings      map[string][]PredictStateMapping
 	EmittedPredictStateTools  map[string]bool
+	// ActivitySnapshots holds the content last sent for each activity surface in
+	// the run, so a repeat update can be sent as a patch instead of in full.
+	ActivitySnapshots map[activityKey]any
 	// NodeOutputs accumulates workflow node results for the run, keyed by node
 	// path (or agent name for pathless nodes). Surfaced to clients under the
 	// reserved _adk state key.
@@ -285,7 +288,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 				}
 				if customEvents != nil {
 					for _, ce := range customEvents {
-						sink.Emit(ce)
+						EmitConverterEvent(sink, state, ce)
 					}
 					continue
 				}
@@ -779,6 +782,7 @@ func (p *Processor) finishWithInterrupts(sink eventSink, state *State, intrs []t
 		return sink.Err()
 	}
 	state.EmittedInterrupts = append(state.EmittedInterrupts, intrs...)
+	state.ClearActivitySnapshots()
 	state.RunFinalized = true
 	return nil
 }
