@@ -1,0 +1,33 @@
+Task: resume-validation-tests + resume-validation-impl (plan agui_hitl_interrupts_a1f3c2d8, phase P4)
+
+Why: spec FR5.
+
+Finding that shaped the fix: writing the tests first showed the
+'approved is required only for tool_call' half of FR5 was ALREADY
+satisfied, and not by accident. Validation checks the payload against
+rec.ResponseSchema, and 'approved' is required only because
+buildToolCallInterrupt advertises ToolConfirmationResponseSchema. An
+input request carries its own schema or none, so it never inherited the
+rule. Six of the seven new tests passed on first run and are
+characterization tests documenting that.
+
+The one real gap was scalar payloads: ResumePayloadMap demands a JSON
+object, so a node advertising {"type":"string"} had its answer rejected
+before reaching ADK.
+
+Changes:
+- agui/internal/interrupt/interrupt.go: new validateResolvedPayload,
+  called from ValidateResumeAgainstPending in place of the inline
+  ResumePayloadMap + ValidatePayloadAgainstSchema pair.
+- agui/internal/interrupt/validate_reason_test.go (new): 9 cases.
+
+Validation composition for input requests:
+- validateJSONSchemaValue first, which checks the top-level type and, for
+  objects, nested property types.
+- ValidatePayloadAgainstSchema after, but only for object payloads, since
+  'required' is an object-only rule.
+This ordering means an object payload contradicting a scalar schema is
+caught by the type check rather than slipping through the object path.
+
+Verification: validateResolvedPayload 100%; interrupt package 71.8% ->
+84.5% across the track. go fmt, go vet, CI=true go test ./... clean.
