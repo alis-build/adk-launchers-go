@@ -1,0 +1,35 @@
+Task: resume-dispatch-tests + resume-dispatch-impl (plan agui_hitl_interrupts_a1f3c2d8, phase P4)
+
+Why: spec FR4. P3 made input requests emittable; without this they were
+unanswerable, because every resume entry was turned into an
+adk_request_confirmation FunctionResponse regardless of what paused.
+
+Changes:
+- agui/internal/interrupt/interrupt.go: EntriesToConfirmationContent
+  renamed to EntriesToResumeContent and given a pending []Record
+  parameter; new inputResponseFromResumeEntry.
+- agui/internal/interrupt/resume_dispatch_test.go (new): 13 cases across
+  both call names, cancelled on each, a mixed pending set, custom reason,
+  legacy empty CallName, unknown id, scalar payload, and the error paths.
+- agui/executor.go: passes the pending records it had already loaded for
+  validation a few lines above.
+- agui/internal/interrupt/resume_test.go, agui/resume_run_test.go,
+  agui/doc.go: renamed call sites; existing tool-confirmation tests pass
+  nil pending, which exercises the fallback.
+
+Plan/spec discrepancy resolved: the plan todo says 'dispatch by
+Record.Reason'. The spec's own 2026-09-08 deviation note supersedes that
+and says CallName, for the reason recorded in the commit message. Followed
+the spec.
+
+Design notes:
+- An input payload is NOT passed through ResumePayloadMap. That helper
+  demands a JSON object, which is right for tool confirmations (they need
+  payload.approved) but wrong here, where a node may advertise
+  {"type":"string"} and the answer is a bare scalar.
+- Resolved-with-nil-payload errors rather than sending {"response":null},
+  so a client that means 'no answer' has to say cancelled explicitly.
+
+Verification: EntriesToResumeContent and inputResponseFromResumeEntry
+both 100%. All pre-existing resume tests pass after the rename. go fmt,
+go vet, CI=true go test ./... clean.
