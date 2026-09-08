@@ -32,3 +32,30 @@ Design notes:
 
 Coverage: all new functions 100%; interrupt package 71.8% -> 75.5%.
 Verification: go fmt, go vet, CI=true go test ./... all clean.
+
+--- Phase P1 checkpoint (constants and classification) ---
+
+Scope: commits 2e5e1a1 (reason constants), 2449d34 (schema conversion),
+89ccd9f (reason classification). This commit serves as the P1 checkpoint;
+no separate empty checkpoint commit was made.
+
+Automated verification: go fmt ./..., go vet ./..., CI=true go test ./...
+all clean. New code (SchemaToMap, ClassifyReason, ReasonForSchema,
+isBooleanShaped) at 100% statement coverage; interrupt package 71.8% ->
+75.5%.
+
+Manual verification proposed and confirmed by the user:
+  go doc ./agui WithInterruptReasonClassifier
+  CI=true go test ./agui/internal/interrupt/ -run 'TestReasonForSchema|TestClassifyReason' -v
+  CI=true go test ./...
+Expected and observed: option godoc renders with the fallback rule; the
+reason decision table passes; full suite green with no behaviour change.
+
+Scope note: P1 adds helpers only. Nothing calls them until P3 wires
+adk_request_input into the stream, so agent behaviour is unchanged at
+this checkpoint. That is by design, not an omission.
+
+Workflow deviations (deliberate): conductor/ is gitignored and no
+conductor files are tracked, so plan updates are on-disk only with no
+plan commits; and each test todo was committed together with its impl
+todo rather than committing a red build.
