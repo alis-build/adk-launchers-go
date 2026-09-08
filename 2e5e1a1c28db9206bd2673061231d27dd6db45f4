@@ -1,0 +1,23 @@
+Task: reason-constants (track aguihitl_20260908, todo 2/20)
+
+Summary
+Added the AG-UI core interrupt reason constants (tool_call, input_required,
+confirmation) and a CallName field on interrupt.Record recording which ADK
+FunctionCall produced the interrupt, with ADKCallName/IsInputRequest helpers
+for resume dispatch.
+
+Files
+- agui/internal/interrupt/interrupt.go (modified)
+- agui/internal/interrupt/reason_test.go (created)
+
+Why
+The track spec originally dispatched resume on Record.Reason. That is wrong:
+FR2 lets a host classifier return any custom reason string, so the reason
+cannot identify which ADK call to answer. Persisting the call name makes the
+dispatch unambiguous. Empty CallName means a record written before this
+change, which was necessarily a tool confirmation, so it defaults there and
+old sessions keep resuming correctly.
+
+Verification
+go build ./... clean; go vet ./agui/... clean; CI=true go test ./agui/... all
+packages ok.
