@@ -1,0 +1,37 @@
+Task: WithoutSubagentAttribution (follow-up to 0361672)
+
+Why: raised in my own report on 0361672 and confirmed by the user. The
+subagent commit shipped default-on with no escape hatch, while
+WithoutGraphAttribution exists for a strictly smaller wire change. That
+inconsistency was mine.
+
+Evidence that made it worth doing rather than arguing about, gathered
+before recommending it:
+- Only multi-agent streams are affected. Single-agent output is
+  byte-identical, which is why only the plain-agent golden moved and the
+  feature-free and tool_call goldens did not.
+- The delta in the sample stream is 2 bracket events plus subagentRunId
+  on 10 existing events.
+- AG-UI Go SDK decoder.go:24 DecodeEvent checks isValidEventType and
+  returns 'unknown event type: %s' before reaching the switch. The
+  RawEvent fallback in that switch's default is unreachable for a
+  genuinely unknown type, so an older-SDK Go consumer hard-errors rather
+  than ignoring. That is what makes this different from adding a field.
+- Unverified and stated as such: the TypeScript client's strict unions
+  may also reject subagentRunId as an unexpected key, the same class of
+  hazard the peer session flagged for RunFinishedOutcome. Could not check
+  from here.
+
+Changes:
+- agui/agui.go: subagentAttributionDisabled, WithoutSubagentAttribution.
+- agui/internal/stream/processor.go: SubagentAttributionDisabled; one
+  guard around both the sink wrap and openSubagent.
+- agui/stream.go: wired through.
+- agui/subagent_test.go: 5 cases, two of which guard against
+  over-suppression (steps and text must survive).
+- agui/doc.go and the spec addendum record the decoder behaviour, since
+  'clients ignore unknown events' is the assumption a reader would
+  otherwise make.
+
+Verification: WithoutSubagentAttribution 100%; gofmt -l silent, go vet
+./... silent, CI=true go test ./... -count=1 all packages ok.
