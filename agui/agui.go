@@ -90,6 +90,8 @@ type AGUIConfig struct {
 	enableAgentStateEndpoint bool
 	// graphAttributionDisabled suppresses workflow graph attribution when true.
 	graphAttributionDisabled bool
+	// subagentAttributionDisabled suppresses sub-agent attribution when true.
+	subagentAttributionDisabled bool
 	// interruptReasonClassifier optionally overrides how a workflow input
 	// request maps to an AG-UI interrupt reason. Nil, or a classifier returning
 	// "", falls through to the default schema-shape rule.
@@ -243,6 +245,24 @@ func WithPredictState(mappings ...PredictStateMapping) Option {
 func WithoutGraphAttribution() Option {
 	return func(c *AGUIConfig) {
 		c.graphAttributionDisabled = true
+	}
+}
+
+// WithoutSubagentAttribution disables sub-agent attribution: the
+// SUBAGENT_STARTED/SUBAGENT_FINISHED brackets around each sub-agent activation
+// and the subagentRunId stamped on the events inside them.
+//
+// Use it for clients that cannot yet handle those events. The AG-UI Go SDK's
+// event decoder rejects an event type it does not recognise rather than
+// skipping it, so a consumer on an SDK older than the subagent release fails to
+// decode the stream instead of degrading.
+//
+// The sub-agent's own output is unaffected, as is the STEP_* bracketing that
+// predates this, so disabling attribution returns a multi-agent stream to what
+// the launcher emitted before rather than hiding part of the run.
+func WithoutSubagentAttribution() Option {
+	return func(c *AGUIConfig) {
+		c.subagentAttributionDisabled = true
 	}
 }
 

@@ -280,3 +280,100 @@ func TestSubagentHandoverDoesNotMisattribute(t *testing.T) {
 		}
 	}
 }
+
+// TestWithoutSubagentAttribution covers the opt-out.
+//
+// Subagent brackets change the wire for every existing multi-agent stream, and
+// the Go SDK's EventDecoder errors on an event type it does not know rather
+// than skipping it. A consumer on an older SDK needs a way off without pinning
+// the launcher back.
+func TestWithoutSubagentAttribution(t *testing.T) {
+	newDisabledLauncher := func() *aguiLauncher {
+		l := newTestLauncher("test-app")
+		WithoutSubagentAttribution()(l.config)
+		return l
+	}
+
+	t.Run("suppresses the bracket events", func(t *testing.T) {
+		l := newDisabledLauncher()
+		e, rec := newTestEmitter()
+		state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+		if _, err := l.processEvent(e, agentEvent(t, "researcher", "b1", "searching"), state, nil); err != nil {
+			t.Fatalf("processEvent() error = %v", err)
+		}
+		if got := subagentTrace(t, parseSSEEvents(rec.Body.String())); len(got) != 0 {
+			t.Errorf("subagent trace = %v, want none with attribution disabled", got)
+		}
+	})
+
+	t.Run("suppresses the run id on events", func(t *testing.T) {
+		l := newDisabledLauncher()
+		e, rec := newTestEmitter()
+		state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+		if _, err := l.processEvent(e, agentEvent(t, "researcher", "b1", "searching"), state, nil); err != nil {
+			t.Fatalf("processEvent() error = %v", err)
+		}
+		for _, ev := range parseSSEEvents(rec.Body.String()) {
+			if v, present := ev.Raw["subagentRunId"]; present {
+				t.Errorf("%s carries subagentRunId %v with attribution disabled", ev.Type, v)
+			}
+		}
+	})
+
+	t.Run("suppresses the suspended bracket on an interrupt too", func(t *testing.T) {
+		l := newDisabledLauncher()
+		e, rec := newTestEmitter()
+		state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+		if _, err := l.processEvent(e, agentEvent(t, "researcher", "b1", "checking"), state, nil); err != nil {
+			t.Fatalf("processEvent() error = %v", err)
+		}
+		ev := session.NewEvent(t.Context(), "inv1")
+		ev.Author = "researcher"
+		ev.Branch = "b1"
+		ev.Content = &genai.Content{
+			Role:  string(genai.RoleModel),
+			Parts: []*genai.Part{confirmationPart("confirm-1", "Send?", "orig-1", "send_email")},
+		}
+		if _, err := l.processEvent(e, ev, state, nil); err != nil {
+			t.Fatalf("processEvent() error = %v", err)
+		}
+		if got := subagentTrace(t, parseSSEEvents(rec.Body.String())); len(got) != 0 {
+			t.Errorf("subagent trace = %v, want none with attribution disabled", got)
+		}
+	})
+
+	t.Run("sub-agent steps and text still work", func(t *testing.T) {
+		// The opt-out drops subagent identity, not the sub-agent's output or
+		// the step bracketing that predates it.
+		l := newDisabledLauncher()
+		e, rec := newTestEmitter()
+		state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+		if _, err := l.processEvent(e, agentEvent(t, "researcher", "b1", "searching"), state, nil); err != nil {
+			t.Fatalf("processEvent() error = %v", err)
+		}
+
+		evts := parseSSEEvents(rec.Body.String())
+		if got := stepNames(evts); len(got) != 1 || got[0] != "start:researcher" {
+			t.Errorf("steps = %v, want one start:researcher", got)
+		}
+		var sawText bool
+		for _, ev := range evts {
+			if ev.Type == events.EventTypeTextMessageContent && ev.str("delta") == "searching" {
+				sawText = true
+			}
+		}
+		if !sawText {
+			t.Error("the sub-agent's text was suppressed along with its attribution")
+		}
+	})
+
+	t.Run("on by default", func(t *testing.T) {
+		if newTestLauncher("test-app").config.subagentAttributionDisabled {
+			t.Error("subagent attribution disabled on a zero config, want it on by default")
+		}
+	})
+}

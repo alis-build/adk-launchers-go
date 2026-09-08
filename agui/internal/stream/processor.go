@@ -59,6 +59,12 @@ type Processor struct {
 	// events, node outputs in state, and node metadata on interrupts. The
 	// agent's own output is unaffected.
 	GraphAttributionDisabled bool
+
+	// SubagentAttributionDisabled suppresses sub-agent identity: the
+	// SUBAGENT_STARTED/FINISHED brackets and the subagentRunId stamped on the
+	// events inside them. The sub-agent's own output and its step bracketing
+	// are unaffected.
+	SubagentAttributionDisabled bool
 }
 
 // nodeProvenance reads graph attribution for an event, honouring the launcher's
@@ -236,13 +242,18 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 		metaNodePath = prov.Path
 	}
 	sink = withEventMetadata(sink, ev, metaNodePath)
-	// Attribution is read at emit time, so this wrap goes outside the open and
-	// close below and the SUBAGENT_STARTED is not stamped with its own id.
-	sink = withSubagentAttribution(sink, state)
+	// One gate for both halves: with the wrap skipped and the activation never
+	// opened, nothing carries a run id and no bracket is emitted, so the two
+	// cannot drift apart.
+	if !p.SubagentAttributionDisabled {
+		// Attribution is read at emit time, so this wrap goes outside the open
+		// and close below and the SUBAGENT_STARTED is not stamped with its own id.
+		sink = withSubagentAttribution(sink, state)
 
-	// Open or switch the sub-agent activation before anything is emitted for
-	// this event, so its SUBAGENT_STARTED precedes the content it attributes.
-	openSubagent(sink, state, ev)
+		// Open or switch the sub-agent activation before anything is emitted for
+		// this event, so its SUBAGENT_STARTED precedes the content it attributes.
+		openSubagent(sink, state, ev)
+	}
 
 	// Emit step events when the active producer changes.
 	//

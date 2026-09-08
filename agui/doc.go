@@ -404,6 +404,12 @@
 // emitted. They are not nested: AG-UI steps are a flat sequence, so the pair
 // simply closes adjacently rather than one containing the other.
 //
+// Attribution is on by default. [WithoutSubagentAttribution] turns off both the
+// brackets and the run ids for clients that cannot handle them; the AG-UI Go
+// SDK's decoder rejects an unrecognised event type rather than skipping it, so
+// a consumer on an older SDK fails to decode rather than degrading. The
+// sub-agent's own output and its step bracketing are unaffected.
+//
 // # Workflow graphs
 //
 // ADK's workflow engine tags every event with graph provenance, and the
