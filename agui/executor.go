@@ -336,6 +336,9 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 			}
 			finalizeLifecycle(sink, state)
 			opts = append([]events.RunErrorOption{events.WithRunID(state.RunID)}, opts...)
+			if usage := state.TokenUsage(); usage != nil {
+				opts = append(opts, events.WithErrorUsage(usage))
+			}
 			sink.Emit(events.NewRunErrorEvent(err.Error(), opts...))
 			state.RunFinalized = true
 		}
@@ -536,11 +539,11 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 					}
 				}
 			}
-			sink.Emit(events.NewRunFinishedEventWithOptions(
-				state.ThreadID,
-				state.RunID,
-				events.WithSuccessOutcome(),
-			))
+			finishOpts := []events.RunFinishedOption{events.WithSuccessOutcome()}
+			if usage := state.TokenUsage(); usage != nil {
+				finishOpts = append(finishOpts, events.WithUsage(usage))
+			}
+			sink.Emit(events.NewRunFinishedEventWithOptions(state.ThreadID, state.RunID, finishOpts...))
 			state.RunFinalized = true
 		}
 

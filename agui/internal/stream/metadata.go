@@ -38,54 +38,10 @@ func eventMetadata(ev *session.Event, nodePath string) types.Metadata {
 		adk["nodePath"] = nodePath
 	}
 
-	if usage := tokenUsage(ev); usage != nil {
-		adk["tokenUsage"] = usage
-	}
-
 	if len(adk) == 0 {
 		return nil
 	}
 	return types.Metadata{adkMetadataKey: adk}
-}
-
-// tokenUsage maps ADK's usage report onto the TokenUsage shape the TypeScript,
-// Python and .NET AG-UI SDKs publish. Returns nil when the model reported none.
-//
-// Those SDKs carry it as a `usage` array on the terminal event, one entry per
-// provider and model. The Go SDK has neither the type nor the field, so this
-// travels under metadata.adk instead — but in the canonical shape, array and
-// all, so that adopting `usage` later is a move rather than a rewrite.
-//
-// Getting the names right now matters more than it looks: TypeScript's
-// TokenUsageSchema strips keys it does not know, so a non-canonical name would
-// vanish on parse with no error, while Python would keep it. Same payload,
-// different outcome per client.
-//
-// provider and model are absent because ADK does not surface either on the
-// event. Zero counts are omitted rather than reported as zero, so "not measured"
-// stays distinguishable from "measured none".
-func tokenUsage(ev *session.Event) []map[string]any {
-	u := ev.UsageMetadata
-	if u == nil {
-		return nil
-	}
-
-	entry := map[string]any{}
-	for name, count := range map[string]int32{
-		"inputTokens":       u.PromptTokenCount,
-		"outputTokens":      u.CandidatesTokenCount,
-		"totalTokens":       u.TotalTokenCount,
-		"reasoningTokens":   u.ThoughtsTokenCount,
-		"cachedInputTokens": u.CachedContentTokenCount,
-	} {
-		if count > 0 {
-			entry[name] = count
-		}
-	}
-	if len(entry) == 0 {
-		return nil
-	}
-	return []map[string]any{entry}
 }
 
 // metadataSink stamps event metadata onto everything emitted while processing

@@ -368,14 +368,20 @@
 // outside the bracket. The value stays opaque: the launcher neither reads nor
 // validates it.
 //
-// Every event carries metadata. metadata.adk holds invocationId and author,
-// nodePath on workflow events, and tokenUsage when the model reports it.
+// Every event carries metadata. metadata.adk holds invocationId and author, and
+// nodePath on workflow events.
 //
-// tokenUsage uses the canonical TokenUsage shape the TypeScript, Python and
-// .NET SDKs publish — an array of {inputTokens, outputTokens, totalTokens,
-// reasoningTokens, cachedInputTokens}, zero counts omitted. Those SDKs carry it
-// as a `usage` field on the terminal event; the Go SDK has neither that type nor
-// that field, so it travels under metadata.adk until it does.
+// Token usage is not metadata. It rides the protocol's own usage field on the
+// terminal event — RUN_FINISHED, or RUN_ERROR for a run that died after some
+// model calls completed — summed across the run rather than repeated per event.
+//
+// Counts come from ADK and are reported as one entry with no provider or model,
+// because ADK surfaces neither at this layer; a run spanning several models
+// arrives summed rather than split. A count ADK reported as zero is left absent
+// rather than sent as zero: ADK types counts as int32 with omitempty, so it
+// cannot tell "produced none" from "did not report", and asserting a measured
+// zero would be the stronger claim. A negative count is dropped, since the SDK
+// rejects one and would take the whole terminal event down with it.
 // nodePath follows [WithoutGraphAttribution] along with every other attribution
 // site, so opting out keeps node topology off the wire entirely.
 //

@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	cloud.google.com/go/storage v1.67.1
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260908160240-409ad608f702
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260908175108-393c20c34ccb
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1

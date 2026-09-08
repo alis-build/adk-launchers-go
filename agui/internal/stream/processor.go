@@ -168,6 +168,9 @@ type State struct {
 	EmittedToolCallArgsJSON   map[string]string
 	PredictStateMappings      map[string][]PredictStateMapping
 	EmittedPredictStateTools  map[string]bool
+	// tokenUsage accumulates the run's reported token counts, emitted on the
+	// terminal event where the protocol carries them.
+	tokenUsage tokenCounts
 	// CurrentSubagent is the sub-agent activation events are attributed to, or
 	// nil while the root agent is producing.
 	CurrentSubagent *subagentRun
@@ -254,6 +257,10 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 		// this event, so its SUBAGENT_STARTED precedes the content it attributes.
 		openSubagent(sink, state, ev)
 	}
+
+	// Usage accrues per event but is carried on the terminal event, which is
+	// where the protocol puts it.
+	state.RecordTokenUsage(ev)
 
 	// Emit step events when the active producer changes.
 	//
@@ -838,11 +845,11 @@ func (p *Processor) finishWithInterrupts(sink eventSink, state *State, intrs []t
 		}
 	}
 
-	sink.Emit(events.NewRunFinishedEventWithOptions(
-		state.ThreadID,
-		state.RunID,
-		events.WithInterruptOutcome(intrs),
-	))
+	finishOpts := []events.RunFinishedOption{events.WithInterruptOutcome(intrs)}
+	if usage := state.TokenUsage(); usage != nil {
+		finishOpts = append(finishOpts, events.WithUsage(usage))
+	}
+	sink.Emit(events.NewRunFinishedEventWithOptions(state.ThreadID, state.RunID, finishOpts...))
 	if sink.Err() != nil {
 		return sink.Err()
 	}

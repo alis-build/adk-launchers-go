@@ -79,66 +79,6 @@ func TestEventMetadata(t *testing.T) {
 		}
 	})
 
-	t.Run("token usage rides our own adk key in the canonical shape", func(t *testing.T) {
-		// Field names and the array container match the TokenUsage type the
-		// TypeScript, Python and .NET SDKs already publish, even though the Go
-		// SDK has no such type yet and no `usage` field to put it on. When Go
-		// gains them, this moves across as-is instead of being rewritten.
-		evts := run(t, func(ev *session.Event) {
-			ev.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
-				PromptTokenCount:        11,
-				CandidatesTokenCount:    22,
-				TotalTokenCount:         33,
-				ThoughtsTokenCount:      7,
-				CachedContentTokenCount: 5,
-			}
-		})
-		meta := eventMetadata(t, evts, events.EventTypeTextMessageContent)
-		adk, _ := meta["adk"].(map[string]any)
-		usage, _ := adk["tokenUsage"].([]any)
-		if len(usage) != 1 {
-			t.Fatalf("metadata.adk.tokenUsage = %v, want a one-entry array", adk["tokenUsage"])
-		}
-		entry, _ := usage[0].(map[string]any)
-		want := map[string]float64{
-			"inputTokens":       11,
-			"outputTokens":      22,
-			"totalTokens":       33,
-			"reasoningTokens":   7,
-			"cachedInputTokens": 5,
-		}
-		for key, wantVal := range want {
-			if entry[key] != wantVal {
-				t.Errorf("tokenUsage[0].%s = %v, want %v", key, entry[key], wantVal)
-			}
-		}
-		for _, gone := range []string{"promptTokens", "completionTokens"} {
-			if _, present := entry[gone]; present {
-				t.Errorf("tokenUsage[0] still carries the non-canonical %q", gone)
-			}
-		}
-	})
-
-	t.Run("zero counts are omitted", func(t *testing.T) {
-		// A model that reports no reasoning or cache tokens should not have
-		// zeroes invented for it.
-		evts := run(t, func(ev *session.Event) {
-			ev.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{TotalTokenCount: 33}
-		})
-		meta := eventMetadata(t, evts, events.EventTypeTextMessageContent)
-		adk, _ := meta["adk"].(map[string]any)
-		usage, _ := adk["tokenUsage"].([]any)
-		entry, _ := usage[0].(map[string]any)
-		for _, key := range []string{"reasoningTokens", "cachedInputTokens", "inputTokens", "outputTokens"} {
-			if _, present := entry[key]; present {
-				t.Errorf("tokenUsage[0].%s present as %v with a zero count", key, entry[key])
-			}
-		}
-		if entry["totalTokens"] != float64(33) {
-			t.Errorf("tokenUsage[0].totalTokens = %v, want 33", entry["totalTokens"])
-		}
-	})
-
 	t.Run("nothing is written under the reserved ag-ui key", func(t *testing.T) {
 		// types.AGUIMetadataKey is reserved for AG-UI's own use and every other
 		// key is user space, so launcher data stays out of it entirely. Writing
@@ -154,12 +94,18 @@ func TestEventMetadata(t *testing.T) {
 		}
 	})
 
-	t.Run("no usage means no tokenUsage key", func(t *testing.T) {
-		evts := run(t, func(*session.Event) {})
-		meta := eventMetadata(t, evts, events.EventTypeTextMessageContent)
-		adk, _ := meta["adk"].(map[string]any)
-		if v, present := adk["tokenUsage"]; present {
-			t.Errorf("adk.tokenUsage present as %v with no usage reported", v)
+	t.Run("usage never rides per-event metadata", func(t *testing.T) {
+		// The protocol carries usage on the terminal event only. It briefly
+		// lived under metadata.adk while the Go SDK had nowhere to put it.
+		evts := run(t, func(ev *session.Event) {
+			ev.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{TotalTokenCount: 33}
+		})
+		for _, x := range evts {
+			meta, _ := x.Raw["metadata"].(map[string]any)
+			adk, _ := meta["adk"].(map[string]any)
+			if v, present := adk["tokenUsage"]; present {
+				t.Errorf("%s carries adk.tokenUsage %v; usage belongs on the terminal event", x.Type, v)
+			}
 		}
 	})
 
