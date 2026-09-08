@@ -91,3 +91,9 @@ require (
 	rsc.io/omap v1.2.0 // indirect
 	rsc.io/ordered v1.1.1 // indirect
 )
+
+// TEMPORARY: the upstream ag-ui Go SDK has no BaseEvent.Metadata, which the
+// AG-UI launcher needs to attach namespaced event metadata. Points at the fork
+// backing ag-ui PR 2678 (branch feat/go-metadata-subagents).
+// Remove this and repin to an upstream version once that PR merges.
+replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/newtonnthiga/ag-ui/sdks/community/go v0.0.0-20260908112531-f2c4fc7628c9
