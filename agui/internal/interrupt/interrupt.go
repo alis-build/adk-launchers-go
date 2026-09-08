@@ -317,11 +317,7 @@ func ValidateResumeAgainstPending(entries []types.ResumeEntry, pending []Record,
 				return fmt.Errorf("resume[%d]: interrupt %q has expired", i, entry.InterruptID)
 			}
 			if entry.Status == types.ResumeStatusResolved {
-				payload, err := ResumePayloadMap(entry.Payload)
-				if err != nil {
-					return fmt.Errorf("resume[%d]: %w", i, err)
-				}
-				if err := ValidatePayloadAgainstSchema(payload, rec.ResponseSchema); err != nil {
+				if err := validateResolvedPayload(entry.Payload, rec); err != nil {
 					return fmt.Errorf("resume[%d]: %w", i, err)
 				}
 			} else if entry.Status != types.ResumeStatusCancelled {
@@ -340,6 +336,41 @@ func ValidateResumeAgainstPending(entries []types.ResumeEntry, pending []Record,
 
 	if len(entries) > 0 {
 		return fmt.Errorf("resume is not valid: no pending interrupts for this thread")
+	}
+	return nil
+}
+
+// validateResolvedPayload checks a resolved resume's payload against the
+// interrupt it answers.
+//
+// A tool confirmation must send a JSON object, because the launcher reads
+// payload.approved out of it to build the ADK response. An input request is
+// answered in whatever shape the node's schema described, which may be a bare
+// scalar, so only that schema constrains it. Nothing here special-cases
+// "approved": the requirement travels on the tool confirmation's own persisted
+// responseSchema, so a custom reason on an input request never inherits it.
+func validateResolvedPayload(payload any, rec Record) error {
+	if !IsInputRequest(rec) {
+		obj, err := ResumePayloadMap(payload)
+		if err != nil {
+			return err
+		}
+		return ValidatePayloadAgainstSchema(obj, rec.ResponseSchema)
+	}
+
+	if payload == nil {
+		return fmt.Errorf("resolved resume requires a payload")
+	}
+	if rec.ResponseSchema == nil {
+		return nil
+	}
+	// Checks the top-level type (and, for objects, nested property types).
+	if err := validateJSONSchemaValue(payload, rec.ResponseSchema, "payload"); err != nil {
+		return err
+	}
+	// Required fields are an object-only rule, so they are checked separately.
+	if obj, ok := payload.(map[string]any); ok {
+		return ValidatePayloadAgainstSchema(obj, rec.ResponseSchema)
 	}
 	return nil
 }
