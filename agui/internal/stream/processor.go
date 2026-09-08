@@ -361,10 +361,9 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 
 			// Function call handling. Two cases:
 			//
-			// 1. adk_request_confirmation: ADK's HITL wrapper. Convert to an
-			//    AG-UI interrupt — emit ToolCall events for the *original* tool
-			//    (the agent's proposal, per the "Tool-bound interrupts" audit
-			//    trail spec), then emit RunFinished with an interrupt outcome.
+			// 1. An interrupt-producing call (see interruptCallHandlers): ADK's
+			//    HITL primitives. Convert to an AG-UI interrupt and finalize
+			//    the run.
 			//
 			// 2. All other function calls: emit ToolCallStart -> ToolCallArgs ->
 			//    ToolCallEnd atomically. ADK provides complete args in a single
@@ -373,15 +372,8 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 				closeTextMessage(sink, state)
 				closeReasoningMessage(sink, state)
 
-				// TODO(non-tool-interrupts): When ADK exposes a native pause/HITL primitive for
-				// structured input (AG-UI reason "input_required") or free-standing confirmation
-				// (reason "confirmation"), detect it here and emit RunFinished with the appropriate
-				// Interrupt (no toolCallId for input_required; optional responseSchema from ADK).
-				// Resume mapping belongs in resume.go (new branch per reason, not adk_request_confirmation).
-				// Pending validation in interrupt_state.go may need reason-specific schema rules.
-				// See https://docs.ag-ui.com/concepts/interrupts#reason-taxonomy
-				if part.FunctionCall.Name == toolconfirmation.FunctionCallName {
-					if err := p.EmitInterrupt(sink, state, part.FunctionCall, ev.InvocationID); err != nil {
+				if handle, ok := interruptCallHandlers[part.FunctionCall.Name]; ok {
+					if err := handle(p, sink, state, part.FunctionCall, ev); err != nil {
 						return false, err
 					}
 					return true, nil
@@ -494,6 +486,30 @@ func closeReasoningMessage(sink eventSink, state *State) {
 	}
 }
 
+// interruptCallHandler emits the AG-UI interrupt for one ADK
+// interrupt-producing FunctionCall and finalizes the run.
+type interruptCallHandler func(p *Processor, sink eventSink, state *State, fc *genai.FunctionCall, ev *session.Event) error
+
+// interruptCallHandlers maps ADK's synthetic HITL FunctionCall names to the
+// handler that turns them into AG-UI interrupts. A name absent from this table
+// is an ordinary tool call.
+//
+// Membership doubles as the "is this call interrupt-producing?" predicate, which
+// is what lets ProcessEvent recognise an interrupt without knowing how to emit
+// one.
+//
+// TODO(non-tool-interrupts): register ADK's native pause primitive
+// (adk_request_input) here for AG-UI reasons "input_required" and
+// "confirmation" — no toolCallId, optional responseSchema from ADK. Resume
+// mapping dispatches on interrupt.Record.CallName, and pending validation may
+// need reason-specific schema rules.
+// See https://docs.ag-ui.com/concepts/interrupts#reason-taxonomy
+var interruptCallHandlers = map[string]interruptCallHandler{
+	toolconfirmation.FunctionCallName: func(p *Processor, sink eventSink, state *State, fc *genai.FunctionCall, ev *session.Event) error {
+		return p.EmitInterrupt(sink, state, fc, ev.InvocationID)
+	},
+}
+
 // EmitInterrupt converts an adk_request_confirmation FunctionCall into an
 // AG-UI interrupt outcome and ends the run.
 //
@@ -572,10 +588,12 @@ func (p *Processor) EmitInterrupt(sink eventSink, state *State, fc *genai.Functi
 		log.Printf("agui: emitInterrupt: extractToolConfirmation: %v", tcErr)
 	}
 
-	// interrupt.id doubles as ADK confirmation call id for resume correlation.
-	interrupt := types.Interrupt{
+	// intr.ID doubles as the ADK confirmation call id for resume correlation.
+	// Named intr, not interrupt: the latter shadows the interrupt package, whose
+	// constants and helpers are used just below.
+	intr := types.Interrupt{
 		ID:             fc.ID,
-		Reason:         "tool_call",
+		Reason:         interrupt.ReasonToolCall,
 		Message:        hintMessage,
 		ToolCallID:     originalCall.ID,
 		ResponseSchema: interrupt.ToolConfirmationResponseSchema(),
@@ -586,12 +604,12 @@ func (p *Processor) EmitInterrupt(sink eventSink, state *State, fc *genai.Functi
 	sink.Emit(events.NewRunFinishedEventWithOptions(
 		state.ThreadID,
 		state.RunID,
-		events.WithInterruptOutcome([]types.Interrupt{interrupt}),
+		events.WithInterruptOutcome([]types.Interrupt{intr}),
 	))
 	if sink.Err() != nil {
 		return sink.Err()
 	}
-	state.EmittedInterrupts = append(state.EmittedInterrupts, interrupt)
+	state.EmittedInterrupts = append(state.EmittedInterrupts, intr)
 	state.RunFinalized = true
 	return nil
 }
