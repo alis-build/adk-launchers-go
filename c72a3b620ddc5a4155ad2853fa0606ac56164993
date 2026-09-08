@@ -1,0 +1,32 @@
+Task: optout-tests + optout-impl + regression-gate (plan agui_workflow_graph_b7e4d091, phase P4)
+
+Why: FR4, plus the regression gate the PREREQUISITE golden existed for.
+
+Changes:
+- agui/internal/stream/processor.go: Processor.GraphAttributionDisabled
+  and the nodeProvenance gate method; all three attribution sites routed
+  through it.
+- agui/internal/stream/nodeinfo.go: annotateNodeProvenance and
+  recordNodeOutput now take a NodeProvenance instead of re-reading the
+  event, so the gate cannot be bypassed by calling them directly.
+- agui/agui.go: graphAttributionDisabled field, WithoutGraphAttribution.
+- agui/stream.go: wired into the Processor.
+- agui/graph_optout_test.go (new): 6 cases.
+
+Design decision: one gate method rather than a flag check at each site.
+Three surfaces (steps, outputs, interrupt metadata) have to switch
+together; checking the flag independently at each would let a later
+change add a fourth site that ignores the opt-out. Making the helpers
+take NodeProvenance rather than *session.Event enforces it structurally.
+
+Two tests guard against over-suppression, which is the likelier bug than
+under-suppression: a disabled workflow node still streams its text, and
+author-driven sub-agent steps still work.
+
+REGRESSION GATE RESULT: TestPlainAgentStreamBaseline passes
+byte-identical after all of P1-P4. Stronger evidence than the pass alone:
+git diff c635b38..HEAD on agui/graph_baseline_test.go is empty, so the
+golden was never edited to fit the implementation. That is what the plan
+meant by capturing it on unmodified code first.
+
+Verification: go fmt, go vet, CI=true go test ./... clean.
