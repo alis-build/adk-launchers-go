@@ -1,0 +1,36 @@
+Task: node-outputs + reserved-key (plan agui_workflow_graph_b7e4d091, phase P3)
+
+Why: FR3, both halves.
+
+Changes:
+- agui/internal/stream/nodeinfo.go: NodeOutputsStateKey, recordNodeOutput,
+  withNodeOutputs; OutputPaths gained an author parameter.
+- agui/internal/stream/processor.go: State.NodeOutputs; recordNodeOutput
+  called once per event before the parts loop; snapshots wrapped in
+  withNodeOutputs.
+- agui/snapshot.go: _adk reserved in isInternalStateKey.
+- agui/graph_outputs_test.go, agui/graph_reserved_key_test.go (new).
+
+Spec detail caught on a second read: FR3 says 'the key for a node with an
+empty Path is its Author'. P1's OutputPaths returned nil in that case, so
+it gained an author parameter and now matches StepName. Without that a
+pathless node would appear in the step stream but never in state.
+
+Design decisions:
+- Whole-object _adk delta rather than a per-path patch. JSON Patch 'add'
+  requires an existing parent; the client has no _adk before the first
+  node reports, so /_adk/nodeOutputs/<path> would fail on the first
+  output. Resending a small map is cheaper than tracking client parent
+  state.
+- recordNodeOutput runs before the parts loop, so a node that both
+  produces an output and raises an interrupt records the output before
+  the run finalizes.
+- Prefix match is exact or separator-terminated ('_adk', '_adk.', '_adk_')
+  so '_adkish' is not swallowed. Pinned by test.
+- Inbound/outbound asymmetry on _adk: BuildStateSnapshot strips it as
+  untrusted, withNodeOutputs adds the launcher's own. A test sends a
+  spoofed _adk in ReqState and proves it cannot reach the snapshot.
+
+Verification: recordNodeOutput, withNodeOutputs, OutputPaths and
+isInternalStateKey all 100%; plain-agent golden still byte-identical.
+go fmt, go vet, CI=true go test ./... clean.
