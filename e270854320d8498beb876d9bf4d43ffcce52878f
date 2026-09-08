@@ -1,0 +1,29 @@
+Task: docs + coverage-gate (plan agui_workflow_graph_b7e4d091, phase P4)
+
+FR5 plus the coverage gate.
+
+Gate: >80% on new code with pristine output.
+
+Result: every function this track added is at 100% statement coverage.
+
+  NodeProvenanceFrom      100%   annotateNodeProvenance  100%
+  StepName                100%   recordNodeOutput        100%
+  OutputPaths             100%   withNodeOutputs         100%
+  NodeOutputValue         100%   nodeProvenance          100%
+  modelTextOf             100%   WithoutGraphAttribution 100%
+  isInternalStateKey      100%
+
+Pristine output: gofmt -l silent, go vet ./... silent, CI=true go test
+./... -count=1 with every package ok.
+
+doc.go additions record the two things a host would otherwise have to
+learn by reading the launcher:
+- Workflow membership is the NodeInfo pointer alone, so a nil NodeInfo
+  yields exactly the pre-attribution stream. This is the contract the
+  plain-agent golden enforces.
+- Inbound _adk is stripped, not echoed. A host cannot seed or spoof node
+  outputs through session state or request state.
+
+Limitations records that a live per-node graph view
+(ACTIVITY_SNAPSHOT/ACTIVITY_DELTA) is not implemented; the spec marks
+that explicitly undecided and parks it in the backlog.
