@@ -221,6 +221,11 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 	}
 
 	if ev.Content != nil {
+		// Interrupts are collected across every part and emitted together: the
+		// AG-UI protocol allows one terminal event per run, so returning on the
+		// first one would leave any later proposal unanswerable by the client.
+		var pendingInterrupts []types.Interrupt
+
 		for _, part := range ev.Content.Parts {
 			if sink.Err() != nil {
 				return false, sink.Err()
@@ -373,10 +378,17 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 				closeReasoningMessage(sink, state)
 
 				if handle, ok := interruptCallHandlers[part.FunctionCall.Name]; ok {
-					if err := handle(p, sink, state, part.FunctionCall, ev); err != nil {
+					// Close open text/reasoning before the first proposal's
+					// tool lifecycle, matching the single-interrupt ordering.
+					if len(pendingInterrupts) == 0 {
+						finalizeLifecycle(sink, state)
+					}
+					intr, err := handle(p, sink, state, part.FunctionCall, ev)
+					if err != nil {
 						return false, err
 					}
-					return true, nil
+					pendingInterrupts = append(pendingInterrupts, intr)
+					continue
 				}
 
 				// Emit PredictState custom event before tool call when configured.
@@ -408,6 +420,13 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 				sink.Emit(events.NewToolCallResultEvent(resultMsgID, part.FunctionResponse.ID, respJSON))
 				continue
 			}
+		}
+
+		if len(pendingInterrupts) > 0 {
+			if err := p.finishWithInterrupts(sink, state, pendingInterrupts); err != nil {
+				return false, err
+			}
+			return true, nil
 		}
 	}
 
@@ -486,9 +505,13 @@ func closeReasoningMessage(sink eventSink, state *State) {
 	}
 }
 
-// interruptCallHandler emits the AG-UI interrupt for one ADK
-// interrupt-producing FunctionCall and finalizes the run.
-type interruptCallHandler func(p *Processor, sink eventSink, state *State, fc *genai.FunctionCall, ev *session.Event) error
+// interruptCallHandler emits any per-interrupt lifecycle events for one ADK
+// interrupt-producing FunctionCall and returns the AG-UI interrupt it maps to.
+//
+// Handlers deliberately do not emit the terminal event. The AG-UI protocol
+// allows exactly one RunFinished per run, so an event carrying several
+// interrupt calls has to collect them all and finalize once.
+type interruptCallHandler func(p *Processor, sink eventSink, state *State, fc *genai.FunctionCall, ev *session.Event) (types.Interrupt, error)
 
 // interruptCallHandlers maps ADK's synthetic HITL FunctionCall names to the
 // handler that turns them into AG-UI interrupts. A name absent from this table
@@ -505,32 +528,31 @@ type interruptCallHandler func(p *Processor, sink eventSink, state *State, fc *g
 // need reason-specific schema rules.
 // See https://docs.ag-ui.com/concepts/interrupts#reason-taxonomy
 var interruptCallHandlers = map[string]interruptCallHandler{
-	toolconfirmation.FunctionCallName: func(p *Processor, sink eventSink, state *State, fc *genai.FunctionCall, ev *session.Event) error {
-		return p.EmitInterrupt(sink, state, fc, ev.InvocationID)
-	},
+	toolconfirmation.FunctionCallName: buildToolCallInterrupt,
 }
 
-// EmitInterrupt converts an adk_request_confirmation FunctionCall into an
-// AG-UI interrupt outcome and ends the run.
+// buildToolCallInterrupt converts an adk_request_confirmation FunctionCall into
+// an AG-UI tool-bound interrupt.
 //
 // Flow (see https://docs.ag-ui.com/concepts/interrupts#tool-bound-interrupts):
 //  1. Emit ToolCallStart/Args/End for the original tool (agent proposal).
-//  2. Emit RunFinished with outcome.type interrupt and a single Interrupt record.
-//  3. Set interrupt.id to fc.ID so clients can resume with that id as interruptId.
+//  2. Return an Interrupt whose id is fc.ID, so clients resume with that id as
+//     interruptId.
+//
+// The terminal RunFinished is emitted by [Processor.finishWithInterrupts] once
+// every interrupt in the event has been built.
 //
 // The resumed run should not re-emit tool call lifecycle events; ADK continues
 // after the client sends a FunctionResponse via [resumeEntriesToConfirmationContent].
-func (p *Processor) EmitInterrupt(sink eventSink, state *State, fc *genai.FunctionCall, invocationID string) error {
+func buildToolCallInterrupt(p *Processor, sink eventSink, state *State, fc *genai.FunctionCall, ev *session.Event) (types.Interrupt, error) {
+	invocationID := ev.InvocationID
 	originalCall, err := toolconfirmation.OriginalCallFrom(fc)
 	if err != nil {
-		return fmt.Errorf("failed to extract original call from confirmation: %w", err)
+		return types.Interrupt{}, fmt.Errorf("failed to extract original call from confirmation: %w", err)
 	}
 
 	tc, tcErr := ExtractToolConfirmation(fc)
 	hintMessage := tc.Hint
-
-	// Close all open lifecycle events before the interrupt terminal event.
-	finalizeLifecycle(sink, state)
 
 	// Emit ToolCall events for the original tool (the agent's proposal) when not
 	// already emitted from earlier streaming events (duplicate partial FCs).
@@ -539,33 +561,7 @@ func (p *Processor) EmitInterrupt(sink eventSink, state *State, fc *genai.Functi
 		startOpts = append(startOpts, events.WithParentMessageID(state.LastTextMessageID))
 	}
 	if err := emitToolCallLifecycle(sink, state, originalCall.ID, originalCall.Name, originalCall.Args, startOpts); err != nil {
-		return err
-	}
-
-	// AG-UI spec: emit snapshots before interrupt RunFinished so clients can resume
-	// from persisted state and message history (see docs.ag-ui.com/concepts/interrupts).
-	buildSnap := p.BuildStateSnapshot
-	if buildSnap == nil && p.IsInternalStateKey != nil {
-		isInternal := p.IsInternalStateKey
-		buildSnap = func(sess session.Session, reqState map[string]any) map[string]any {
-			return BuildStateSnapshot(sess, reqState, isInternal)
-		}
-	}
-	if state.RunCtx != nil && state.UserID != "" && p.LoadSessionForSnapshot != nil {
-		if sess, ok, err := p.LoadSessionForSnapshot(state.RunCtx, state.RootAppName, state.UserID, state.ThreadID); err == nil && ok {
-			if buildSnap != nil {
-				EmitStateSnapshotIfNonEmpty(sink, buildSnap(sess, state.ReqState))
-			}
-			if p.BuildMessagesSnapshot != nil {
-				if msgs, err := p.BuildMessagesSnapshot(state.RunCtx, sess); err != nil {
-					log.Printf("agui: failed to build messages snapshot for interrupt: %v", err)
-				} else {
-					EmitMessagesSnapshotIfNonEmpty(sink, msgs)
-				}
-			}
-		} else if len(state.ReqState) > 0 && buildSnap != nil {
-			EmitStateSnapshotIfNonEmpty(sink, buildSnap(nil, state.ReqState))
-		}
+		return types.Interrupt{}, err
 	}
 
 	adkMeta := map[string]any{
@@ -599,17 +595,54 @@ func (p *Processor) EmitInterrupt(sink eventSink, state *State, fc *genai.Functi
 		ResponseSchema: interrupt.ToolConfirmationResponseSchema(),
 		Metadata:       interruptMeta,
 	}
+	return intr, nil
+}
 
-	// Build and emit RunFinished with interrupt outcome.
+// finishWithInterrupts emits the single terminal RunFinished carrying every
+// interrupt collected from an event, and marks the run finalized.
+//
+// Snapshots go out first, per the AG-UI spec, so clients can resume from
+// persisted state and message history. They are emitted once for the event
+// rather than once per interrupt: they describe the session, not the individual
+// pause. See https://docs.ag-ui.com/concepts/interrupts
+func (p *Processor) finishWithInterrupts(sink eventSink, state *State, intrs []types.Interrupt) error {
+	// Close anything still open (a text or reasoning message opened by a part
+	// after the last interrupt call) before the terminal event.
+	finalizeLifecycle(sink, state)
+
+	buildSnap := p.BuildStateSnapshot
+	if buildSnap == nil && p.IsInternalStateKey != nil {
+		isInternal := p.IsInternalStateKey
+		buildSnap = func(sess session.Session, reqState map[string]any) map[string]any {
+			return BuildStateSnapshot(sess, reqState, isInternal)
+		}
+	}
+	if state.RunCtx != nil && state.UserID != "" && p.LoadSessionForSnapshot != nil {
+		if sess, ok, err := p.LoadSessionForSnapshot(state.RunCtx, state.RootAppName, state.UserID, state.ThreadID); err == nil && ok {
+			if buildSnap != nil {
+				EmitStateSnapshotIfNonEmpty(sink, buildSnap(sess, state.ReqState))
+			}
+			if p.BuildMessagesSnapshot != nil {
+				if msgs, err := p.BuildMessagesSnapshot(state.RunCtx, sess); err != nil {
+					log.Printf("agui: failed to build messages snapshot for interrupt: %v", err)
+				} else {
+					EmitMessagesSnapshotIfNonEmpty(sink, msgs)
+				}
+			}
+		} else if len(state.ReqState) > 0 && buildSnap != nil {
+			EmitStateSnapshotIfNonEmpty(sink, buildSnap(nil, state.ReqState))
+		}
+	}
+
 	sink.Emit(events.NewRunFinishedEventWithOptions(
 		state.ThreadID,
 		state.RunID,
-		events.WithInterruptOutcome([]types.Interrupt{intr}),
+		events.WithInterruptOutcome(intrs),
 	))
 	if sink.Err() != nil {
 		return sink.Err()
 	}
-	state.EmittedInterrupts = append(state.EmittedInterrupts, intr)
+	state.EmittedInterrupts = append(state.EmittedInterrupts, intrs...)
 	state.RunFinalized = true
 	return nil
 }
