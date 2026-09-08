@@ -1,0 +1,30 @@
+Task: dispatch-refactor-impl (plan agui_hitl_interrupts_a1f3c2d8, phase P2)
+
+Why: spec FR3 and the P3 emission work both need to treat 'this call
+produces an interrupt' as a question separate from 'emit this interrupt'.
+The old code fused them in an if on toolconfirmation.FunctionCallName.
+
+Changes (agui/internal/stream/processor.go):
+- New interruptCallHandler type and interruptCallHandlers map, holding
+  the adk_request_confirmation entry.
+- ProcessEvent's FunctionCall branch now looks up the handler instead of
+  comparing names.
+- The TODO(non-tool-interrupts) comment moved from the branch to the
+  table, which is where the next call name gets registered.
+- Reason literal replaced with interrupt.ReasonToolCall.
+- Local 'interrupt' variable renamed to 'intr' to stop it shadowing the
+  package of the same name.
+
+Deliberately NOT done here:
+- No 'callName' key added to the emitted adk metadata. Adding one would
+  change the tool_call wire and break spec acceptance criterion 6.
+  Record.CallName already falls back to toolconfirmation.FunctionCallName
+  when absent, which is exactly why that fallback exists. P3 sets
+  callName only for adk_request_input.
+- The handler still returns immediately on the first interrupt. Scanning
+  all parts is the next todo (multi-interrupt), kept separate so this
+  change stays provably behaviour preserving.
+
+Verification: TestConfirmationInterruptWireBaseline passes unchanged, so
+the emitted stream is byte identical modulo timestamps. go fmt, go vet,
+CI=true go test ./... all clean.
