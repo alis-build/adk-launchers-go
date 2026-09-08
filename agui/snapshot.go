@@ -13,8 +13,21 @@ import (
 
 // isInternalStateKey reports session state keys managed by the launcher and omitted
 // from client-visible StateSnapshot payloads.
+//
+// The _adk namespace carries launcher-owned graph data (see
+// [stream.NodeOutputsStateKey]). Reserving it keeps node outputs, which travel
+// on the same state channel as host application state, from being read back as
+// host state and written into the ADK session on the next turn.
+//
+// The match is exact or followed by a separator, so a host key that merely
+// starts with the same letters, such as "_adkish", stays visible.
 func isInternalStateKey(key string) bool {
-	return key == pendingInterruptsStateKey || strings.HasPrefix(key, "_agui_")
+	if key == pendingInterruptsStateKey || strings.HasPrefix(key, "_agui_") {
+		return true
+	}
+	return key == stream.NodeOutputsStateKey ||
+		strings.HasPrefix(key, stream.NodeOutputsStateKey+".") ||
+		strings.HasPrefix(key, stream.NodeOutputsStateKey+"_")
 }
 
 // loadSessionForSnapshot loads an existing ADK session for snapshot emission.

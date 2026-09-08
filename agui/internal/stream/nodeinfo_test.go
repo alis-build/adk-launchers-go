@@ -110,7 +110,7 @@ func TestNodeProvenanceOutputPaths(t *testing.T) {
 		// recorded against each rather than each level re-emitting it.
 		prov := NodeProvenance{Path: "a/b", OutputFor: []string{"a", "a/b"}}
 		want := []string{"a", "a/b"}
-		if got := prov.OutputPaths(); !reflect.DeepEqual(got, want) {
+		if got := prov.OutputPaths("agent"); !reflect.DeepEqual(got, want) {
 			t.Errorf("OutputPaths() = %v, want %v", got, want)
 		}
 	})
@@ -118,13 +118,22 @@ func TestNodeProvenanceOutputPaths(t *testing.T) {
 	t.Run("without OutputFor the emitter owns its output", func(t *testing.T) {
 		prov := NodeProvenance{Path: "a/b"}
 		want := []string{"a/b"}
-		if got := prov.OutputPaths(); !reflect.DeepEqual(got, want) {
+		if got := prov.OutputPaths("agent"); !reflect.DeepEqual(got, want) {
 			t.Errorf("OutputPaths() = %v, want %v", got, want)
 		}
 	})
 
-	t.Run("no path and no OutputFor addresses nothing", func(t *testing.T) {
-		if got := (NodeProvenance{}).OutputPaths(); len(got) != 0 {
+	t.Run("an empty path is keyed by the node's agent name", func(t *testing.T) {
+		// Matches StepName, so a node appears under one identity in both the
+		// step stream and the output state.
+		want := []string{"reviewer"}
+		if got := (NodeProvenance{}).OutputPaths("reviewer"); !reflect.DeepEqual(got, want) {
+			t.Errorf("OutputPaths() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("nothing to name it addresses nothing", func(t *testing.T) {
+		if got := (NodeProvenance{}).OutputPaths(""); len(got) != 0 {
 			t.Errorf("OutputPaths() = %v, want empty", got)
 		}
 	})
@@ -253,6 +262,31 @@ func TestAnnotateNodeProvenance(t *testing.T) {
 		annotateNodeProvenance(&intr, &session.Event{NodeInfo: &session.NodeInfo{MessageAsOutput: true}})
 		if intr.Metadata != nil {
 			t.Errorf("Metadata = %v, want untouched", intr.Metadata)
+		}
+	})
+}
+
+func TestWithNodeOutputs(t *testing.T) {
+	t.Run("creates a snapshot when there was none", func(t *testing.T) {
+		// An interrupt in a run with no session or request state still has node
+		// outputs worth sending, so the snapshot is built rather than skipped.
+		state := &State{NodeOutputs: map[string]any{"review": "ok"}}
+		got := withNodeOutputs(nil, state)
+		adk, _ := got[NodeOutputsStateKey].(map[string]any)
+		outputs, _ := adk["nodeOutputs"].(map[string]any)
+		if outputs["review"] != "ok" {
+			t.Errorf("withNodeOutputs(nil) = %v, want the node outputs", got)
+		}
+	})
+
+	t.Run("leaves a snapshot alone when no node reported", func(t *testing.T) {
+		snapshot := map[string]any{"count": 1}
+		got := withNodeOutputs(snapshot, &State{})
+		if _, present := got[NodeOutputsStateKey]; present {
+			t.Errorf("withNodeOutputs added %q with no node outputs", NodeOutputsStateKey)
+		}
+		if got["count"] != 1 {
+			t.Errorf("withNodeOutputs disturbed host state: %v", got)
 		}
 	})
 }

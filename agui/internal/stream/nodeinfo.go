@@ -3,6 +3,7 @@ package stream
 import (
 	"strings"
 
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"google.golang.org/adk/v2/session"
 )
@@ -60,21 +61,22 @@ func (p NodeProvenance) StepName(author string) string {
 	return author
 }
 
-// OutputPaths returns the node paths this event's output should be recorded
-// against.
+// OutputPaths returns the node keys this event's output should be recorded
+// against, falling back to author the same way [NodeProvenance.StepName] does so
+// a node is named consistently in steps and in state.
 //
 // OutputFor wins when present: one event stands in for a whole delegation
 // chain, so the output belongs to every node in it rather than only the
-// emitter. A node with neither a path nor OutputFor addresses nothing, and its
-// output is dropped rather than recorded under an empty key.
-func (p NodeProvenance) OutputPaths() []string {
+// emitter. A node with nothing to name it addresses nothing, and its output is
+// dropped rather than recorded under an empty key.
+func (p NodeProvenance) OutputPaths(author string) []string {
 	if len(p.OutputFor) > 0 {
 		return p.OutputFor
 	}
-	if p.Path == "" {
-		return nil
+	if name := p.StepName(author); name != "" {
+		return []string{name}
 	}
-	return []string{p.Path}
+	return nil
 }
 
 // NodeOutputValue returns the value an event contributes as its node's output.
@@ -157,4 +159,65 @@ func annotateNodeProvenance(intr *types.Interrupt, ev *session.Event) {
 	if len(prov.Routes) > 0 {
 		adkMeta["routes"] = prov.Routes
 	}
+}
+
+// NodeOutputsStateKey is the reserved top-level state key carrying launcher-owned
+// graph data. It is namespaced so node results cannot collide with host
+// application state, and treated as internal so it never flows back into ADK
+// session state as host state on the next turn.
+const NodeOutputsStateKey = "_adk"
+
+// recordNodeOutput accumulates an event's node output and emits the state delta
+// that carries it to the client.
+//
+// The delta replaces the whole _adk object rather than patching a path inside
+// it. A JSON Patch "add" needs its parent to exist, and the client has no _adk
+// until the first node reports, so a per-path patch would fail on the very
+// first output. Node results are few and small, so resending the map is cheaper
+// than tracking whether the client has the parent yet.
+func recordNodeOutput(sink eventSink, state *State, ev *session.Event) {
+	prov, ok := NodeProvenanceFrom(ev)
+	if !ok {
+		return
+	}
+	value, ok := NodeOutputValue(ev)
+	if !ok {
+		return
+	}
+	paths := prov.OutputPaths(ev.Author)
+	if len(paths) == 0 {
+		return
+	}
+
+	if state.NodeOutputs == nil {
+		state.NodeOutputs = make(map[string]any, len(paths))
+	}
+	for _, path := range paths {
+		state.NodeOutputs[path] = value
+	}
+
+	sink.Emit(events.NewStateDeltaEvent([]events.JSONPatchOperation{{
+		Op:    "add",
+		Path:  "/" + EscapeJSONPointer(NodeOutputsStateKey),
+		Value: map[string]any{"nodeOutputs": state.NodeOutputs},
+	}}))
+}
+
+// withNodeOutputs adds the run's accumulated node outputs to a state snapshot,
+// so a client resuming from a snapshot sees what each node produced rather than
+// only the deltas it happened to be connected for.
+//
+// The snapshot builder strips the _adk key as internal, which is deliberate: an
+// _adk value arriving from session state or a client request is untrusted and
+// must not be echoed back. This adds the launcher's own accumulated map instead,
+// so inbound _adk is dropped while outbound _adk is authoritative.
+func withNodeOutputs(snapshot map[string]any, state *State) map[string]any {
+	if len(state.NodeOutputs) == 0 {
+		return snapshot
+	}
+	if snapshot == nil {
+		snapshot = make(map[string]any, 1)
+	}
+	snapshot[NodeOutputsStateKey] = map[string]any{"nodeOutputs": state.NodeOutputs}
+	return snapshot
 }

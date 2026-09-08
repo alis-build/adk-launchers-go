@@ -147,6 +147,10 @@ type State struct {
 	EmittedToolCallArgsJSON   map[string]string
 	PredictStateMappings      map[string][]PredictStateMapping
 	EmittedPredictStateTools  map[string]bool
+	// NodeOutputs accumulates workflow node results for the run, keyed by node
+	// path (or agent name for pathless nodes). Surfaced to clients under the
+	// reserved _adk state key.
+	NodeOutputs map[string]any
 }
 
 // emitToolCallLifecycle emits TOOL_CALL_START/ARGS/END for a tool proposal.
@@ -235,6 +239,8 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 		}
 		state.CurrentStepName = stepName
 	}
+
+	recordNodeOutput(sink, state, ev)
 
 	if ev.Content != nil {
 		// Interrupts are collected across every part and emitted together: the
@@ -731,7 +737,7 @@ func (p *Processor) finishWithInterrupts(sink eventSink, state *State, intrs []t
 	if state.RunCtx != nil && state.UserID != "" && p.LoadSessionForSnapshot != nil {
 		if sess, ok, err := p.LoadSessionForSnapshot(state.RunCtx, state.RootAppName, state.UserID, state.ThreadID); err == nil && ok {
 			if buildSnap != nil {
-				EmitStateSnapshotIfNonEmpty(sink, buildSnap(sess, state.ReqState))
+				EmitStateSnapshotIfNonEmpty(sink, withNodeOutputs(buildSnap(sess, state.ReqState), state))
 			}
 			if p.BuildMessagesSnapshot != nil {
 				if msgs, err := p.BuildMessagesSnapshot(state.RunCtx, sess); err != nil {
@@ -741,7 +747,7 @@ func (p *Processor) finishWithInterrupts(sink eventSink, state *State, intrs []t
 				}
 			}
 		} else if len(state.ReqState) > 0 && buildSnap != nil {
-			EmitStateSnapshotIfNonEmpty(sink, buildSnap(nil, state.ReqState))
+			EmitStateSnapshotIfNonEmpty(sink, withNodeOutputs(buildSnap(nil, state.ReqState), state))
 		}
 	}
 
