@@ -1,0 +1,48 @@
+Task: subagent events (backlog item, adopted into aguiproto_20260908 post-completion)
+
+User directed this be done without a new track, with decisions recorded
+in a closed track. The backlog entry explicitly recommended a dedicated
+track ('Adopting this is its own track, not a footnote to another one');
+raised that, then followed the instruction and scoped tightly.
+
+Changes:
+- agui/internal/stream/subagent.go (new): subagentKey, subagentRun,
+  subagentKeyFor, openSubagent, closeSubagent, stampSubagentRunID,
+  subagentSink, withSubagentAttribution.
+- agui/internal/stream/processor.go: State.CurrentSubagent; sink wrapped
+  and activation opened at the top of ProcessEvent; suspended close in
+  finishWithInterrupts.
+- agui/subagent_test.go, agui/internal/stream/subagent_stamp_test.go (new).
+- agui/stream_test.go: two lifecycle tests now filter SUBAGENT_* before
+  indexing by position.
+- agui/graph_baseline_test.go: normalizer maps subagentRunId; golden
+  regenerated.
+- agui/doc.go: Subagents section.
+- Spec addendum + backlog entry closed.
+
+TWO BUGS FOUND IN MY OWN WORK, both by the goldens:
+1. SUBAGENT_FINISHED was emitted before the outgoing sub-agent's
+   TEXT_MESSAGE_END, so its own content closed after it had finished.
+2. Worse: on a root-to-subagent handover the ROOT's TEXT_MESSAGE_END was
+   emitted after SUBAGENT_STARTED and stamped with the new run id. The
+   plain-agent golden showed subagentRunId on an event authored by the
+   root. Fixed by closing the outgoing producer's content before the
+   handover, whoever it was, and pinned by
+   TestSubagentHandoverDoesNotMisattribute.
+
+PROCESS NOTE worth remembering: the first golden regeneration was done
+while a temporary 'strip SUBAGENT_* events' proof was still active
+(gofmt had reformatted the marker across lines so the revert missed it).
+The result was a golden asserting the pre-subagent stream that passed
+only because the normalizer hid the difference — a silently broken
+golden. Caught by grepping the golden for subagent content rather than
+trusting the green run. Regenerate goldens only from a verified-clean
+normalizer, and check the regenerated content, not just the exit status.
+
+Coverage: subagentKeyFor, openSubagent, closeSubagent and
+withSubagentAttribution 100%; stampSubagentRunID 89.5%, the remainder
+being reflection guards (non-pointer, non-struct, CanSet false)
+unreachable through the Event interface and kept deliberately.
+
+Verification: gofmt -l silent, go vet ./... silent, CI=true go test ./...
+-count=1 all packages ok.
