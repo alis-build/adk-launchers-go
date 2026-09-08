@@ -79,24 +79,63 @@ func TestEventMetadata(t *testing.T) {
 		}
 	})
 
-	t.Run("token usage rides our own adk key", func(t *testing.T) {
+	t.Run("token usage rides our own adk key in the canonical shape", func(t *testing.T) {
+		// Field names and the array container match the TokenUsage type the
+		// TypeScript, Python and .NET SDKs already publish, even though the Go
+		// SDK has no such type yet and no `usage` field to put it on. When Go
+		// gains them, this moves across as-is instead of being rewritten.
 		evts := run(t, func(ev *session.Event) {
 			ev.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
-				PromptTokenCount:     11,
-				CandidatesTokenCount: 22,
-				TotalTokenCount:      33,
+				PromptTokenCount:        11,
+				CandidatesTokenCount:    22,
+				TotalTokenCount:         33,
+				ThoughtsTokenCount:      7,
+				CachedContentTokenCount: 5,
 			}
 		})
 		meta := eventMetadata(t, evts, events.EventTypeTextMessageContent)
 		adk, _ := meta["adk"].(map[string]any)
-		usage, _ := adk["tokenUsage"].(map[string]any)
-		if usage == nil {
-			t.Fatalf("metadata.adk.tokenUsage missing; got %v", meta)
+		usage, _ := adk["tokenUsage"].([]any)
+		if len(usage) != 1 {
+			t.Fatalf("metadata.adk.tokenUsage = %v, want a one-entry array", adk["tokenUsage"])
 		}
-		for key, want := range map[string]float64{"promptTokens": 11, "completionTokens": 22, "totalTokens": 33} {
-			if usage[key] != want {
-				t.Errorf("tokenUsage.%s = %v, want %v", key, usage[key], want)
+		entry, _ := usage[0].(map[string]any)
+		want := map[string]float64{
+			"inputTokens":       11,
+			"outputTokens":      22,
+			"totalTokens":       33,
+			"reasoningTokens":   7,
+			"cachedInputTokens": 5,
+		}
+		for key, wantVal := range want {
+			if entry[key] != wantVal {
+				t.Errorf("tokenUsage[0].%s = %v, want %v", key, entry[key], wantVal)
 			}
+		}
+		for _, gone := range []string{"promptTokens", "completionTokens"} {
+			if _, present := entry[gone]; present {
+				t.Errorf("tokenUsage[0] still carries the non-canonical %q", gone)
+			}
+		}
+	})
+
+	t.Run("zero counts are omitted", func(t *testing.T) {
+		// A model that reports no reasoning or cache tokens should not have
+		// zeroes invented for it.
+		evts := run(t, func(ev *session.Event) {
+			ev.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{TotalTokenCount: 33}
+		})
+		meta := eventMetadata(t, evts, events.EventTypeTextMessageContent)
+		adk, _ := meta["adk"].(map[string]any)
+		usage, _ := adk["tokenUsage"].([]any)
+		entry, _ := usage[0].(map[string]any)
+		for _, key := range []string{"reasoningTokens", "cachedInputTokens", "inputTokens", "outputTokens"} {
+			if _, present := entry[key]; present {
+				t.Errorf("tokenUsage[0].%s present as %v with a zero count", key, entry[key])
+			}
+		}
+		if entry["totalTokens"] != float64(33) {
+			t.Errorf("tokenUsage[0].totalTokens = %v, want 33", entry["totalTokens"])
 		}
 	})
 

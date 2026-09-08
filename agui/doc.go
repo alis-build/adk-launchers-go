@@ -370,6 +370,12 @@
 //
 // Every event carries metadata. metadata.adk holds invocationId and author,
 // nodePath on workflow events, and tokenUsage when the model reports it.
+//
+// tokenUsage uses the canonical TokenUsage shape the TypeScript, Python and
+// .NET SDKs publish — an array of {inputTokens, outputTokens, totalTokens,
+// reasoningTokens, cachedInputTokens}, zero counts omitted. Those SDKs carry it
+// as a `usage` field on the terminal event; the Go SDK has neither that type nor
+// that field, so it travels under metadata.adk until it does.
 // nodePath follows [WithoutGraphAttribution] along with every other attribution
 // site, so opting out keeps node topology off the wire entirely.
 //
