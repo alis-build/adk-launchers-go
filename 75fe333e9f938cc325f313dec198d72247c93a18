@@ -1,0 +1,42 @@
+Task: multi-interrupt-tests + multi-interrupt-impl (plan agui_hitl_interrupts_a1f3c2d8, phase P2)
+
+Why: spec FR3. ProcessEvent returned true on the first interrupt call,
+so only one interrupt per event ever reached the client. Any later
+proposal in the same event was unanswerable, and because the pending
+records persisted server side did include it, a resume answering only
+the interrupts the client had seen would fail validation with 'resume
+missing interruptId'.
+
+Changes:
+- agui/interrupt_multi_test.go (new): three confirmation calls in one
+  event yield exactly one RUN_FINISHED carrying three interrupts in part
+  order, each with its own tool lifecycle emitted before the terminal
+  event, and all three recorded in state.EmittedInterrupts. Plus a guard
+  that the single-interrupt case still yields exactly one.
+- agui/internal/stream/processor.go:
+  - interruptCallHandler now returns (types.Interrupt, error) instead of
+    finalizing the run itself.
+  - EmitInterrupt renamed to buildToolCallInterrupt and reduced to
+    building one interrupt plus its tool lifecycle.
+  - New Processor.finishWithInterrupts owns snapshots, the single
+    RunFinished, EmittedInterrupts and RunFinalized.
+  - ProcessEvent accumulates pendingInterrupts across parts and finalizes
+    after the parts loop.
+
+Ordering decisions:
+- finalizeLifecycle runs before the FIRST interrupt's tool lifecycle
+  (preserving single-interrupt byte order) and again in
+  finishWithInterrupts, which is idempotent, to catch anything a later
+  part opened.
+- Snapshots emit once per event, not once per interrupt. They describe
+  session state and message history, so repeating them would be
+  redundant and would change the single-interrupt wire.
+
+Behaviour change worth noting: parts after an interrupt call are no
+longer skipped, since the loop must keep scanning to find further
+interrupt calls. In practice ADK emits interrupt calls as the whole
+content, so no existing test observed the old skip.
+
+Verification: TestConfirmationInterruptWireBaseline passes unchanged
+(tool_call wire is byte identical, spec acceptance criterion 6). go fmt,
+go vet, CI=true go test ./... all clean.
