@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
@@ -196,6 +197,62 @@ func TestNodeOutputValue(t *testing.T) {
 		ev := &session.Event{NodeInfo: &session.NodeInfo{Path: "a", MessageAsOutput: true}}
 		if _, ok := NodeOutputValue(ev); ok {
 			t.Error("NodeOutputValue() ok = true, want false for empty content")
+		}
+	})
+}
+
+func TestAnnotateNodeProvenance(t *testing.T) {
+	nodeEv := func(path string, routes []string) *session.Event {
+		return &session.Event{NodeInfo: &session.NodeInfo{Path: path}, Routes: routes}
+	}
+
+	t.Run("seeds metadata.adk when a handler left none", func(t *testing.T) {
+		// Every handler today sets metadata.adk, so this covers the safety net
+		// that keeps a future one from silently dropping attribution.
+		intr := types.Interrupt{ID: "i-1"}
+		annotateNodeProvenance(&intr, nodeEv("review", []string{"publish"}))
+
+		adkMeta, ok := intr.Metadata["adk"].(map[string]any)
+		if !ok {
+			t.Fatal("metadata.adk was not created")
+		}
+		if adkMeta["nodePath"] != "review" {
+			t.Errorf("nodePath = %v, want review", adkMeta["nodePath"])
+		}
+	})
+
+	t.Run("merges into existing metadata without disturbing it", func(t *testing.T) {
+		intr := types.Interrupt{
+			ID:       "i-1",
+			Metadata: map[string]any{"adk": map[string]any{"invocationId": "inv-1"}},
+		}
+		annotateNodeProvenance(&intr, nodeEv("review", nil))
+
+		adkMeta, _ := intr.Metadata["adk"].(map[string]any)
+		if adkMeta["invocationId"] != "inv-1" {
+			t.Errorf("invocationId = %v, want it preserved", adkMeta["invocationId"])
+		}
+		if adkMeta["nodePath"] != "review" {
+			t.Errorf("nodePath = %v, want review", adkMeta["nodePath"])
+		}
+		if _, present := adkMeta["routes"]; present {
+			t.Error("routes present with none on the event, want omitted")
+		}
+	})
+
+	t.Run("a non-workflow event adds nothing", func(t *testing.T) {
+		intr := types.Interrupt{ID: "i-1"}
+		annotateNodeProvenance(&intr, &session.Event{Routes: []string{"publish"}})
+		if intr.Metadata != nil {
+			t.Errorf("Metadata = %v, want untouched", intr.Metadata)
+		}
+	})
+
+	t.Run("a node with nothing to say adds nothing", func(t *testing.T) {
+		intr := types.Interrupt{ID: "i-1"}
+		annotateNodeProvenance(&intr, &session.Event{NodeInfo: &session.NodeInfo{MessageAsOutput: true}})
+		if intr.Metadata != nil {
+			t.Errorf("Metadata = %v, want untouched", intr.Metadata)
 		}
 	})
 }

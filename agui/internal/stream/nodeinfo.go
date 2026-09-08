@@ -3,6 +3,7 @@ package stream
 import (
 	"strings"
 
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"google.golang.org/adk/v2/session"
 )
 
@@ -114,4 +115,46 @@ func modelTextOf(ev *session.Event) string {
 		b.WriteString(part.Text)
 	}
 	return b.String()
+}
+
+// annotateNodeProvenance adds workflow graph attribution to an interrupt raised
+// inside a node: which node paused, and where the scheduler would have gone.
+//
+// This is applied at the collection site rather than inside each handler, so
+// every interrupt reason gets attribution without each handler remembering to
+// add it.
+//
+// Interrupt metadata is the only per-event channel the pinned Go SDK offers:
+// types.Interrupt.Metadata exists while event-level metadata does not, which is
+// why every other event in this track carries provenance in its step name
+// instead.
+//
+// Empty values are omitted rather than written as blanks, so a client can tell
+// "no routes" from "routes unknown".
+func annotateNodeProvenance(intr *types.Interrupt, ev *session.Event) {
+	prov, ok := NodeProvenanceFrom(ev)
+	if !ok {
+		return
+	}
+	if prov.Path == "" && len(prov.Routes) == 0 {
+		return
+	}
+
+	adkMeta, ok := intr.Metadata["adk"].(map[string]any)
+	if !ok {
+		// Every handler today seeds metadata.adk; this keeps a future one that
+		// forgets from silently losing attribution.
+		adkMeta = map[string]any{}
+		if intr.Metadata == nil {
+			intr.Metadata = map[string]any{}
+		}
+		intr.Metadata["adk"] = adkMeta
+	}
+
+	if prov.Path != "" {
+		adkMeta["nodePath"] = prov.Path
+	}
+	if len(prov.Routes) > 0 {
+		adkMeta["routes"] = prov.Routes
+	}
 }

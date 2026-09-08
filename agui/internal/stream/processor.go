@@ -403,6 +403,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 					if err != nil {
 						return false, err
 					}
+					annotateNodeProvenance(&intr, ev)
 					pendingInterrupts = append(pendingInterrupts, intr)
 					continue
 				}
