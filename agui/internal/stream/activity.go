@@ -22,11 +22,40 @@ type activityKey struct {
 // RecordActivitySnapshot remembers the content last sent for an activity
 // surface, so the next update for the same surface can be expressed as a patch
 // against it.
+//
+// The content is deep-copied because a converter that keeps one running
+// activity object and emits snapshots of it hands back the same map every
+// time. Storing that by reference would leave the recorded "previous" snapshot
+// aliasing the live one, so the next patch computation would diff a map
+// against itself, produce no operations, and silently freeze the client's
+// activity block at its first value.
 func (s *State) RecordActivitySnapshot(messageID, activityType string, content any) {
 	if s.ActivitySnapshots == nil {
 		s.ActivitySnapshots = make(map[activityKey]any, 1)
 	}
-	s.ActivitySnapshots[activityKey{messageID, activityType}] = content
+	s.ActivitySnapshots[activityKey{messageID, activityType}] = copyActivityContent(content)
+}
+
+// copyActivityContent deep-copies the JSON-shaped value an activity snapshot
+// carries. Maps and slices are rebuilt; everything else is a scalar the patch
+// computation only ever compares, never mutates.
+func copyActivityContent(content any) any {
+	switch v := content.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, val := range v {
+			out[key] = copyActivityContent(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, val := range v {
+			out[i] = copyActivityContent(val)
+		}
+		return out
+	default:
+		return content
+	}
 }
 
 // LastActivitySnapshot returns the content last sent for an activity surface.
@@ -161,9 +190,17 @@ func emitActivityUpdate(sink eventSink, state *State, snap *events.ActivitySnaps
 // string, so it is base64-encoded. The value is opaque to both: the launcher
 // neither reads nor validates it.
 //
-// Emitted after the reasoning content so it sits inside the REASONING_START /
-// REASONING_END bracket. ADK partials carry accumulated state, so the same blob
-// can arrive on several events for one message and is sent only when it changes.
+// Called for every part, not only thought parts. ADK attaches the signature to
+// whichever part ends the reasoning turn, and its stream aggregator strips it
+// from flushed thought text and re-attaches it to the following function call
+// (stream_aggregator.go). Keying emission off thought parts alone therefore
+// loses the blob on exactly the tool-calling turns it exists to make resumable.
+//
+// The blob belongs inside the REASONING_START / REASONING_END bracket, so a
+// bracket is opened when the carrying part did not open one itself. Callers
+// emit before closing the bracket for the same reason. ADK partials carry
+// accumulated state, so the same blob can arrive on several events for one
+// message and is sent only when it changes.
 func emitEncryptedReasoning(sink eventSink, state *State, part *genai.Part) {
 	if len(part.ThoughtSignature) == 0 {
 		return
@@ -173,6 +210,7 @@ func emitEncryptedReasoning(sink eventSink, state *State, part *genai.Part) {
 		return
 	}
 	state.EmittedThoughtSignature = encoded
+	openReasoningMessage(sink, state)
 	sink.Emit(events.NewReasoningEncryptedValueEvent(
 		events.ReasoningEncryptedValueSubtypeMessage,
 		state.CurrentReasoningMessageID,

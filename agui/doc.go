@@ -356,17 +356,27 @@
 // Opaque reasoning blobs survive the round trip. ADK exposes them as
 // genai.Part.ThoughtSignature; the launcher base64-encodes the bytes, emits
 // REASONING_ENCRYPTED_VALUE inside the REASONING_START/REASONING_END bracket,
-// and puts the same value on the reconstructed assistant message in
-// MESSAGES_SNAPSHOT. The assistant message is the turn a client sends back,
-// which is what preserves the model's reasoning continuity. The value stays
-// opaque: the launcher neither reads nor validates it.
+// and puts the same value on the reconstructed message in MESSAGES_SNAPSHOT.
+// That message is the turn a client sends back, which is what preserves the
+// model's reasoning continuity.
+//
+// The signature is read from whichever part carries it, not only thought parts.
+// ADK re-attaches it to the function call that ends a reasoning turn, so on a
+// reasoning-then-tool turn the tool-call message is the carrier; text and
+// reasoning messages take it only when there is no tool call. A blob arriving
+// on a part that opened no reasoning message opens one, so it is never emitted
+// outside the bracket. The value stays opaque: the launcher neither reads nor
+// validates it.
 //
 // Every event carries metadata. metadata.adk holds invocationId and author,
 // plus nodePath on workflow events; metadata["ag-ui"].tokenUsage holds token
-// counts when the model reports them. Only the "ag-ui" key is protocol space,
-// so everything ADK-specific stays under "adk". An event with nothing to report
-// carries no metadata at all rather than an empty object, and metadata a part
-// converter set itself is never overwritten.
+// counts when the model reports them. nodePath follows [WithoutGraphAttribution]
+// along with every other attribution site, so opting out keeps node topology off
+// the wire entirely. Only the "ag-ui" key is protocol space, so everything
+// ADK-specific stays under "adk". An event with nothing to report carries no
+// metadata at all rather than an empty object, metadata a part converter set
+// itself is never overwritten, and each event gets its own copy of the block so
+// a consumer editing one cannot reach its siblings.
 //
 // # Workflow graphs
 //
@@ -419,6 +429,9 @@
 //
 // At run start and before interrupt RunFinished, the launcher emits StateSnapshot
 // (and MessagesSnapshot at interrupt boundaries) so clients have baseline context.
+// A resume run emits no baseline StateSnapshot: the interrupt snapshot that paused
+// the run already published the full picture, including the _adk node outputs,
+// which live on the per-run state and cannot be rebuilt on the resuming run.
 // Successful runs emit RunFinished with outcome.type "success".
 //
 // # CORS
@@ -536,11 +549,12 @@
 // validation uses a minimal JSON Schema subset, not a full validator. Pending
 // interrupt persist/clear failures after the terminal event are logged
 // server-side (not re-emitted as RunError, which would violate the
-// single-terminal-event protocol rule). Use
-// Workflow graph attribution reads ADK NodeInfo, Routes and Output; a live
-// per-node graph view (ACTIVITY_SNAPSHOT/ACTIVITY_DELTA) is not implemented.
-// [WithCapabilities] or [DefaultInterruptCapabilities] to advertise
-// humanInTheLoop.interrupts, approveWithEdits and interruptReasons, plus
-// output.activityDeltas and output.encryptedReasoning. Client-side tools require
-// agent opt-in via [clienttool.NewToolset]; see the Client-side tools section.
+// single-terminal-event protocol rule). Use [WithCapabilities] or
+// [DefaultInterruptCapabilities] to advertise humanInTheLoop.interrupts,
+// approveWithEdits and interruptReasons, plus output.activityDeltas and
+// output.encryptedReasoning. Workflow graph attribution reads ADK NodeInfo,
+// Routes and Output; a live per-node graph view
+// (ACTIVITY_SNAPSHOT/ACTIVITY_DELTA) is not implemented. Client-side tools
+// require agent opt-in via [clienttool.NewToolset]; see the Client-side tools
+// section.
 package agui

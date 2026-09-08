@@ -368,12 +368,20 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 		// creates the ADK session if needed so snapshot emission matches AutoCreateSession timing.
 		// Client state is untrusted: strip launcher-owned keys before they can
 		// become agent-visible session state on a thread's first request.
-		snapSess, snapErr := l.ensureSessionForSnapshot(ctx, appName, userID, sessionID, withoutInternalKeys(reqState))
-		if snapErr != nil {
-			emitError(fmt.Errorf("failed to prepare session for state snapshot: %w", snapErr))
-			return
+		//
+		// A resume run is skipped. The interrupt snapshot that paused the run
+		// already published the full picture, including the _adk node outputs.
+		// Those live on the per-run stream.State and are not persisted, so a
+		// fresh baseline here could only replace the client's state with a
+		// strictly poorer copy and erase every pre-interrupt node result.
+		if !execCtx.IsResume() {
+			snapSess, snapErr := l.ensureSessionForSnapshot(ctx, appName, userID, sessionID, withoutInternalKeys(reqState))
+			if snapErr != nil {
+				emitError(fmt.Errorf("failed to prepare session for state snapshot: %w", snapErr))
+				return
+			}
+			emitStateSnapshotIfNonEmpty(sink, buildStateSnapshot(snapSess, reqState))
 		}
-		emitStateSnapshotIfNonEmpty(sink, buildStateSnapshot(snapSess, reqState))
 
 		// ADK expects exactly one genai.Content per run, representing the user's turn. The
 		// content shape depends on how the client continued the thread:
@@ -444,8 +452,13 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 			Streaming:                 true,
 			SaveInputBlobsAsArtifacts: false,
 		}
-		if len(reqState) > 0 {
-			runReq.StateDelta = reqState
+		// The same strip that guards session creation applies to the per-turn
+		// delta, or a client could plant launcher-owned keys on every turn after
+		// the first: snapshots publish _adk to clients, so echoing it back is
+		// the normal case, and _agui_pending_interrupts arriving this way would
+		// overwrite the record resume validation checks against.
+		if safeState := withoutInternalKeys(reqState); len(safeState) > 0 {
+			runReq.StateDelta = safeState
 		}
 		if len(req.Tools) > 0 {
 			if runReq.StateDelta == nil {

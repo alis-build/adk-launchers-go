@@ -129,6 +129,16 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 	var thoughtBuf string
 	// encryptedValue is the model's opaque reasoning blob for this event, if any.
 	var encryptedValue string
+	// takeEncryptedValue hands the blob to the first message able to carry it
+	// and clears it, so it lands on exactly one. The flush order below offers
+	// it to tool calls before text: on a reasoning-then-tool turn the tool-call
+	// message is the one the client sends back, and the model needs the blob on
+	// that message to keep reasoning continuity across the call.
+	takeEncryptedValue := func() string {
+		blob := encryptedValue
+		encryptedValue = ""
+		return blob
+	}
 	// partIndex counts messages produced so far from this event, used to
 	// generate stable IDs: first message reuses the event ID, subsequent
 	// ones get "{eventID}-{partIndex}" suffixes.
@@ -221,10 +231,11 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 	// visible response but is rendered separately in the UI.
 	if len(toolCalls) > 0 {
 		messages = append(messages, types.Message{
-			ID:        messageID(ev.ID, partIndex),
-			Role:      role,
-			ToolCalls: toolCalls,
-			Name:      senderName,
+			ID:             messageID(ev.ID, partIndex),
+			Role:           role,
+			ToolCalls:      toolCalls,
+			Name:           senderName,
+			EncryptedValue: takeEncryptedValue(),
 		})
 		partIndex++
 	}
@@ -235,17 +246,19 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 			Role:           role,
 			Content:        textBuf,
 			Name:           senderName,
-			EncryptedValue: encryptedValue,
+			EncryptedValue: takeEncryptedValue(),
 		})
 		partIndex++
-		encryptedValue = ""
 	}
 
+	// A thought-only event produces no assistant message, so the reasoning
+	// message is the last carrier left; without this the blob is dropped.
 	if thoughtBuf != "" {
 		messages = append(messages, types.Message{
-			ID:      messageID(ev.ID, partIndex),
-			Role:    types.RoleReasoning,
-			Content: thoughtBuf,
+			ID:             messageID(ev.ID, partIndex),
+			Role:           types.RoleReasoning,
+			Content:        thoughtBuf,
+			EncryptedValue: takeEncryptedValue(),
 		})
 		partIndex++
 	}

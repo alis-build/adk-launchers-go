@@ -132,13 +132,17 @@ func WithCORS(cors CORSConfig) Option {
 // WithCapabilities declares the agent's capabilities so clients can discover
 // supported features via GET /capabilities and adapt their UI accordingly.
 //
-// It calls [MergeInterruptCapabilities] on the provided value so interrupt
-// resume support is advertised by default (see that function for rationale).
-// Pass humanInTheLoop.interrupts or approveWithEdits as false to opt out.
+// It calls [MergeInterruptCapabilities], [MergeClientToolCapabilities] and
+// [MergeProtocolCapabilities] on the provided value so everything the launcher
+// implements is advertised by default (see those functions for rationale). This
+// is the only place capabilities are set, so a feature left out here is
+// undiscoverable no matter how the host configures the launcher. Pass any of
+// the merged fields as false to opt out.
 func WithCapabilities(caps Capabilities) Option {
 	return func(c *AGUIConfig) {
 		MergeInterruptCapabilities(&caps)
 		MergeClientToolCapabilities(&caps)
+		MergeProtocolCapabilities(&caps)
 		c.capabilities = &caps
 	}
 }

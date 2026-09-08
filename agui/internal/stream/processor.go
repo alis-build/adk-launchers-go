@@ -226,7 +226,13 @@ func emitToolCallLifecycle(sink eventSink, state *State, toolCallID, toolCallNam
 func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State, partConverter PartConverter) (bool, error) {
 	// Everything emitted for this ADK event carries its metadata. Stamping at
 	// the sink rather than at each emit site is what makes "every event" hold.
-	sink = withEventMetadata(sink, ev)
+	// The node path is resolved here so it passes through the opt-out with
+	// every other attribution site.
+	var metaNodePath string
+	if prov, ok := p.nodeProvenance(ev); ok {
+		metaNodePath = prov.Path
+	}
+	sink = withEventMetadata(sink, ev, metaNodePath)
 
 	// Emit step events when the active producer changes.
 	//
@@ -323,6 +329,9 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 						state.StreamedReasoning = ""
 					}
 					if len(text) <= len(state.StreamedReasoning) {
+						// No new text, but the part may still carry a fresh
+						// blob; dropping it here would lose it silently.
+						emitEncryptedReasoning(sink, state, part)
 						continue
 					}
 					text = text[len(state.StreamedReasoning):]
@@ -331,6 +340,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 					switch {
 					case text == streamed:
 						// Trailing final repeating the streamed thought exactly.
+						emitEncryptedReasoning(sink, state, part)
 						continue
 					case state.CurrentReasoningMessageID != "" && strings.HasPrefix(text, streamed):
 						// Mid-message final extending the stream: emit the tail.
@@ -346,14 +356,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 
 				closeTextMessage(sink, state)
 
-				if state.CurrentReasoningPhaseID == "" {
-					state.CurrentReasoningPhaseID = events.GenerateMessageID()
-					sink.Emit(events.NewReasoningStartEvent(state.CurrentReasoningPhaseID))
-				}
-				if state.CurrentReasoningMessageID == "" {
-					state.CurrentReasoningMessageID = events.GenerateMessageID()
-					sink.Emit(events.NewReasoningMessageStartEvent(state.CurrentReasoningMessageID, "reasoning"))
-				}
+				openReasoningMessage(sink, state)
 				sink.Emit(events.NewReasoningMessageContentEvent(state.CurrentReasoningMessageID, text))
 				emitEncryptedReasoning(sink, state, part)
 				continue
@@ -361,6 +364,10 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 
 			// Text parts (non-thought): map to TEXT_MESSAGE_* event lifecycle.
 			if part.Text != "" && !part.Thought {
+				// A non-streaming response can attach the signature to the
+				// answer text rather than a thought, so drain it before the
+				// bracket closes below.
+				emitEncryptedReasoning(sink, state, part)
 				// Close any open reasoning message before emitting text.
 				closeReasoningMessage(sink, state)
 
@@ -425,6 +432,11 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 			//    FunctionCall (not streamed incrementally).
 			if part.FunctionCall != nil {
 				closeTextMessage(sink, state)
+				// ADK re-attaches the turn's thought signature to the function
+				// call (stream_aggregator.go strips it from the flushed thought
+				// text), so this is the routine carrier on a reasoning-then-tool
+				// turn. Emit before the bracket closes, not after.
+				emitEncryptedReasoning(sink, state, part)
 				closeReasoningMessage(sink, state)
 
 				if handle, ok := interruptCallHandlers[part.FunctionCall.Name]; ok {
@@ -555,6 +567,21 @@ func closeReasoningMessage(sink eventSink, state *State) {
 	if state.CurrentReasoningPhaseID != "" {
 		sink.Emit(events.NewReasoningEndEvent(state.CurrentReasoningPhaseID))
 		state.CurrentReasoningPhaseID = ""
+	}
+}
+
+// openReasoningMessage opens the reasoning phase and message brackets if they
+// are not already open, so a caller with reasoning content or an encrypted
+// blob can emit into them unconditionally. Re-entrant: already-open brackets
+// are left alone, since the phase and message ids are what the client keys on.
+func openReasoningMessage(sink eventSink, state *State) {
+	if state.CurrentReasoningPhaseID == "" {
+		state.CurrentReasoningPhaseID = events.GenerateMessageID()
+		sink.Emit(events.NewReasoningStartEvent(state.CurrentReasoningPhaseID))
+	}
+	if state.CurrentReasoningMessageID == "" {
+		state.CurrentReasoningMessageID = events.GenerateMessageID()
+		sink.Emit(events.NewReasoningMessageStartEvent(state.CurrentReasoningMessageID, "reasoning"))
 	}
 }
 
