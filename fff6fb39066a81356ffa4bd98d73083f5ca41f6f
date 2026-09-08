@@ -1,0 +1,41 @@
+Task: emit-input-required-tests + emit-input-required-impl (plan agui_hitl_interrupts_a1f3c2d8, phase P3)
+
+Why: spec FR1. This is the payload of the track — ADK v2.3.0 emits a
+workflow input request as a synthetic adk_request_input FunctionCall plus
+a typed session.Event.RequestedInput, and the launcher was treating it as
+an ordinary tool call.
+
+Changes:
+- agui/internal/stream/processor.go: buildInputRequestInterrupt,
+  inputRequestFrom, schemaFromArg; adk_request_input registered in
+  interruptCallHandlers; Processor.InterruptReasonClassifier field; the
+  TODO(non-tool-interrupts) comment deleted.
+- agui/stream.go: classifier wired from AGUIConfig into the Processor.
+- agui/interrupt_input_test.go (new): 9 tests covering the full interrupt
+  shape, boolean schema to confirmation, omitted schema, args fallback,
+  typed field winning over args, host classifier override, the three
+  schema arg forms plus two rejected ones, and a bare call with nil args.
+
+Design notes:
+- metadata.adk.callName is set here but deliberately NOT on tool
+  confirmations, whose wire must stay byte identical (acceptance
+  criterion 6). interrupt.Record.CallName already defaults to
+  toolconfirmation.FunctionCallName when absent.
+- schemaFromArg re-types a decoded schema map back into
+  *jsonschema.Schema instead of using the map directly. Costs a marshal
+  round trip, buys a consistent contract for the host classifier, which
+  receives session.RequestInput and would otherwise see a nil schema on
+  the round-tripped path.
+- ToolCallID left empty and no tool lifecycle emitted; verified by test
+  rather than left implicit.
+
+Findings worth carrying forward:
+- Coverage for this code needs -coverpkg=./agui/... because the tests
+  live in the parent agui package while the code is in internal/stream.
+  A plain per-package run reports 0%.
+- jsonschema.Schema rejects {"type": 5} at unmarshal with 'invalid value
+  for type', which is what exercises the malformed-schema path.
+
+Verification: all pre-existing tests including the tool_call wire
+baseline pass unchanged. buildInputRequestInterrupt, inputRequestFrom and
+schemaFromArg all at 100%. go fmt, go vet, CI=true go test ./... clean.
