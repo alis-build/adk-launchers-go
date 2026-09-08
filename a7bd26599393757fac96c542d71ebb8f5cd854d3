@@ -1,0 +1,35 @@
+Task: nodeinfo-read-tests + nodeinfo-read-impl (plan agui_workflow_graph_b7e4d091, phase P1)
+
+Why: FR1, FR2 and FR3 all need the same fields off session.Event. Reading
+them once keeps the graph contract in a single testable place.
+
+Changes:
+- agui/internal/stream/nodeinfo.go (new): NodeProvenance type,
+  NodeProvenanceFrom, StepName, OutputPaths, NodeOutputValue, modelTextOf.
+- agui/internal/stream/nodeinfo_test.go (new): 15 cases.
+
+PLAN DEVIATION (recorded in the plan body): the file map assigned this to
+agui/convert.go. Not buildable — convert.go is package agui, agui imports
+agui/internal/stream, so processor.go cannot import convert.go without a
+cycle. Verified the import direction before deviating. Extraction lives
+next to its consumers instead; agui can still reach it via the existing
+stream. alias bridge if history conversion ever needs it.
+
+ADK findings that shaped the code:
+- session.Event.UnmarshalJSON nils an all-zero NodeInfo, but ONLY on the
+  JSON path, and only because adk-python always writes a nodeInfo object.
+  In-process events can therefore carry a non-nil NodeInfo with an empty
+  Path, which is exactly the case FR1's author fallback covers. Had the
+  normalisation been unconditional, that fallback would be dead code.
+- Routes live on Event, not NodeInfo, so a non-workflow event can have
+  Routes. Membership is decided by the NodeInfo pointer alone.
+
+Design decisions:
+- OutputPaths returns nil for a pathless node with no OutputFor rather
+  than [""], so P3 cannot write _adk.nodeOutputs. with an empty key.
+- modelTextOf skips Thought parts. Reasoning is not a node result, and
+  including it would put chain-of-thought into client-visible state.
+
+Verification: all new functions 100%; the plain-agent golden from c635b38
+still passes (nothing wired up yet, as expected). go fmt, go vet,
+CI=true go test ./... clean.
