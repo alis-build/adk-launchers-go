@@ -1,6 +1,7 @@
 package agui
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -170,5 +171,71 @@ func TestProcessEvent_SingleInterruptUnchanged(t *testing.T) {
 	}
 	if outcome.Interrupts[0].ID != "confirm-1" {
 		t.Errorf("interrupt.ID = %q, want confirm-1", outcome.Interrupts[0].ID)
+	}
+}
+
+// TestProcessEvent_MultipleInterrupts_SnapshotsEmittedOnce pins the decision
+// that snapshots describe the event, not each pause.
+//
+// Snapshots moved out of the per-interrupt path when interrupt collection
+// landed. Emitting them once per interrupt would repeat identical STATE_SNAPSHOT
+// and MESSAGES_SNAPSHOT payloads for every proposal in the turn, which a client
+// would apply redundantly.
+func TestProcessEvent_MultipleInterrupts_SnapshotsEmittedOnce(t *testing.T) {
+	svc := session.InMemoryService()
+	ctx := context.Background()
+	createResp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName:   "test-app",
+		UserID:    "user-1",
+		SessionID: "t1",
+		State:     map[string]any{"count": 1},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	seed := session.NewEvent(t.Context(), "inv0")
+	seed.Content = genai.NewContentFromText("Hello", genai.RoleUser)
+	if err := svc.AppendEvent(ctx, createResp.Session, seed); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	l := newTestLauncher("test-app", svc)
+	e, rec := newTestEmitter()
+	state := &streamState{
+		RunID: "r1", ThreadID: "t1", UserID: "user-1", RunCtx: ctx,
+		RootAppName: "test-app",
+		ReqState:    map[string]any{"ui": "panel"},
+	}
+
+	ev := session.NewEvent(t.Context(), "inv1")
+	ev.InvocationID = "inv-multi-snap"
+	ev.Content = &genai.Content{
+		Role: string(genai.RoleModel),
+		Parts: []*genai.Part{
+			confirmationPart("confirm-1", "Send the email?", "orig-1", "send_email"),
+			confirmationPart("confirm-2", "Charge the card?", "orig-2", "charge_card"),
+			confirmationPart("confirm-3", "Delete the file?", "orig-3", "delete_file"),
+		},
+	}
+
+	done, err := l.processEvent(e, ev, state, nil)
+	if err != nil || !done {
+		t.Fatalf("processEvent() done=%v err=%v", done, err)
+	}
+
+	var stateSnaps, msgSnaps int
+	for _, x := range parseSSEEvents(rec.Body.String()) {
+		switch x.Type {
+		case events.EventTypeStateSnapshot:
+			stateSnaps++
+		case events.EventTypeMessagesSnapshot:
+			msgSnaps++
+		}
+	}
+	if stateSnaps != 1 {
+		t.Errorf("got %d STATE_SNAPSHOT events for 3 interrupts, want 1", stateSnaps)
+	}
+	if msgSnaps != 1 {
+		t.Errorf("got %d MESSAGES_SNAPSHOT events for 3 interrupts, want 1", msgSnaps)
 	}
 }
