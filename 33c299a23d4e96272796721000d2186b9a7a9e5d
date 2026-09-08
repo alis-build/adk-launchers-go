@@ -1,0 +1,45 @@
+Task: coverage-gate (plan agui_hitl_interrupts_a1f3c2d8, phase P5)
+
+Gate: >80% on new code with pristine output.
+
+Result: every function this track ADDED is at 100% statement coverage.
+
+  SchemaToMap                   100%
+  ClassifyReason                100%
+  ReasonForSchema               100%
+  isBooleanShaped               100%
+  buildInputRequestInterrupt    100%
+  inputRequestFrom              100%
+  schemaFromArg                 100%
+  EntriesToResumeContent        100%
+  inputResponseFromResumeEntry  100%
+  validateResolvedPayload       100%
+  SupportedInterruptReasons     100%
+  MergeInterruptCapabilities    100%
+  WithInterruptReasonClassifier 100%
+
+Below 100%, all pre-existing code the track touched rather than wrote:
+  finishWithInterrupts  76.0%  (snapshot block moved verbatim out of the
+                                old EmitInterrupt)
+  ProcessEvent          91.8%  (large pre-existing function)
+  buildToolCallInterrupt 90.9% (renamed from EmitInterrupt, body intact)
+  ValidateResumeAgainstPending 88.6% (only its resolved-payload block
+                                changed, and that is now 100% via
+                                validateResolvedPayload)
+
+finishWithInterrupts' uncovered branches are the BuildStateSnapshot-nil
+fallback, the messages-snapshot build error, the reqState-only path and
+the sink-error return. All four predate this track and none are reachable
+through the launcher's own Processor construction, which always sets
+BuildStateSnapshot.
+
+Added rather than padding those: a test that three interrupts in one
+event emit exactly one STATE_SNAPSHOT and one MESSAGES_SNAPSHOT. That
+pins a decision this track actually made (snapshots describe the event,
+not each pause) instead of exercising relocated branches.
+
+Whole-tree agui coverage is 65.9%, unchanged in character from before the
+track; the interrupt package rose 71.8% -> 84.5%.
+
+Pristine output confirmed: gofmt -l silent, go vet ./... silent,
+CI=true go test ./... all packages ok.
