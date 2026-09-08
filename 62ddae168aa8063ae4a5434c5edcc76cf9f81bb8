@@ -1,0 +1,38 @@
+Task: dispatch-refactor-tests (plan agui_hitl_interrupts_a1f3c2d8, phase P2)
+
+Why: P2 restructures the FunctionCall branch in processor.go into a
+dispatch table keyed by call name. That is meant to be behaviour
+preserving, but the existing tests assert fields one at a time and would
+pass through a reordered or thinned stream. The baseline makes 'no
+behaviour change' a checkable claim.
+
+Changes:
+- agui/interrupt_baseline_test.go (new): canonicalStream helper plus
+  TestConfirmationInterruptWireBaseline with two subtests.
+
+Method: render the SSE body to indented canonical JSON, drop only
+'timestamp' (wall clock), compare the rest verbatim against an inline
+golden. Inline rather than a testdata file because the repo has no
+golden/-update harness and the diff is readable in the failure output.
+
+Cases:
+- hint plus original call args: covers the hitl.summary block and the
+  args passthrough.
+- typed ToolConfirmation with payload and no hint: covers
+  confirmationPayload and the absence of the hitl block.
+
+Mutation check: deleted confirmationCallName from adkMeta in
+processor.go, confirmed the baseline failed, reverted. The pre-existing
+field assertions in stream_test.go do not check that key and did not
+catch it, which is the gap this test closes.
+
+Findings worth carrying forward:
+- A tool call with nil Args emits TOOL_CALL_ARGS delta "null", not
+  "{}". Clients calling JSON.parse get null rather than an empty
+  object. Pinned as current behaviour, not fixed: the P2 refactor must
+  not change the wire, and changing it is a separate protocol decision.
+- Only 'timestamp' is volatile in these streams; everything else is
+  deterministic, so a full-stream golden is viable for the P3 and P4
+  emission and resume work too.
+
+Verification: go fmt, go vet, CI=true go test ./... all clean.
