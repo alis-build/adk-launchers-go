@@ -1,0 +1,38 @@
+Task: baseline-golden (plan agui_protocol_catchup_c9a2f5e3, phase P1)
+
+Why: marked PREREQUISITE. Six of this track's claims reduce to 'additive
+only'; without a captured stream from before the change those assertions
+compare against whatever the code happens to emit.
+
+Changes:
+- agui/proto_baseline_test.go (new): protoBaselineRun and
+  TestProtoFeatureFreeStreamBaseline, reusing stableStream from the
+  aguigraph baseline.
+
+SPEC IMPRECISION worth recording before P1 builds on it. FR1 opens 'The
+launcher emits ACTIVITY_SNAPSHOT only, so a client re-renders the whole
+activity block on every update.' The launcher emits no activity events at
+all: grepping the tree, ActivitySnapshotEvent appears only in convert.go,
+which maps a snapshot INTO a history message, and in its test.
+
+The only path an activity event can reach the stream is a host's
+GenAIPartConverter returning one, relayed verbatim at processor.go:288.
+So FR1 is still buildable and the requirement is unchanged (consecutive
+snapshots for one (messageID, activityType) pair become deltas), but the
+interception point is the converter relay, not a launcher-owned emitter.
+Confirmed by driving a converter that returns two snapshots for the same
+surface: both go out in full, re-sending an unchanged 'shared' field,
+which is exactly the waste FR1 removes.
+
+Baseline scope decision: the enforced golden deliberately contains NO
+activity updates. The activity-repeat stream will change by design when
+FR1 lands, so pinning it here would create a golden that has to be edited
+to fit the implementation, which is the failure mode this whole practice
+exists to avoid.
+
+Mutation check: emitted a stray ACTIVITY_SNAPSHOT on every text delta,
+confirmed the golden failed, reverted. A first attempt using a
+non-existent events.WithTimestamp did not compile and proved nothing;
+noting it because a mutation that fails to build is not a mutation test.
+
+Verification: go fmt, go vet, CI=true go test ./... clean.
