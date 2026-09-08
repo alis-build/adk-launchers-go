@@ -1,0 +1,26 @@
+Task: schema-convert-tests + schema-convert-impl (plan agui_hitl_interrupts_a1f3c2d8, phase P1)
+
+Why: FR1 requires an input_required interrupt to carry responseSchema as
+map[string]any, converted from ADK's session.RequestInput.ResponseSchema
+(*jsonschema.Schema) by JSON round-trip. The classifier in the next todo
+reads the same map to decide confirmation vs input_required, so the
+conversion had to land first.
+
+Changes:
+- agui/internal/interrupt/schema.go (new): SchemaToMap.
+- agui/internal/interrupt/schema_test.go (new): 6 cases across nil,
+  boolean-typed, object-with-required, malformed, and the two boolean
+  wire shapes. 100% statement coverage on SchemaToMap; package coverage
+  71.8% -> 73.2%.
+- go.mod: github.com/google/jsonschema-go v0.4.3 indirect -> direct. No
+  version change, no new modules (spec constraint: no new deps).
+
+Findings worth carrying forward:
+- jsonschema-go marshals an empty Schema as JSON 'true', not '{}', and
+  {Not: {}} as 'false'. A naive Unmarshal into map[string]any fails on
+  both. SchemaToMap maps 'true' to an empty map and drops 'false'.
+- Schema.MarshalJSON validates mutually exclusive field pairs (Type vs
+  Types, Items vs ItemsArray, Defs vs Definitions), so a malformed schema
+  surfaces as a marshal error rather than a build-time one.
+
+Verification: go fmt, go vet, CI=true go test ./agui/... all clean.
