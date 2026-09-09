@@ -353,12 +353,17 @@
 // Activity events reach the stream only through a [WithGenAIPartConverter]
 // converter returning them; the launcher has no activity source of its own.
 //
-// Opaque reasoning blobs survive the round trip. ADK exposes them as
+// Opaque reasoning blobs reach the client. ADK exposes them as
 // genai.Part.ThoughtSignature; the launcher base64-encodes the bytes, emits
 // REASONING_ENCRYPTED_VALUE inside the REASONING_START/REASONING_END bracket,
-// and puts the same value on the reconstructed message in MESSAGES_SNAPSHOT.
-// That message is the turn a client sends back, which is what preserves the
-// model's reasoning continuity.
+// and puts the same value on the reconstructed message in MESSAGES_SNAPSHOT,
+// so a client can persist a thread and re-render it without dropping them.
+//
+// That traffic is outbound only. Reasoning continuity is the ADK session's
+// doing: it holds the original parts server-side, so the model keeps its
+// context whether or not the client sends anything back. A blob arriving on an
+// inbound message is ignored — the next turn is built from the user's message,
+// never from client-supplied assistant history.
 //
 // The signature is read from whichever part carries it, not only thought parts.
 // ADK re-attaches it to the function call that ends a reasoning turn, so on a

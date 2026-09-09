@@ -64,8 +64,11 @@ type OutputCapabilities struct {
 	// ACTIVITY_DELTA patches rather than full snapshots, so a client knows to
 	// apply patches instead of replacing the block.
 	ActivityDeltas *bool `json:"activityDeltas,omitempty"`
-	// EncryptedReasoning reports that the agent round-trips opaque reasoning
-	// blobs, so a client knows to send them back for reasoning continuity.
+	// EncryptedReasoning reports that the agent surfaces the model's opaque
+	// reasoning blobs — on the stream and on the messages in MESSAGES_SNAPSHOT
+	// — so a client can persist a thread and re-render it without dropping
+	// them. It does not ask for them back: continuity is the server-side ADK
+	// session's doing, and a blob on an inbound message is ignored.
 	EncryptedReasoning *bool `json:"encryptedReasoning,omitempty"`
 }
 
