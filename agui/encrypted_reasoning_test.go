@@ -26,6 +26,22 @@ func reasoningEvent(t *testing.T, text string, signature []byte, partial bool) *
 	return ev
 }
 
+// answerEvent builds a non-thought text part, optionally carrying the blob.
+// ADK attaches the signature to whichever part ends the reasoning turn, so the
+// answer text is a carrier whenever the turn made no tool call.
+func answerEvent(t *testing.T, text string, signature []byte, partial bool) *session.Event {
+	t.Helper()
+	ev := session.NewEvent(t.Context(), "inv1")
+	ev.InvocationID = "inv-enc"
+	ev.Author = "test-app"
+	ev.Partial = partial
+	ev.Content = &genai.Content{
+		Role:  string(genai.RoleModel),
+		Parts: []*genai.Part{{Text: text, ThoughtSignature: signature}},
+	}
+	return ev
+}
+
 func TestEncryptedReasoning(t *testing.T) {
 	t.Run("emitted inside the reasoning bracket", func(t *testing.T) {
 		l := newTestLauncher("test-app")
@@ -140,6 +156,85 @@ func TestEncryptedReasoning(t *testing.T) {
 		}
 		if n != 2 {
 			t.Errorf("got %d REASONING_ENCRYPTED_VALUE events, want 2 for two distinct blobs", n)
+		}
+	})
+
+	t.Run("a blob on the answer text does not nest inside it", func(t *testing.T) {
+		l := newTestLauncher("test-app")
+		e, rec := newTestEmitter()
+		state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+		// Streaming opens a text message, then ADK's trailing non-partial
+		// repeats the accumulation and carries the turn's signature.
+		if _, err := l.processEvent(e, answerEvent(t, "Hello", nil, true), state, nil); err != nil {
+			t.Fatalf("processEvent(partial) error = %v", err)
+		}
+		if _, err := l.processEvent(e, answerEvent(t, "Hello world", []byte("blob"), false), state, nil); err != nil {
+			t.Fatalf("processEvent(final) error = %v", err)
+		}
+
+		var order []events.EventType
+		var text string
+		for _, ev := range parseSSEEvents(rec.Body.String()) {
+			order = append(order, ev.Type)
+			if ev.Type == events.EventTypeTextMessageContent {
+				text += ev.str("delta")
+			}
+		}
+
+		textEnd, reasoningStart := -1, -1
+		for i, typ := range order {
+			switch typ {
+			case events.EventTypeTextMessageEnd:
+				if textEnd == -1 {
+					textEnd = i
+				}
+			case events.EventTypeReasoningStart:
+				if reasoningStart == -1 {
+					reasoningStart = i
+				}
+			}
+		}
+		if reasoningStart == -1 {
+			t.Fatalf("no REASONING_START emitted for the blob; got %v", order)
+		}
+		if textEnd == -1 || textEnd > reasoningStart {
+			t.Errorf("REASONING_START opened inside the open text message; got %v", order)
+		}
+		if text != "Hello world" {
+			t.Errorf("streamed text = %q, want %q (dedup must survive the blob)", text, "Hello world")
+		}
+	})
+
+	t.Run("a blob on a repeat-only final is still emitted", func(t *testing.T) {
+		l := newTestLauncher("test-app")
+		e, rec := newTestEmitter()
+		state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+		// The trailing final repeats the streamed text exactly, so it carries no
+		// new text to emit — but it does carry the turn's signature.
+		if _, err := l.processEvent(e, answerEvent(t, "Hello", nil, true), state, nil); err != nil {
+			t.Fatalf("processEvent(partial) error = %v", err)
+		}
+		if _, err := l.processEvent(e, answerEvent(t, "Hello", []byte("blob"), false), state, nil); err != nil {
+			t.Fatalf("processEvent(final) error = %v", err)
+		}
+
+		var text string
+		var encrypted int
+		for _, ev := range parseSSEEvents(rec.Body.String()) {
+			switch ev.Type {
+			case events.EventTypeTextMessageContent:
+				text += ev.str("delta")
+			case events.EventTypeReasoningEncryptedValue:
+				encrypted++
+			}
+		}
+		if encrypted != 1 {
+			t.Errorf("got %d REASONING_ENCRYPTED_VALUE events, want 1: the repeat still carries the blob", encrypted)
+		}
+		if text != "Hello" {
+			t.Errorf("streamed text = %q, want %q (the repeat must not be re-emitted)", text, "Hello")
 		}
 	})
 }

@@ -406,9 +406,18 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 			// Text parts (non-thought): map to TEXT_MESSAGE_* event lifecycle.
 			if part.Text != "" && !part.Thought {
 				// A non-streaming response can attach the signature to the
-				// answer text rather than a thought, so drain it before the
+				// answer text rather than a thought. An already-open reasoning
+				// message is the blob's home, so drain it there before the
 				// bracket closes below.
-				emitEncryptedReasoning(sink, state, part)
+				//
+				// With no bracket open the blob needs one of its own, and
+				// opening it closes this text message — which would cost the
+				// dedup below the "is the streamed message still open" test it
+				// reads. So that case waits until after the text is emitted.
+				blobNeedsOwnBracket := state.CurrentReasoningMessageID == ""
+				if !blobNeedsOwnBracket {
+					emitEncryptedReasoning(sink, state, part)
+				}
 				// Close any open reasoning message before emitting text.
 				closeReasoningMessage(sink, state)
 
@@ -425,6 +434,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 				// match no longer implies continuation, so the stale
 				// accumulation is dropped instead of slicing a new message.
 				text := part.Text
+				emitText := true
 				if ev.Partial {
 					if state.CurrentTextMessageID == "" {
 						// A new streamed message restarts accumulation.
@@ -435,7 +445,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 					switch {
 					case text == streamed:
 						// Trailing final repeating the streamed text exactly.
-						continue
+						emitText = false
 					case state.CurrentTextMessageID != "" && strings.HasPrefix(text, streamed):
 						// Mid-message final extending the stream: emit the tail.
 						// An independent chunk sharing the streamed prefix is
@@ -448,17 +458,27 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 					}
 				}
 
-				if state.CurrentTextMessageID == "" {
-					state.CurrentTextMessageID = events.GenerateMessageID()
-					// Blank / whitespace-only authors are trimmed so the wire
-					// JSON omits "name" via omitempty on the upstream field.
-					sink.Emit(events.NewTextMessageStartEvent(
-						state.CurrentTextMessageID,
-						events.WithRole("assistant"),
-						events.WithName(strings.TrimSpace(ev.Author)),
-					))
+				if emitText {
+					if state.CurrentTextMessageID == "" {
+						state.CurrentTextMessageID = events.GenerateMessageID()
+						// Blank / whitespace-only authors are trimmed so the wire
+						// JSON omits "name" via omitempty on the upstream field.
+						sink.Emit(events.NewTextMessageStartEvent(
+							state.CurrentTextMessageID,
+							events.WithRole("assistant"),
+							events.WithName(strings.TrimSpace(ev.Author)),
+						))
+					}
+					sink.Emit(events.NewTextMessageContentEvent(state.CurrentTextMessageID, text))
 				}
-				sink.Emit(events.NewTextMessageContentEvent(state.CurrentTextMessageID, text))
+
+				// Deferred from above, and reached even when the text was
+				// dropped as a repeat: a trailing final carries no new text but
+				// can still carry a fresh blob, which would be lost silently.
+				if blobNeedsOwnBracket {
+					emitEncryptedReasoning(sink, state, part)
+					closeReasoningMessage(sink, state)
+				}
 				continue
 			}
 

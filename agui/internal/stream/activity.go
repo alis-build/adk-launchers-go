@@ -201,6 +201,12 @@ func emitActivityUpdate(sink eventSink, state *State, snap *events.ActivitySnaps
 // emit before closing the bracket for the same reason. ADK partials carry
 // accumulated state, so the same blob can arrive on several events for one
 // message and is sent only when it changes.
+//
+// Opening that bracket closes any open text message: the two are siblings on
+// the wire, never nested, and a caller reaching here mid-message (a trailing
+// final carrying the signature) would otherwise emit REASONING_START between a
+// TEXT_MESSAGE_START and its end. The close sits after the guards above so a
+// part with no new blob never disturbs a message being streamed.
 func emitEncryptedReasoning(sink eventSink, state *State, part *genai.Part) {
 	if len(part.ThoughtSignature) == 0 {
 		return
@@ -210,6 +216,7 @@ func emitEncryptedReasoning(sink eventSink, state *State, part *genai.Part) {
 		return
 	}
 	state.EmittedThoughtSignature = encoded
+	closeTextMessage(sink, state)
 	openReasoningMessage(sink, state)
 	sink.Emit(events.NewReasoningEncryptedValueEvent(
 		events.ReasoningEncryptedValueSubtypeMessage,

@@ -365,8 +365,9 @@
 // reasoning-then-tool turn the tool-call message is the carrier; text and
 // reasoning messages take it only when there is no tool call. A blob arriving
 // on a part that opened no reasoning message opens one, so it is never emitted
-// outside the bracket. The value stays opaque: the launcher neither reads nor
-// validates it.
+// outside the bracket, and that bracket never nests inside a text message: a
+// signature carried by the answer text follows the text, after its message has
+// closed. The value stays opaque: the launcher neither reads nor validates it.
 //
 // Every event carries metadata. metadata.adk holds invocationId and author, and
 // nodePath on workflow events.
