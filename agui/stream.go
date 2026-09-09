@@ -60,8 +60,10 @@ func (l *aguiLauncher) processEvent(sink eventSink, ev *session.Event, state *st
 	return l.streamProcessor().ProcessEvent(sink, ev, state, partConverter)
 }
 
-func finalizeLifecycle(sink eventSink, state *streamState) {
-	stream.FinalizeLifecycle(sink, state)
+// finalizeRun closes every lifecycle a run can leave open — text, reasoning,
+// step and the sub-agent activation — before a terminal event.
+func finalizeRun(sink eventSink, state *streamState) {
+	stream.FinalizeRun(sink, state)
 }
 
 func emitStateSnapshotIfNonEmpty(sink eventSink, snapshot map[string]any) {

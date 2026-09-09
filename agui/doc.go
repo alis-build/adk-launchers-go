@@ -412,9 +412,17 @@
 // "success", naming the interrupts it owns, which is how a client shows which
 // branch is waiting on a human.
 //
+// Every activation closes. The usual close is the handover to the next producer,
+// but a run whose last producer is a sub-agent — the ordinary shape of an ADK
+// transfer, where the sub-agent gives the final answer — has no such handover,
+// so the activation closes at run finalization instead, before RUN_FINISHED or
+// RUN_ERROR.
+//
 // Subagent brackets and STEP_* events mark the same boundary and are both
 // emitted. They are not nested: AG-UI steps are a flat sequence, so the pair
-// simply closes adjacently rather than one containing the other.
+// simply closes adjacently rather than one containing the other. The step closes
+// first, while the activation that owned it is still open, so the sub-agent's
+// own STEP_FINISHED carries its run id rather than its successor's.
 //
 // Attribution is on by default. [WithoutSubagentAttribution] turns off both the
 // brackets and the run ids for clients that cannot handle them; the AG-UI Go

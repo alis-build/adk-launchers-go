@@ -302,11 +302,9 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
         "invocationId": "inv-plain"
       }
     },
-    "outcome": {
-      "type": "success"
-    },
+    "stepName": "researcher",
     "subagentRunId": "msg-2",
-    "type": "SUBAGENT_FINISHED"
+    "type": "STEP_FINISHED"
   },
   {
     "metadata": {
@@ -315,8 +313,11 @@ func TestPlainAgentStreamBaseline(t *testing.T) {
         "invocationId": "inv-plain"
       }
     },
-    "stepName": "researcher",
-    "type": "STEP_FINISHED"
+    "outcome": {
+      "type": "success"
+    },
+    "subagentRunId": "msg-2",
+    "type": "SUBAGENT_FINISHED"
   },
   {
     "delta": [

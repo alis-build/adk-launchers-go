@@ -58,6 +58,24 @@ func FinalizeLifecycle(sink Sink, state *State) {
 	finalizeLifecycle(sink, state)
 }
 
+// FinalizeRun closes everything a run can leave open before its terminal event:
+// the text, reasoning and step lifecycles, and the sub-agent activation.
+//
+// The activation is why this exists separately from [FinalizeLifecycle]. A run
+// whose last producer is a sub-agent — the ordinary shape of an ADK transfer,
+// where the sub-agent gives the final answer — has no following root event to
+// trigger the handover close, so without this its SUBAGENT_STARTED never gets a
+// SUBAGENT_FINISHED and a client's branch view stays open for good.
+//
+// The sink is wrapped so the closing step event is still attributed to the
+// activation that owned it. When sub-agent attribution is disabled there is
+// never an open activation, so both the wrap and the close are no-ops.
+func FinalizeRun(sink Sink, state *State) {
+	attributed := withSubagentAttribution(sink, state)
+	finalizeLifecycle(attributed, state)
+	closeSubagent(attributed, state, nil)
+}
+
 // EventCollector wraps a sink and records events emitted during one ProcessEvent call.
 type EventCollector struct {
 	inner   Sink

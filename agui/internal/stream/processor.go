@@ -249,13 +249,11 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 	// opened, nothing carries a run id and no bracket is emitted, so the two
 	// cannot drift apart.
 	if !p.SubagentAttributionDisabled {
-		// Attribution is read at emit time, so this wrap goes outside the open
-		// and close below and the SUBAGENT_STARTED is not stamped with its own id.
+		// Attribution is read at emit time, not captured here, so the wrap can
+		// sit outside both the step close and the activation handover below:
+		// each event is stamped with whichever activation is open at the moment
+		// it is emitted, and the SUBAGENT_STARTED is not stamped with its own id.
 		sink = withSubagentAttribution(sink, state)
-
-		// Open or switch the sub-agent activation before anything is emitted for
-		// this event, so its SUBAGENT_STARTED precedes the content it attributes.
-		openSubagent(sink, state, ev)
 	}
 
 	// Usage accrues per event but is carried on the terminal event, which is
@@ -283,7 +281,13 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 	} else if stepName == state.RootAppName {
 		stepName = ""
 	}
-	if stepMayChange && stepName != state.CurrentStepName {
+	stepChanging := stepMayChange && stepName != state.CurrentStepName
+
+	// The outgoing step closes before the incoming activation opens. Emitting it
+	// after the handover would stamp the previous producer's STEP_FINISHED with
+	// the run id of the sub-agent taking over, which is the same misattribution
+	// openSubagent guards against for TEXT_MESSAGE_END.
+	if stepChanging {
 		closeTextMessage(sink, state)
 		closeReasoningMessage(sink, state)
 		// A different producer follows its own streaming convention; its text
@@ -293,6 +297,15 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 		if state.CurrentStepName != "" {
 			sink.Emit(events.NewStepFinishedEvent(state.CurrentStepName))
 		}
+	}
+
+	// Open or switch the sub-agent activation before anything is emitted for
+	// this event's content, so its SUBAGENT_STARTED precedes what it attributes.
+	if !p.SubagentAttributionDisabled {
+		openSubagent(sink, state, ev)
+	}
+
+	if stepChanging {
 		if stepName != "" {
 			sink.Emit(events.NewStepStartedEvent(stepName))
 		}
@@ -809,8 +822,11 @@ func schemaFromArg(v any) *jsonschema.Schema {
 // pause. See https://docs.ag-ui.com/concepts/interrupts
 func (p *Processor) finishWithInterrupts(sink eventSink, state *State, intrs []types.Interrupt) error {
 	// Close anything still open (a text or reasoning message opened by a part
-	// after the last interrupt call) before the terminal event.
-	//
+	// after the last interrupt call) before the terminal event. The step closes
+	// first, while the activation that owned it is still open, so its
+	// STEP_FINISHED carries that sub-agent's run id rather than none.
+	finalizeLifecycle(sink, state)
+
 	// The sub-agent closes as suspended rather than successful: it did not
 	// finish, it is waiting on a human, and naming the interrupts it owns is
 	// what lets a client show which branch is blocked.
@@ -819,7 +835,6 @@ func (p *Processor) finishWithInterrupts(sink eventSink, state *State, intrs []t
 		interruptIDs = append(interruptIDs, intr.ID)
 	}
 	closeSubagent(sink, state, interruptIDs)
-	finalizeLifecycle(sink, state)
 
 	buildSnap := p.BuildStateSnapshot
 	if buildSnap == nil && p.IsInternalStateKey != nil {

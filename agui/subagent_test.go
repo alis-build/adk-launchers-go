@@ -377,3 +377,72 @@ func TestWithoutSubagentAttribution(t *testing.T) {
 		}
 	})
 }
+
+// TestSubagentHandoverAttributesTheOutgoingStep pins which activation owns the
+// closing step event.
+//
+// The step for the outgoing sub-agent has to close while that sub-agent is
+// still open. Closing it after the handover stamps it with the run id of the
+// sub-agent taking over, so a client grouping events by subagentRunId files the
+// end of one branch under the next one.
+func TestSubagentHandoverAttributesTheOutgoingStep(t *testing.T) {
+	l := newTestLauncher("test-app")
+	e, rec := newTestEmitter()
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	for _, ev := range []*session.Event{
+		agentEvent(t, "alpha", "b1", "one"),
+		agentEvent(t, "beta", "b2", "two"),
+	} {
+		if _, err := l.processEvent(e, ev, state, nil); err != nil {
+			t.Fatalf("processEvent() error = %v", err)
+		}
+	}
+
+	evts := parseSSEEvents(rec.Body.String())
+	runIDs := map[string]string{}
+	for _, ev := range evts {
+		if ev.Type == events.EventTypeSubagentStarted {
+			runIDs[ev.str("name")] = ev.str("subagentRunId")
+		}
+	}
+	if runIDs["alpha"] == "" || runIDs["beta"] == "" || runIDs["alpha"] == runIDs["beta"] {
+		t.Fatalf("subagent run ids = %v, want two distinct non-empty ids", runIDs)
+	}
+
+	var found bool
+	for _, ev := range evts {
+		if ev.Type != events.EventTypeStepFinished || ev.str("stepName") != "alpha" {
+			continue
+		}
+		found = true
+		if got := ev.str("subagentRunId"); got != runIDs["alpha"] {
+			t.Errorf("STEP_FINISHED(alpha) subagentRunId = %q, want alpha's %q", got, runIDs["alpha"])
+		}
+	}
+	if !found {
+		t.Fatal("expected a STEP_FINISHED for alpha")
+	}
+}
+
+// TestSubagentClosesWhenTheRunEnds guards the run-terminal close.
+//
+// An ADK transfer commonly ends with the sub-agent giving the final answer, so
+// no later root event arrives to trigger the handover close. Without the close
+// at finalization the stream carries a SUBAGENT_STARTED that never finishes and
+// a client's branch view stays open for good.
+func TestSubagentClosesWhenTheRunEnds(t *testing.T) {
+	l := newTestLauncher("test-app")
+	e, rec := newTestEmitter()
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+
+	if _, err := l.processEvent(e, agentEvent(t, "researcher", "b1", "the answer"), state, nil); err != nil {
+		t.Fatalf("processEvent() error = %v", err)
+	}
+	finalizeRun(e, state)
+
+	got := subagentTrace(t, parseSSEEvents(rec.Body.String()))
+	if len(got) != 2 || got[0] != "start:researcher" || got[1] != "finish:success" {
+		t.Errorf("subagent trace = %v, want start:researcher then finish:success", got)
+	}
+}

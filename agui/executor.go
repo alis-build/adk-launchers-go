@@ -334,7 +334,7 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 			if state.RunFinalized {
 				return
 			}
-			finalizeLifecycle(sink, state)
+			finalizeRun(sink, state)
 			opts = append([]events.RunErrorOption{events.WithRunID(state.RunID)}, opts...)
 			if usage := state.TokenUsage(); usage != nil {
 				opts = append(opts, events.WithErrorUsage(usage))
@@ -524,7 +524,7 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 
 		// Close any still-open text, reasoning, or step lifecycles before a success terminal event.
 		if !sinkStopped(sink) {
-			finalizeLifecycle(sink, state)
+			finalizeRun(sink, state)
 		}
 
 		// Successful runs emit RunFinished with a success outcome, unless the run was already
