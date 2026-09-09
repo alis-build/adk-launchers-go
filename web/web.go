@@ -32,6 +32,7 @@ type webConfig struct {
 	idleTimeout     time.Duration
 	shutdownTimeout time.Duration
 	otelToCloud     bool
+	useH2C          bool
 	// authGateway is the package-wide go.alis.build/mux gateway installed before
 	// serving. It is responsible for resolving the upstream caller identity into
 	// the request context so sublauncher handlers can authorize. A nil value
@@ -116,6 +117,9 @@ type webLauncher struct {
 
 // Execute implements launcher.Launcher.
 func (w *webLauncher) Execute(ctx context.Context, config *launcher.Config, args []string) error {
+	if err := config.Validate(); err != nil {
+		return err
+	}
 	remainingArgs, err := w.Parse(args)
 	if err != nil {
 		return fmt.Errorf("cannot parse args: %w", err)
@@ -195,7 +199,7 @@ func (w *webLauncher) Run(ctx context.Context, config *launcher.Config) error {
 		config.SessionService = session.InMemoryService()
 	}
 
-	router := buildRouter()
+	router := BuildBaseRouter()
 
 	if len(w.activeSublaunchers) == 0 {
 		availableSublaunchers := make([]string, len(w.sublaunchers))
@@ -303,6 +307,10 @@ func NewLauncherWithOptions(sublaunchers []Sublauncher, opts ...Option) launcher
 	fs.DurationVar(&config.idleTimeout, "idle-timeout", 300*time.Second, "Server idle timeout (i.e. '10s', '2m' - see time.ParseDuration for details) - for waiting for the next request (only when keep-alive is enabled)")
 	fs.DurationVar(&config.shutdownTimeout, "shutdown-timeout", 30*time.Second, "Server shutdown timeout (i.e. '10s', '2m' - see time.ParseDuration for details) - for waiting for active requests to finish during shutdown")
 	fs.BoolVar(&config.otelToCloud, "otel_to_cloud", false, "Enables/disables OpenTelemetry export to GCP: telemetry.googleapis.com. See adk-go/telemetry package for details about supported options, credentials and environment variables.")
+	// Defaults on, where ADK's own web launcher defaults it off: the host mux
+	// serves gRPC and gRPC-Web on this same listener (see HostRouteSetup), and
+	// those need HTTP/2. Turning it off is for hosts that register no gRPC.
+	fs.BoolVar(&config.useH2C, "h2c", true, "Enable prior-knowledge cleartext HTTP/2 (h2c; no HTTP/1.1 Upgrade) on the web server listener. Required by gRPC and gRPC-Web handlers registered through a sublauncher's SetupHostRoutes. Cleartext is insecure; do not expose it to untrusted networks.")
 
 	l := &webLauncher{
 		config:       config,
@@ -324,25 +332,38 @@ func logger(inner http.Handler) http.Handler {
 	})
 }
 
-// buildRouter returns the shared gorilla/mux router used by all sublaunchers.
-func buildRouter() *mux.Router {
+// BuildBaseRouter returns the main gorilla/mux router, which sublaunchers extend
+// with sub-routers in SetupSubrouters. It carries the request logger, and the
+// launcher mounts it under the go.alis.build/mux host mux as the catch-all for
+// anything not claimed by a host route.
+//
+// Named to match ADK's own web launcher, so a sublauncher written against
+// upstream needs no change to build its routes here.
+func BuildBaseRouter() *mux.Router {
 	router := mux.NewRouter().StrictSlash(true)
 	router.Use(logger)
 	return router
 }
 
-// buildHTTPServer constructs the host HTTP server with timeouts and HTTP/2 support.
+// buildHTTPServer constructs the host HTTP server with timeouts and, unless
+// disabled, cleartext HTTP/2 alongside HTTP/1.
 func buildHTTPServer(addr string, cfg *webConfig) *http.Server {
-	protocols := new(http.Protocols)
-	protocols.SetHTTP1(true)
-	protocols.SetUnencryptedHTTP2(true)
-
-	return &http.Server{
+	srv := &http.Server{
 		Addr:         addr,
 		Handler:      alismux.HTTPHandler(),
 		WriteTimeout: cfg.writeTimeout,
 		ReadTimeout:  cfg.readTimeout,
 		IdleTimeout:  cfg.idleTimeout,
-		Protocols:    protocols,
 	}
+
+	if cfg.useH2C {
+		// Both protocols on one listener: REST and Web UI routes stay on
+		// HTTP/1.1 while gRPC and gRPC-Web handlers get the HTTP/2 they require.
+		protocols := new(http.Protocols)
+		protocols.SetHTTP1(true)
+		protocols.SetUnencryptedHTTP2(true)
+		srv.Protocols = protocols
+	}
+
+	return srv
 }
