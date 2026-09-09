@@ -112,3 +112,17 @@ func TestRecordTokenUsage(t *testing.T) {
 		}
 	})
 }
+
+// TestTokenUsageAllZeroReportsNothing pins the empty-entry case.
+//
+// Every count dropped as zero leaves an entry with no counts, no provider and
+// no model, which serializes as a bare "{}" — a claim that usage was reported
+// with nothing in it to read.
+func TestTokenUsageAllZeroReportsNothing(t *testing.T) {
+	state := &State{}
+	state.RecordTokenUsage(usageEvent(false, 0, 0, 0))
+
+	if got := state.TokenUsage(); got != nil {
+		t.Errorf("TokenUsage() = %v, want nil for an all-zero report", got)
+	}
+}

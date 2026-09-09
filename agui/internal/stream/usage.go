@@ -78,6 +78,7 @@ func (s *State) TokenUsage() []events.TokenUsage {
 	}
 
 	usage := events.TokenUsage{}
+	var populated bool
 	for _, f := range []struct {
 		into     **int64
 		count    int64
@@ -93,6 +94,15 @@ func (s *State) TokenUsage() []events.TokenUsage {
 			continue
 		}
 		*f.into = events.TokenCount(f.count)
+		populated = true
+	}
+
+	// Every count was dropped as zero or negative, and the entry carries no
+	// provider or model either, so it would go out as a bare "{}": a claim that
+	// usage was reported with nothing in it to read. Absent says the same thing
+	// and says it honestly.
+	if !populated {
+		return nil
 	}
 	return []events.TokenUsage{usage}
 }

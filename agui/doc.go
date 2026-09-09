@@ -381,7 +381,9 @@
 // rather than sent as zero: ADK types counts as int32 with omitempty, so it
 // cannot tell "produced none" from "did not report", and asserting a measured
 // zero would be the stronger claim. A negative count is dropped, since the SDK
-// rejects one and would take the whole terminal event down with it.
+// rejects one and would take the whole terminal event down with it. A report
+// left with no count at all carries no usage field either, rather than an empty
+// entry claiming usage was reported with nothing in it to read.
 // nodePath follows [WithoutGraphAttribution] along with every other attribution
 // site, so opting out keeps node topology off the wire entirely.
 //
