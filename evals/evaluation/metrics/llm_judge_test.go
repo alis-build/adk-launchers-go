@@ -1389,3 +1389,34 @@ func TestDefaultAgentNamePicksSmallestOfSeveral(t *testing.T) {
 		t.Errorf("DefaultAgentName() = %q, want alpha", got)
 	}
 }
+
+// Mirrors adk-python test_rubric_based_multi_turn_trajectory_evaluator.py:
+// built-in tools are named for the judge.
+func TestMultiTurnPromptNamesBuiltInTools(t *testing.T) {
+	app := &models.AppDetails{AgentDetails: map[string]models.AgentDetails{
+		"search_agent": {Name: "search_agent", ToolDeclarations: []*genai.Tool{
+			{GoogleSearch: &genai.GoogleSearch{}},
+			{FunctionDeclarations: []*genai.FunctionDeclaration{{Name: "get_weather", Description: "Get the weather for a city."}}},
+		}},
+	}}
+	got := renderAllToolDefinitions(app)
+	for _, want := range []string{"- google_search (built-in)", "get_weather", "Get the weather for a city."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("tool definitions missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Mirrors adk-python's shared-built-in-tool case: each agent lists the tools
+// it has, even when another agent has the same one.
+func TestMultiTurnPromptListsSharedBuiltInToolPerAgent(t *testing.T) {
+	search := []*genai.Tool{{GoogleSearch: &genai.GoogleSearch{}}}
+	app := &models.AppDetails{AgentDetails: map[string]models.AgentDetails{
+		"agent_b": {Name: "agent_b", ToolDeclarations: search},
+		"agent_a": {Name: "agent_a", ToolDeclarations: search},
+	}}
+	want := "Agent: agent_a\n- google_search (built-in)\nAgent: agent_b\n- google_search (built-in)"
+	if got := renderAllToolDefinitions(app); got != want {
+		t.Errorf("tool definitions =\n%s\nwant\n%s", got, want)
+	}
+}

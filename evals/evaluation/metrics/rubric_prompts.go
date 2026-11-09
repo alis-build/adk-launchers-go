@@ -3,7 +3,10 @@ package metrics
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
+	"unicode"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"google.golang.org/genai"
@@ -345,32 +348,76 @@ func renderAllToolDefinitions(app *models.AppDetails) string {
 	if app == nil || len(app.AgentDetails) == 0 {
 		return ""
 	}
+	// Sorted names stand in for adk-python's dict order, which Go maps lack.
+	names := make([]string, 0, len(app.AgentDetails))
+	for name := range app.AgentDetails {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	var lines []string
-	seen := make(map[string]struct{})
-	for name, d := range app.AgentDetails {
-		agentLine := fmt.Sprintf("Agent: %s", name)
-		if _, ok := seen[agentLine]; !ok {
-			seen[agentLine] = struct{}{}
-			lines = append(lines, agentLine)
+	for _, name := range names {
+		lines = append(lines, "Agent: "+name)
+		// De-duplicated per agent, so agents sharing a tool each list it.
+		seen := make(map[string]bool)
+		add := func(line string) {
+			if !seen[line] {
+				seen[line] = true
+				lines = append(lines, line)
+			}
 		}
-		for _, tool := range d.ToolDeclarations {
+		for _, tool := range app.AgentDetails[name].ToolDeclarations {
 			if tool == nil {
 				continue
 			}
 			for _, fn := range tool.FunctionDeclarations {
-				if fn == nil {
-					continue
+				if fn != nil {
+					add(fmt.Sprintf("- %s: %s", fn.Name, fn.Description))
 				}
-				line := fmt.Sprintf("- %s: %s", fn.Name, fn.Description)
-				if _, ok := seen[line]; ok {
-					continue
-				}
-				seen[line] = struct{}{}
-				lines = append(lines, line)
+			}
+			// Built-in tools such as google_search carry no function
+			// declarations; name them so the judge still sees them.
+			for _, field := range builtInToolFields(tool) {
+				add("- " + field + " (built-in)")
 			}
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// builtInToolFields returns the snake_case names of tool's set fields other
+// than its function declarations, in declaration order, the way adk-python
+// names them from the pydantic model. Reading the JSON tags by reflection,
+// rather than a fixed table, also names built-in tools genai adds later.
+func builtInToolFields(tool *genai.Tool) []string {
+	v := reflect.ValueOf(tool).Elem()
+	t := v.Type()
+	var out []string
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := strings.Split(f.Tag.Get("json"), ",")[0]
+		if tag == "" || tag == "-" || tag == "functionDeclarations" || v.Field(i).IsZero() {
+			continue
+		}
+		out = append(out, snakeCase(tag))
+	}
+	return out
+}
+
+// snakeCase converts a camelCase JSON field name to snake_case
+// (googleSearch -> google_search).
+func snakeCase(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			r = unicode.ToLower(r)
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // renderToolCallsAndResponsesJSON marshals tool calls paired with responses
