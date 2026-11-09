@@ -11,6 +11,7 @@ import (
 
 	"go.alis.build/adk/launchers/internal/adkrun"
 	"go.alis.build/adk/launchers/internal/threadmeta"
+	"go.alis.build/adk/launchers/tooloauth"
 	"go.alis.build/alog"
 	pb "go.alis.build/common/alis/agui/scheduler"
 	"go.alis.build/iam/v3"
@@ -375,7 +376,9 @@ func (a *runtimeAdapter) RunCron(ctx context.Context, req adkrun.RunRequest) (st
 // userRunContext returns a context that runs ADK as the cron owner.
 func userRunContext(parent context.Context, owner *iam.Identity) context.Context {
 	ctx := owner.OutgoingMetadata(parent)
-	return owner.Context(ctx)
+	// Nobody can answer a tooloauth sign-in pause during a cron run, so tools
+	// needing one fail with "connect <Provider> in chat first" instead.
+	return tooloauth.WithNonInteractive(owner.Context(ctx))
 }
 
 // incomingContext copies HTTP headers into gRPC incoming metadata for downstream RPCs.
