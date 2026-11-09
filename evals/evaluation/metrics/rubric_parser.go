@@ -129,6 +129,21 @@ func parseRubricVerdicts(response string, rubrics []models.Rubric) (*float64, []
 			counted++
 		}
 	}
+	// Every rubric must get a yes/no verdict. Averaging only the answered
+	// ones would let an unanswered, possibly failing rubric drop out of the
+	// score, so a reply that leaves any rubric without one is unscored, as in
+	// adk-python.
+	scored := make(map[string]bool, len(scores))
+	for _, rs := range scores {
+		if rs.Score != nil {
+			scored[rs.RubricID] = true
+		}
+	}
+	for _, r := range rubrics {
+		if !scored[r.RubricID] {
+			return nil, nil
+		}
+	}
 	if counted == 0 {
 		return nil, scores
 	}

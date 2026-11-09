@@ -1158,7 +1158,7 @@ func TestParseRubricVerdictsIgnoresMidLineID(t *testing.T) {
       Rationale: The session UUID: abc-123 was fine.
       Verdict: yes
       `
-	_, scores := parseRubricVerdicts(resp, goodBadRubrics())
+	_, scores := parseRubricVerdicts(resp, goodBadRubrics()[:1])
 	if diff := cmp.Diff([][2]any{{"1", 1.0}}, idScores(scores)); diff != "" {
 		t.Errorf("scores (-want +got):\n%s", diff)
 	}
@@ -1213,5 +1213,77 @@ func TestParseRubricVerdictsKeepsNonASCIIRubric(t *testing.T) {
 	_, scores := parseRubricVerdicts(resp, rubrics)
 	if len(scores) != 1 || scores[0].RubricID != "1" {
 		t.Errorf("scores = %+v, want rubric 1", scores)
+	}
+}
+
+// Mirrors adk-python test_rubric_based_evaluator.py criterion_rubric case: a
+// rubric without a verdict must not drop out of the average.
+func TestParseRubricVerdictsUnscoredWhenRubricMissing(t *testing.T) {
+	resp := `
+              Property: Is the response good?
+              Rationale: It was good.
+              Verdict: yes
+              `
+	mean, scores := parseRubricVerdicts(resp, goodBadRubrics())
+	if mean != nil || len(scores) != 0 {
+		t.Errorf("mean = %v, scores = %+v; want unscored", mean, scores)
+	}
+}
+
+// Mirrors adk-python's verdict-matching-no-rubric case: rubric 2's verdict has
+// an unknown ID and reworded text, so rubric 2 has no verdict.
+func TestParseRubricVerdictsUnscoredWhenVerdictMatchesNoRubric(t *testing.T) {
+	resp := `
+    ID: one
+    Property: Is the response good?
+    Rationale: It was good.
+    Verdict: yes
+
+    ID: two
+    Property: Was the response bad?
+    Rationale: It was.
+    Verdict: no
+    `
+	mean, scores := parseRubricVerdicts(resp, goodBadRubrics())
+	if mean != nil || len(scores) != 0 {
+		t.Errorf("mean = %v, scores = %+v; want unscored", mean, scores)
+	}
+}
+
+// Mirrors adk-python's scored-sample-decides case: an unscored sample does not
+// vote, so the scored one decides.
+func TestRubricEvaluatorScoredSampleOutvotesUnscored(t *testing.T) {
+	unscored := "Property: Is the response good?\nRationale: It was not.\nVerdict: no\n"
+	scored := "Property: Is the response good?\nRationale: It was good.\nVerdict: yes\nProperty: Is the response bad?\nRationale: It was.\nVerdict: yes\n"
+	fake := &fakeJudge{responses: []string{unscored, scored}}
+	reg := NewDefaultRegistry()
+	reg.SetConfig(RegistryConfig{JudgeClient: fake})
+	metric := rubricMetric(models.MetricRubricBasedFinalResponseQualityV1, 0.5, goodBadRubrics())
+	metric.Criterion = models.CriterionField(models.RubricsBasedCriterion{
+		BaseCriterion:     models.BaseCriterion{Threshold: 0.5},
+		Rubrics:           goodBadRubrics(),
+		JudgeModelOptions: models.JudgeModelOptions{NumSamples: 2},
+	})
+	ev, err := reg.GetEvaluator(metric)
+	if err != nil {
+		t.Fatalf("GetEvaluator: %v", err)
+	}
+	inv := models.Invocation{
+		UserContent:   genai.NewContentFromText("q", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("a", genai.RoleModel),
+	}
+	result, err := ev.EvaluateInvocations(context.Background(), []models.Invocation{inv}, []models.Invocation{inv}, nil)
+	if err != nil {
+		t.Fatalf("EvaluateInvocations: %v", err)
+	}
+	if len(result.PerInvocationResults) != 1 {
+		t.Fatalf("per-invocation results = %d, want 1", len(result.PerInvocationResults))
+	}
+	got := result.PerInvocationResults[0]
+	if diff := cmp.Diff([][2]any{{"1", 1.0}, {"2", 1.0}}, idScores(got.RubricScores)); diff != "" {
+		t.Errorf("rubric scores (-want +got):\n%s", diff)
+	}
+	if got.Score == nil || *got.Score != 1 || got.EvalStatus != models.EvalStatusPassed {
+		t.Errorf("score = %v, status %d; want 1, PASSED", got.Score, got.EvalStatus)
 	}
 }
