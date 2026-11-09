@@ -25,6 +25,9 @@ type IntermediateResponse struct {
 type InvocationEvent struct {
 	Author  string         `json:"author"`
 	Content *genai.Content `json:"content,omitempty"`
+	// GroundingMetadata is the grounding the model reported with the event,
+	// such as the web searches it ran. Rubric judges read it as evidence.
+	GroundingMetadata *genai.GroundingMetadata `json:"groundingMetadata,omitempty"`
 }
 
 // InvocationEvents is a container of invocation-scoped events.

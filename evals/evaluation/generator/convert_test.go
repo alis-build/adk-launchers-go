@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"go.alis.build/adk/launchers/evals/evaluation/generator"
+	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
@@ -78,4 +79,58 @@ func TestConvertMultiTurn(t *testing.T) {
 	if inv[0].UserContent.Parts[0].Text != "Hello" || inv[1].UserContent.Parts[0].Text != "How are you?" {
 		t.Fatalf("users = %q, %q", inv[0].UserContent.Parts[0].Text, inv[1].UserContent.Parts[0].Text)
 	}
+}
+
+// Mirrors adk-python test_evaluation_generator.py
+// test_convert_preserves_grounding_metadata_from_final_response: the final
+// response's grounding metadata reaches the evaluators, without its text.
+func TestConvertKeepsFinalResponseGroundingMetadata(t *testing.T) {
+	agentEvent := buildEvent(t, "agent", []*genai.Part{{Text: "Here are sources."}}, "inv1")
+	agentEvent.GroundingMetadata = &genai.GroundingMetadata{WebSearchQueries: []string{"recent AI news"}}
+	events := []*session.Event{
+		buildEvent(t, "user", []*genai.Part{{Text: "What's new in AI?"}}, "inv1"),
+		agentEvent,
+	}
+
+	inv := generator.ConvertEventsToEvalInvocations(events, nil)
+	if len(inv) != 1 {
+		t.Fatalf("invocations = %d, want 1", len(inv))
+	}
+	invEvents := invocationEvents(t, inv[0])
+	if len(invEvents) != 1 {
+		t.Fatalf("invocation events = %d, want 1", len(invEvents))
+	}
+	if invEvents[0].Content != nil {
+		t.Errorf("content = %+v, want nil", invEvents[0].Content)
+	}
+	gm := invEvents[0].GroundingMetadata
+	if gm == nil || len(gm.WebSearchQueries) != 1 || gm.WebSearchQueries[0] != "recent AI news" {
+		t.Errorf("grounding metadata = %+v, want web search query %q", gm, "recent AI news")
+	}
+}
+
+// An event with grounding metadata and no parts is still recorded.
+func TestConvertKeepsGroundingOnlyEvent(t *testing.T) {
+	grounding := session.NewEvent(t.Context(), "inv1")
+	grounding.Author = "agent"
+	grounding.GroundingMetadata = &genai.GroundingMetadata{WebSearchQueries: []string{"q"}}
+	events := []*session.Event{
+		buildEvent(t, "user", []*genai.Part{{Text: "Hi"}}, "inv1"),
+		grounding,
+		buildEvent(t, "agent", []*genai.Part{{Text: "Done."}}, "inv1"),
+	}
+
+	invEvents := invocationEvents(t, generator.ConvertEventsToEvalInvocations(events, nil)[0])
+	if len(invEvents) != 1 || invEvents[0].GroundingMetadata == nil {
+		t.Fatalf("invocation events = %+v, want the grounding-only event", invEvents)
+	}
+}
+
+func invocationEvents(t *testing.T, inv models.Invocation) []models.InvocationEvent {
+	t.Helper()
+	data, ok := inv.IntermediateData.AsInvocationEvents()
+	if !ok {
+		t.Fatalf("intermediate data = %+v, want invocation events", inv.IntermediateData.Value())
+	}
+	return data.InvocationEvents
 }
