@@ -743,10 +743,13 @@ func (l *evalsLauncher) addSessionHandler() alismux.Func {
 			UserID:    caller.ID,
 			SessionID: req.SessionID,
 		})
-		// 404 with adk-python's detail, so clients can tell a missing session
-		// from a bad request.
-		if err != nil || resp == nil || resp.Session == nil {
+		// A missing session answers 404 with adk-python's detail; any other
+		// session-store failure is a server error, not a missing session.
+		if errors.Is(err, session.ErrNotFound) || (err == nil && (resp == nil || resp.Session == nil)) {
 			return alismux.NotFoundErr("Session not found")
+		}
+		if err != nil {
+			return fmt.Errorf("evals: read session: %w", err)
 		}
 
 		rootAgent, err := l.launcherCfg.AgentLoader.LoadAgent(appName)

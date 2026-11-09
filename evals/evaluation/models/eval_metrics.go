@@ -184,7 +184,8 @@ type MetricInfo struct {
 	RequiresThreshold bool `json:"requiresThreshold"`
 }
 
-// EvalMetricResultDetails holds optional rubric scores.
+// EvalMetricResultDetails holds a metric result's details; rubric scores are
+// present only for rubric-based metrics.
 type EvalMetricResultDetails struct {
 	RubricScores []RubricScore `json:"rubricScores,omitempty"`
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 	"net/http"
 	"net/http/httptest"
@@ -1017,5 +1018,27 @@ func TestAddSessionMissingEvalSetIs404(t *testing.T) {
 	}
 	if c, _ := sets.GetEvalCase("my_app", "missing_eval_set", "c1"); c != nil {
 		t.Errorf("eval case written for a missing set: %+v", c)
+	}
+}
+
+// failingGetSessions is a session service whose Get fails for a reason other
+// than a missing session.
+type failingGetSessions struct{ session.Service }
+
+func (failingGetSessions) Get(context.Context, *session.GetRequest) (*session.GetResponse, error) {
+	return nil, errors.New("session backend unavailable")
+}
+
+// A backend failure is not a missing session: adk-python answers 404 only
+// when the session is absent.
+func TestAddSessionSessionBackendErrorIs500(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	l.launcherCfg.SessionService = failingGetSessions{l.launcherCfg.SessionService}
+	_, err := callHandlerAs(t, l.addSessionHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/set1/add-session", "user1",
+		map[string]string{"evalId": "c1", "sessionId": "sess1"},
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if got := alismux.StatusCode(err); got != http.StatusInternalServerError {
+		t.Errorf("add-session with a failing session backend: status %d (err %v), want 500", got, err)
 	}
 }
