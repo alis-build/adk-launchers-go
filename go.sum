@@ -13,6 +13,8 @@ cloud.google.com/go/compute/metadata v0.10.0 h1:pyKMUQSwchgkIBBJGdILqQbs/BNJXqwS
 cloud.google.com/go/compute/metadata v0.10.0/go.mod h1:rGFHRrIif570kSibjFTMbt6/4/tzgJWFGI/HVol4GIk=
 cloud.google.com/go/iam v1.15.1 h1:i6EXLKyIi0Sh72p+5+Fz0PfnzB63bkneVpaBCGrjlWs=
 cloud.google.com/go/iam v1.15.1/go.mod h1:nDJ/rfCzLKyBUY1AeiSQwOAJg/AN7zZ2QmNzRTcK2jM=
+cloud.google.com/go/kms v1.36.1 h1:jIXDoN/lxjVt/zc219tIwqAWPVWVzcLJ7s6Oq3n0Y5U=
+cloud.google.com/go/kms v1.36.1/go.mod h1:1oVAwTvmgswE8PiQeyffdNxpRLw2F0UfQlLwTrYlRNg=
 cloud.google.com/go/logging v1.21.0 h1:Grn9NZsh87BO5+CEtZFFdj5mXEAnrlPFEdHDMVo9p8Y=
 cloud.google.com/go/logging v1.21.0/go.mod h1:4foM+ucR/w1KQrJOh4tDr14iHUIt0MLh2cL8094/LZs=
 cloud.google.com/go/longrunning v1.5.0 h1:aGonu6LHQl38DyozLs2jxGieI4Ixk+7GTnmHVcHt8zA=

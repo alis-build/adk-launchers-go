@@ -3,6 +3,8 @@ module go.alis.build/adk/launchers
 go 1.26.10
 
 require (
+	cloud.google.com/go/kms v1.36.1
+	cloud.google.com/go/spanner v1.96.1
 	cloud.google.com/go/storage v1.70.0
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20261107181034-dbfbddb7b3b8
 	github.com/google/go-cmp v0.7.0
@@ -38,7 +40,6 @@ require (
 	cloud.google.com/go/longrunning v1.5.0 // indirect
 	cloud.google.com/go/monitoring v1.32.1 // indirect
 	cloud.google.com/go/scheduler v1.18.1 // indirect
-	cloud.google.com/go/spanner v1.96.1 // indirect
 	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.6.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.62.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.62.0 // indirect
