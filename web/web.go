@@ -313,6 +313,10 @@ func (w *webLauncher) buildRouter(config *launcher.Config) (*mux.Router, error) 
 		return nil, fmt.Errorf("no active sublaunchers found - please specify them in the command line. Possible values: %v", availableSublaunchers)
 	}
 
+	// Before any sublauncher runs, so the REST server ADK's api sublauncher
+	// builds gets the identity checks.
+	applyAuthDefaults(config)
+
 	router := BuildBaseRouter()
 	registerHealthRoute(router)
 

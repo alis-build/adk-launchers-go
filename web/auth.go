@@ -5,7 +5,9 @@ import (
 	"net/http"
 
 	iam "go.alis.build/iam/v3"
+	"google.golang.org/adk/v2/cmd/launcher"
 	"google.golang.org/adk/v2/server/authn"
+	"google.golang.org/adk/v2/server/authz"
 )
 
 // IdentityAuthenticator authenticates ADK REST API requests from the alis
@@ -29,4 +31,23 @@ func IdentityAuthenticator() authn.Authenticator {
 			Claims: map[string]any{"email": id.Email, "type": string(id.Type)},
 		}, nil
 	})
+}
+
+// applyAuthDefaults fills ADK's REST API authentication and authorization
+// hooks the embedder left nil: callers are authenticated from the forwarded
+// identity, and authz.NewStrict lets a caller act only as their own user.
+//
+// A value the embedder set is never replaced, so an embedder that wants the
+// REST API open sets Config.Authorizer to authz.NewNoop() in code. There is no
+// flag for it, so an operator cannot open it by accident.
+//
+// It must run before the sublaunchers are set up: ADK's api sublauncher hands
+// both hooks to adkrest.NewServer while it builds its routes.
+func applyAuthDefaults(config *launcher.Config) {
+	if config.Authenticator == nil {
+		config.Authenticator = IdentityAuthenticator()
+	}
+	if config.Authorizer == nil {
+		config.Authorizer = authz.NewStrict()
+	}
 }
