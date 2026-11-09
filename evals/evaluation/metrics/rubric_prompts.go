@@ -531,13 +531,6 @@ func firstEventAuthor(inv models.Invocation) string {
 	return events.InvocationEvents[0].Author
 }
 
-// formatRubricFinalResponsePrompt renders the final-response quality prompt.
-//
-// The expected invocation is intentionally unused: adk-python's rubric
-// judges score the actual final response against the rubrics only, using
-// the rubric text (not a golden reference) as the source of truth. The
-// argument is retained to satisfy the shared formatPrompt signature on
-// llmJudgeEvaluator.
 // promptAgentName is the agent whose instructions the judge sees: the first
 // invocation event's author, or else the app's default agent, so an agent that
 // answered without tools or events still has its instructions in the prompt.
@@ -548,6 +541,13 @@ func promptAgentName(actual models.Invocation) string {
 	return actual.AppDetails.DefaultAgentName()
 }
 
+// formatRubricFinalResponsePrompt renders the final-response quality prompt.
+//
+// The expected invocation is intentionally unused: adk-python's rubric
+// judges score the actual final response against the rubrics only, using
+// the rubric text (not a golden reference) as the source of truth. The
+// argument is retained to satisfy the shared formatPrompt signature on
+// llmJudgeEvaluator.
 func formatRubricFinalResponsePrompt(actual models.Invocation, _ *models.Invocation, rubrics []models.Rubric) string {
 	repl := strings.NewReplacer(
 		"{developer_instructions}", renderDeveloperInstructions(actual.AppDetails, promptAgentName(actual)),

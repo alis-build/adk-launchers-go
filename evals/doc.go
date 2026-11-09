@@ -105,8 +105,8 @@
 // # Run request and response
 //
 // The run body is accepted in adk-web main's snake_case form (eval_case_ids,
-// eval_metrics) and in the ADK v2.7.1 bundle's camelCase form (evalCaseIds,
-// evalMetrics). A body that sets live_model_config or user_simulator_config
+// eval_metrics) and in the ADK v2.7.1 bundle's camelCase form (evalIds,
+// evalMetrics); evalCaseIds is accepted too. A body that sets live_model_config or user_simulator_config
 // is answered 400 until live and simulator runs are supported.
 //
 // POST .../eval-sets/{id}/run answers {"runEvalResults": [...]}, as adk-python
