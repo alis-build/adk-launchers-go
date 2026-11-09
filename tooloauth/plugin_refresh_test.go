@@ -2,6 +2,8 @@ package tooloauth
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -268,5 +270,162 @@ func TestRefresh_invalidClientKeepsTheEntry(t *testing.T) {
 
 	if _, ok := storedToken(t, cfg); !ok {
 		t.Error("entry dropped on invalid_client, want it kept")
+	}
+}
+
+// rotatingEndpoint is a token endpoint that rotates refresh tokens, refuses
+// a used one with invalid_grant as providers that detect reuse do, and takes
+// a while to answer, so concurrent refreshes overlap.
+type rotatingEndpoint struct {
+	*httptest.Server
+	mu    sync.Mutex
+	valid string
+	calls int
+}
+
+func newRotatingEndpoint(t *testing.T, first string) *rotatingEndpoint {
+	t.Helper()
+	re := &rotatingEndpoint{valid: first}
+	re.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("token endpoint: ParseForm: %v", err)
+		}
+		re.mu.Lock()
+		re.calls++
+		n := re.calls
+		ok := r.PostForm.Get("refresh_token") == re.valid
+		if ok {
+			re.valid = fmt.Sprintf("rt-rotated-%d", n)
+		}
+		next := re.valid
+		re.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if !ok {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+			return
+		}
+		fmt.Fprintf(w, `{"access_token":"at-rotated-%d","token_type":"Bearer","expires_in":3600,"refresh_token":%q}`, n, next)
+	}))
+	t.Cleanup(re.Close)
+	return re
+}
+
+func (re *rotatingEndpoint) callCount() int {
+	re.mu.Lock()
+	defer re.mu.Unlock()
+	return re.calls
+}
+
+// ADK runs one turn's tool calls in parallel. Two calls finding one expired
+// token must refresh it once: a second refresh with the same, now rotated,
+// refresh token is refused, and must not delete the token the first stored.
+func TestRefresh_parallelCallsRefreshOnce(t *testing.T) {
+	re := newRotatingEndpoint(t, "rt-old-9")
+	cfg := refreshConfig(newRecordingStore(), &tokenEndpoint{Server: re.Server}, 72*time.Hour)
+	seed(t, cfg, "app-refresh", "user-7", &Token{AccessToken: "at-old-9", RefreshToken: "rt-old-9", Expiry: time.Now().Add(-time.Minute)}, time.Now().Add(24*time.Hour))
+	rs := newResourceServer(t)
+	h := newParallelHarness(t, "app-refresh", "calendar_list", 2, cfg, calendarTool(t, cfg, rs))
+
+	events := h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
+
+	if got := re.callCount(); got != 1 {
+		t.Errorf("token endpoint called %d times, want 1", got)
+	}
+	if tok, ok := storedToken(t, cfg); !ok || tok.RefreshToken != "rt-rotated-1" {
+		t.Errorf("stored token = %+v, %v; want refresh rt-rotated-1", tok, ok)
+	}
+	for _, ev := range events {
+		if ev.Content == nil {
+			continue
+		}
+		for _, p := range ev.Content.Parts {
+			if p != nil && p.FunctionResponse != nil {
+				if msg, isErr := p.FunctionResponse.Response["error"]; isErr {
+					t.Errorf("call %s failed: %v", p.FunctionResponse.ID, msg)
+				}
+			}
+		}
+	}
+}
+
+// faultyStore fails Set or Delete with text naming the user, as a real
+// backend's error might.
+type faultyStore struct {
+	auth.CredentialStore
+	failSet, failDelete bool
+}
+
+func (s faultyStore) Set(ctx context.Context, key auth.CredentialKey, cred auth.Credential, expiresAt time.Time) error {
+	if s.failSet {
+		return errors.New("write refused for user-7")
+	}
+	return s.CredentialStore.Set(ctx, key, cred, expiresAt)
+}
+
+func (s faultyStore) Delete(ctx context.Context, key auth.CredentialKey) error {
+	if s.failDelete {
+		return errors.New("delete refused for user-7")
+	}
+	return s.CredentialStore.Delete(ctx, key)
+}
+
+// A store that cannot save the refreshed token, or drop a refused one,
+// reports the sign-in as unavailable without naming the user.
+func TestRefresh_storeFailuresAreUnavailable(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		store  faultyStore
+	}{
+		{"set fails after refresh", http.StatusOK, `{"access_token":"at-new-10","token_type":"Bearer","expires_in":3600}`, faultyStore{failSet: true}},
+		{"delete fails after invalid_grant", http.StatusBadRequest, `{"error":"invalid_grant"}`, faultyStore{failDelete: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			te := newTokenEndpoint(t, tt.status, tt.body, nil)
+			inner := auth.NewInMemoryCredentialStore()
+			cfg := refreshConfig(inner, te, 72*time.Hour)
+			seed(t, cfg, "app-refresh", "user-7", &Token{AccessToken: "at-old-9", RefreshToken: "rt-old-9", Expiry: time.Now().Add(-time.Minute)}, time.Now().Add(24*time.Hour))
+			tt.store.CredentialStore = inner
+			cfg.Store = tt.store
+			rs := newResourceServer(t)
+			h := newHarness(t, "app-refresh", "calendar_list", cfg, calendarTool(t, cfg, rs))
+
+			events := h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
+
+			resp, _ := functionResponse(events, "calendar_list")
+			if msg, _ := resp["error"].(string); msg != "Google Calendar sign-in is unavailable right now" {
+				t.Errorf("error = %q, want %q", msg, "Google Calendar sign-in is unavailable right now")
+			}
+			if got := rs.handlerRuns(); got != 0 {
+				t.Errorf("calendar_list handler ran %d times, want 0", got)
+			}
+		})
+	}
+}
+
+// When another server refreshes the token while this one's refresh is being
+// refused, the entry it stored is kept and served.
+func TestRefresh_refusedAfterAnotherServerRotatedKeepsTheirs(t *testing.T) {
+	store := newRecordingStore()
+	var cfg Config
+	te := newTokenEndpoint(t, http.StatusBadRequest, `{"error":"invalid_grant"}`, func(t *testing.T, r *http.Request) {
+		seed(t, cfg, "app-refresh", "user-7", &Token{AccessToken: "at-other-20", RefreshToken: "rt-other-20", Expiry: time.Now().Add(time.Hour)}, time.Now().Add(24*time.Hour))
+	})
+	cfg = refreshConfig(store, te, 72*time.Hour)
+	seed(t, cfg, "app-refresh", "user-7", &Token{AccessToken: "at-old-9", RefreshToken: "rt-old-9", Expiry: time.Now().Add(-time.Minute)}, time.Now().Add(24*time.Hour))
+	rs := newResourceServer(t)
+	h := newHarness(t, "app-refresh", "calendar_list", cfg, calendarTool(t, cfg, rs))
+
+	h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
+
+	if tok, ok := storedToken(t, cfg); !ok || tok.RefreshToken != "rt-other-20" {
+		t.Errorf("stored token = %+v, %v; want the other server's rt-other-20 kept", tok, ok)
+	}
+	if got := rs.authorizations(); len(got) != 1 || got[0] != "Bearer at-other-20" {
+		t.Errorf("resource server saw %q, want one %q", got, "Bearer at-other-20")
 	}
 }

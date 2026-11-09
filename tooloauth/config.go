@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -142,4 +143,35 @@ func (c Config) store() auth.CredentialStore {
 		return c.Store
 	}
 	return defaultStore()
+}
+
+// cloneTools deep-copies tools, so the copy shares no slice, map or pointer
+// with the original: a caller changing its Config after NewPlugin or
+// Provider must not change the scopes or endpoints a running plugin uses.
+func cloneTools(tools map[string]Tool) map[string]Tool {
+	out := make(map[string]Tool, len(tools))
+	for name, t := range tools {
+		t.Scopes = slices.Clone(t.Scopes)
+		t.Scheme = cloneScheme(t.Scheme)
+		out[name] = t
+	}
+	return out
+}
+
+// cloneScheme deep-copies the parts of s the plugin reads or writes: its
+// flows, their scopes, and its own scopes.
+func cloneScheme(s toolauth.Scheme) toolauth.Scheme {
+	s.Scopes = slices.Clone(s.Scopes)
+	if s.Flows != nil {
+		flows := *s.Flows
+		for _, f := range []**toolauth.OAuthFlow{&flows.Implicit, &flows.Password, &flows.ClientCredentials, &flows.AuthorizationCode} {
+			if *f != nil {
+				flow := **f
+				flow.Scopes = maps.Clone(flow.Scopes)
+				*f = &flow
+			}
+		}
+		s.Flows = &flows
+	}
+	return s
 }

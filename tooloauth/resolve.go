@@ -3,9 +3,12 @@ package tooloauth
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/adk/v2/auth"
 )
 
@@ -29,46 +32,72 @@ type resolver struct {
 	cfg   Config
 	store auth.CredentialStore
 	ttl   time.Duration
+	// refreshes runs one refresh per store key at a time. ADK runs a turn's
+	// tool calls in parallel, and a provider that rotates refresh tokens
+	// refuses the second of two refreshes with the same one, which would
+	// otherwise delete the token the first just stored.
+	refreshes singleflight.Group
 }
 
-// newResolver returns a resolver for cfg, which must be valid.
+// newResolver returns a resolver for a copy of cfg, which must be valid, so a
+// caller changing its Config afterwards changes nothing here.
 func newResolver(cfg Config) *resolver {
 	ttl := cfg.RefreshTokenTTL
 	if ttl == 0 {
 		ttl = DefaultRefreshTokenTTL
 	}
+	cfg.Tools = cloneTools(cfg.Tools)
 	return &resolver{cfg: cfg, store: cfg.store(), ttl: ttl}
 }
 
 // credential returns userID's usable token for toolName in appName,
 // refreshing an expired access token that has a refresh token. It returns
 // errMiss when there is no usable token, and errStore or errEndpoint when the
-// store or the token endpoint fails. Only a refresh the endpoint refuses with
-// invalid_grant deletes the entry, since only that says the refresh token is
-// bad; an outage or a misconfigured client must not sign users out.
+// store or the token endpoint fails.
 func (r *resolver) credential(ctx context.Context, toolName, appName, userID string) (*Token, error) {
 	t := r.cfg.Tools[toolName]
 	key := auth.CredentialKey{AppName: appName, UserID: userID, Key: t.slot()}
-	cred, ok, err := r.store.Get(ctx, key)
+	tok, err := r.lookup(ctx, key)
 	if err != nil {
-		return nil, errStore
+		return nil, err
 	}
-	tok, isToken := cred.(*Token)
-	if !ok || !isToken || tok == nil {
+	if tok == nil || (!tok.usable(time.Now()) && tok.RefreshToken == "") {
 		return nil, errMiss
 	}
 	if tok.usable(time.Now()) {
 		return tok, nil
 	}
-	if tok.RefreshToken == "" {
+	v, err, _ := r.refreshes.Do(flightKey(key), func() (any, error) {
+		return r.refreshStored(ctx, t, key)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*Token), nil
+}
+
+// refreshStored refreshes the token stored under key and stores the result.
+// It reads the entry again first, since a refresh that finished while this
+// one waited may already have replaced it. Only a refresh the endpoint
+// refuses with invalid_grant deletes the entry, since only that says the
+// refresh token is bad; an outage or a misconfigured client must not sign
+// users out. Even then the entry is kept when another server has meanwhile
+// stored a different refresh token.
+func (r *resolver) refreshStored(ctx context.Context, t Tool, key auth.CredentialKey) (*Token, error) {
+	tok, err := r.lookup(ctx, key)
+	switch {
+	case err != nil:
+		return nil, err
+	case tok == nil:
+		return nil, errMiss
+	case tok.usable(time.Now()):
+		return tok, nil
+	case tok.RefreshToken == "":
 		return nil, errMiss
 	}
 	fresh, err := r.refresh(ctx, t, tok)
 	if re, ok := errors.AsType[*oauth2.RetrieveError](err); ok && re.ErrorCode == "invalid_grant" {
-		if err := r.store.Delete(ctx, key); err != nil {
-			return nil, errStore
-		}
-		return nil, errMiss
+		return r.dropRefused(ctx, key, tok.RefreshToken)
 	}
 	if err != nil {
 		return nil, errEndpoint
@@ -77,6 +106,52 @@ func (r *resolver) credential(ctx context.Context, toolName, appName, userID str
 		return nil, err
 	}
 	return fresh, nil
+}
+
+// dropRefused deletes the entry under key after refused, its refresh token,
+// was refused, unless the entry now holds another refresh token: then
+// another server refreshed it first, and its token is served if usable.
+func (r *resolver) dropRefused(ctx context.Context, key auth.CredentialKey, refused string) (*Token, error) {
+	cur, err := r.lookup(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if cur != nil && cur.RefreshToken != refused {
+		if cur.usable(time.Now()) {
+			return cur, nil
+		}
+		return nil, errMiss
+	}
+	if err := r.store.Delete(ctx, key); err != nil {
+		return nil, errStore
+	}
+	return nil, errMiss
+}
+
+// lookup returns the *Token stored under key, or nil when there is none or
+// the entry holds another kind of credential. A store failure is errStore.
+func (r *resolver) lookup(ctx context.Context, key auth.CredentialKey) (*Token, error) {
+	cred, ok, err := r.store.Get(ctx, key)
+	if err != nil {
+		return nil, errStore
+	}
+	tok, isToken := cred.(*Token)
+	if !ok || !isToken {
+		return nil, nil
+	}
+	return tok, nil
+}
+
+// flightKey flattens key for refreshes, length-prefixing each field so no
+// character inside one can make two keys collide.
+func flightKey(key auth.CredentialKey) string {
+	var b strings.Builder
+	for _, f := range []string{key.AppName, key.UserID, key.Key} {
+		b.WriteString(strconv.Itoa(len(f)))
+		b.WriteByte(':')
+		b.WriteString(f)
+	}
+	return b.String()
 }
 
 // save stores tok under key until r.expiresAt(tok, now), or not at all when

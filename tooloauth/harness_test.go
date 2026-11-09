@@ -21,10 +21,12 @@ import (
 	"google.golang.org/genai"
 )
 
-// scriptedModel calls one tool for every user message and answers "done"
-// once the tool's response comes back, so each user turn runs the tool once.
+// scriptedModel calls one tool for every user message, perTurn times in
+// one response (ADK runs those calls in parallel), and answers "done" once
+// the tool's responses come back.
 type scriptedModel struct {
 	toolName string
+	perTurn  int
 	mu       sync.Mutex
 	calls    int
 }
@@ -45,13 +47,14 @@ func (m *scriptedModel) GenerateContent(_ context.Context, req *model.LLMRequest
 				}
 			}
 		}
+		var parts []*genai.Part
 		m.mu.Lock()
-		m.calls++
-		id := fmt.Sprintf("call-%d", m.calls)
+		for range max(m.perTurn, 1) {
+			m.calls++
+			parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{ID: fmt.Sprintf("call-%d", m.calls), Name: m.toolName, Args: map[string]any{}}})
+		}
 		m.mu.Unlock()
-		yield(&model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{
-			{FunctionCall: &genai.FunctionCall{ID: id, Name: m.toolName, Args: map[string]any{}}},
-		}}}, nil)
+		yield(&model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: parts}}, nil)
 	}
 }
 
@@ -133,11 +136,18 @@ type harness struct {
 
 func newHarness(t *testing.T, appName, toolName string, cfg Config, tools ...tool.Tool) *harness {
 	t.Helper()
+	return newParallelHarness(t, appName, toolName, 1, cfg, tools...)
+}
+
+// newParallelHarness is newHarness with the model calling toolName perTurn
+// times in each response.
+func newParallelHarness(t *testing.T, appName, toolName string, perTurn int, cfg Config, tools ...tool.Tool) *harness {
+	t.Helper()
 	p, err := NewPlugin(cfg)
 	if err != nil {
 		t.Fatalf("NewPlugin() error = %v", err)
 	}
-	a, err := llmagent.New(llmagent.Config{Name: "assistant", Model: &scriptedModel{toolName: toolName}, Tools: tools})
+	a, err := llmagent.New(llmagent.Config{Name: "assistant", Model: &scriptedModel{toolName: toolName, perTurn: perTurn}, Tools: tools})
 	if err != nil {
 		t.Fatalf("llmagent.New() error = %v", err)
 	}

@@ -208,3 +208,27 @@ func TestProvider_unusableStoredCredentialIsAMiss(t *testing.T) {
 		})
 	}
 }
+
+// The plugin and provider keep their own copy of the Config: changing the
+// caller's scopes afterwards does not move them to another store key.
+func TestPlugin_configChangedAfterwardsIsIgnored(t *testing.T) {
+	cfg := calendarConfig(auth.NewInMemoryCredentialStore())
+	seed(t, cfg, "app-hit", "user-7", &Token{AccessToken: "at-seeded-44", Expiry: time.Now().Add(time.Hour)}, time.Now().Add(24*time.Hour))
+	rs := newResourceServer(t)
+	h := newHarness(t, "app-hit", "calendar_list", cfg, calendarTool(t, cfg, rs))
+
+	cfg.Tools["calendar_list"].Scopes[0] = "calendar.write"
+	cfg.Tools["calendar_list"].Scheme.Flows.AuthorizationCode.TokenURL = "https://elsewhere.example.com/token"
+	h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
+
+	if got := rs.authorizations(); len(got) != 1 || got[0] != "Bearer at-seeded-44" {
+		t.Errorf("resource server saw %q, want one %q", got, "Bearer at-seeded-44")
+	}
+}
+
+func TestProvider_rejectsInvalidConfig(t *testing.T) {
+	_, err := Config{}.Provider("calendar_list")
+	if err == nil || err.Error() != "tooloauth: Config.Tools is empty" {
+		t.Errorf("Provider() error = %v, want %q", err, "tooloauth: Config.Tools is empty")
+	}
+}
