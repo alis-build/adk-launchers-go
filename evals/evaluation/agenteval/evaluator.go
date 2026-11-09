@@ -69,6 +69,15 @@ func aggregateByMean(evalSetID string, results []models.EvalCaseResult) []models
 			OverallEvalMetricResults: meanMetricResults(cases),
 		}
 		agg.FinalEvalStatus = finalStatus(agg.OverallEvalMetricResults)
+		// A run that failed without producing any metric result (its
+		// inference crashed) fails the case, as in adk-python; otherwise a
+		// crash would read as merely not evaluated.
+		for _, c := range cases {
+			if c.FinalEvalStatus == models.EvalStatusFailed && len(c.OverallEvalMetricResults) == 0 {
+				agg.FinalEvalStatus = models.EvalStatusFailed
+				break
+			}
+		}
 		out = append(out, agg)
 	}
 	return out

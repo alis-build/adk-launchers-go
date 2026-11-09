@@ -2,6 +2,7 @@ package agenteval_test
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"testing"
 
@@ -41,21 +42,26 @@ func (e informationalEvaluator) EvaluateInvocations(_ context.Context, actual, _
 	return res, nil
 }
 
+// answerOK is an agent run that replies "ok".
+func answerOK(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+	return func(yield func(*session.Event, error) bool) {
+		ev := session.NewEvent(ctx, ctx.InvocationID())
+		ev.Author = "app"
+		ev.Content = genai.NewContentFromText("ok", genai.RoleModel)
+		yield(ev, nil)
+	}
+}
+
 // newEvalService builds a LocalEvalService over a real runtime whose agent
 // answers "ok", with set1 holding one single-turn case.
 func newEvalService(t *testing.T, registry *metrics.Registry) (*service.LocalEvalService, *models.EvalSet) {
+	return newEvalServiceWithAgent(t, registry, answerOK)
+}
+
+// newEvalServiceWithAgent is newEvalService with the agent's Run supplied.
+func newEvalServiceWithAgent(t *testing.T, registry *metrics.Registry, run func(agent.InvocationContext) iter.Seq2[*session.Event, error]) (*service.LocalEvalService, *models.EvalSet) {
 	t.Helper()
-	a, err := agent.New(agent.Config{
-		Name: "app",
-		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
-			return func(yield func(*session.Event, error) bool) {
-				ev := session.NewEvent(ctx, ctx.InvocationID())
-				ev.Author = "app"
-				ev.Content = genai.NewContentFromText("ok", genai.RoleModel)
-				yield(ev, nil)
-			}
-		},
-	})
+	a, err := agent.New(agent.Config{Name: "app", Run: run})
 	if err != nil {
 		t.Fatalf("agent.New: %v", err)
 	}
@@ -115,5 +121,59 @@ func TestEvaluateEvalSetKeepsInformationalMetricOutOfVerdict(t *testing.T) {
 	}
 	if results[0].FinalEvalStatus != models.EvalStatusNotEvaluated {
 		t.Errorf("case FinalEvalStatus = %d, want %d (no metric gave a verdict)", results[0].FinalEvalStatus, models.EvalStatusNotEvaluated)
+	}
+}
+
+// Mirrors adk-python test_agent_evaluator.py: a run whose inference crashed
+// fails the case even though no metric ran.
+func TestEvaluateEvalSetFailsWhenInferenceCrashed(t *testing.T) {
+	svc, set := newEvalServiceWithAgent(t, metrics.NewDefaultRegistry(), func(agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) { yield(nil, errors.New("agent crashed")) }
+	})
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"criteria": {"response_match_score": 0.8}}`))
+	if err != nil {
+		t.Fatalf("UnmarshalEvalConfig: %v", err)
+	}
+	results, err := agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 2)
+	if err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+	if len(results) != 1 || results[0].FinalEvalStatus != models.EvalStatusFailed {
+		t.Errorf("results = %+v, want the case FAILED", results)
+	}
+}
+
+// unscoredEvaluator never produces a score, like a judge that could not run.
+type unscoredEvaluator struct{}
+
+func (unscoredEvaluator) EvaluateInvocations(context.Context, []models.Invocation, []models.Invocation, *models.ConversationScenario) (metrics.EvaluationResult, error) {
+	return metrics.EvaluationResult{OverallEvalStatus: models.EvalStatusNotEvaluated}, nil
+}
+
+// Mirrors adk-python test_agent_evaluator.py: a metric that never produced a
+// score is NOT_EVALUATED, not FAILED. Regression pin.
+func TestEvaluateEvalSetReportsUnscoredMetricAsNotEvaluated(t *testing.T) {
+	registry := metrics.NewDefaultRegistry()
+	registry.RegisterEvaluator(models.MetricInfo{MetricName: models.MetricFinalResponseMatchV2},
+		func(models.EvalMetric, *metrics.RegistryConfig) (metrics.Evaluator, error) {
+			return unscoredEvaluator{}, nil
+		})
+	svc, set := newEvalService(t, registry)
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"criteria": {"final_response_match_v2": 0.5}}`))
+	if err != nil {
+		t.Fatalf("UnmarshalEvalConfig: %v", err)
+	}
+	results, err := agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 2)
+	if err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+	if len(results) != 1 || len(results[0].OverallEvalMetricResults) != 1 {
+		t.Fatalf("results = %+v, want one case with one metric", results)
+	}
+	if got := results[0].OverallEvalMetricResults[0].EvalStatus; got != models.EvalStatusNotEvaluated {
+		t.Errorf("metric status = %d, want %d", got, models.EvalStatusNotEvaluated)
+	}
+	if results[0].FinalEvalStatus == models.EvalStatusFailed {
+		t.Error("case FAILED, want not failed for an unscored metric")
 	}
 }
