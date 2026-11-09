@@ -328,3 +328,41 @@ func TestUnmarshalEvalConfigFloatThreshold(t *testing.T) {
 		t.Fatalf("metrics = %+v", metrics)
 	}
 }
+
+func TestEffectiveThresholdPrefersCriterion(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		metric models.EvalMetric
+		want   float64
+	}{
+		{
+			// adk-python test_rubric_based_evaluator.py: criterion 0.1 wins over top-level 0.9.
+			name: "rubric criterion",
+			metric: models.EvalMetric{Threshold: 0.9, Criterion: models.CriterionField(models.RubricsBasedCriterion{
+				BaseCriterion: models.BaseCriterion{Threshold: 0.1},
+			})},
+			want: 0.1,
+		},
+		{
+			// adk-python test_final_response_match_v1.py deprecated-threshold-only case.
+			name:   "no criterion",
+			metric: models.EvalMetric{Threshold: 0.8},
+			want:   0.8,
+		},
+		{
+			// Go-only: pins the user-simulator criterion case.
+			name: "user simulator criterion",
+			metric: models.EvalMetric{Threshold: 0.2, Criterion: models.CriterionField(models.LlmBackedUserSimulatorCriterion{
+				LlmAsAJudgeCriterion: models.LlmAsAJudgeCriterion{BaseCriterion: models.BaseCriterion{Threshold: 0.6}},
+				StopSignal:           "</finished>",
+			})},
+			want: 0.6,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := models.EffectiveThreshold(tc.metric); got != tc.want {
+				t.Errorf("models.EffectiveThreshold() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -74,11 +74,27 @@ func thresholdFromCriterion(c jsonCriterion) (float64, error) {
 		return v.Threshold, nil
 	case ToolTrajectoryCriterion:
 		return v.Threshold, nil
+	case LlmBackedUserSimulatorCriterion:
+		return v.Threshold, nil
 	case float64:
 		return v, nil
 	default:
 		return 0, fmt.Errorf("unsupported criterion type %T", c.value)
 	}
+}
+
+// EffectiveThreshold returns the threshold a metric is graded with: the
+// criterion's threshold whenever a criterion is set, else m.Threshold. This is
+// adk-python's _get_metric_threshold rule.
+func EffectiveThreshold(m EvalMetric) float64 {
+	if m.Criterion.value == nil {
+		return m.Threshold
+	}
+	t, err := thresholdFromCriterion(m.Criterion)
+	if err != nil {
+		return m.Threshold
+	}
+	return t
 }
 
 // UnmarshalEvalConfig parses EvalConfig JSON, accepting bare float thresholds in criteria.

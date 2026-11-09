@@ -164,3 +164,38 @@ func loadGoldenEvalSet(t *testing.T) (models.EvalSet, error) {
 	}
 	return models.ParseEvalSetFile("golden_response_match", data)
 }
+
+// Mirrors adk-python test_final_response_match_v1.py: the criterion's
+// threshold grades the score when the top-level threshold is unset.
+func TestResponseMatchScoreGradesWithCriterionThreshold(t *testing.T) {
+	ev, err := metrics.DefaultRegistry.GetEvaluator(models.EvalMetric{
+		MetricName: models.MetricResponseMatchScore,
+		Criterion:  models.CriterionField(models.BaseCriterion{Threshold: 0.8}),
+	})
+	if err != nil {
+		t.Fatalf("GetEvaluator: %v", err)
+	}
+	expected := models.Invocation{
+		UserContent:   genai.NewContentFromText("q", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("This is a test.", genai.RoleModel),
+	}
+	for _, tc := range []struct {
+		candidate string
+		want      models.EvalStatus
+	}{
+		{"Nothing in common.", models.EvalStatusFailed},
+		{"This is a test.", models.EvalStatusPassed},
+	} {
+		actual := models.Invocation{
+			UserContent:   expected.UserContent,
+			FinalResponse: genai.NewContentFromText(tc.candidate, genai.RoleModel),
+		}
+		result, err := ev.EvaluateInvocations(context.Background(), []models.Invocation{actual}, []models.Invocation{expected}, nil)
+		if err != nil {
+			t.Fatalf("EvaluateInvocations(%q): %v", tc.candidate, err)
+		}
+		if result.OverallEvalStatus != tc.want {
+			t.Errorf("candidate %q: status %d, want %d", tc.candidate, result.OverallEvalStatus, tc.want)
+		}
+	}
+}

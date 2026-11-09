@@ -20,13 +20,9 @@ func newTrajectoryEvaluator(metric models.EvalMetric) (Evaluator, error) {
 		threshold: metric.Threshold,
 		matchType: models.ToolTrajectoryMatchExact,
 	}
-	// A ToolTrajectory criterion, when present, overrides the top-level
-	// threshold and supplies the match type. Fall back to metric.Threshold /
-	// exact-match when no criterion is provided.
+	// The registry has already resolved the threshold from the criterion; the
+	// criterion supplies only the match type here.
 	if c, ok := metric.Criterion.AsToolTrajectory(); ok {
-		if c.Threshold != 0 {
-			ev.threshold = c.Threshold
-		}
 		ev.matchType = c.MatchType
 	}
 	return ev, nil

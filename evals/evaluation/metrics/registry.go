@@ -60,6 +60,9 @@ func (r *Registry) GetEvaluator(metric models.EvalMetric) (Evaluator, error) {
 	if !ok {
 		return nil, &ErrMetricNotFound{MetricName: metric.MetricName}
 	}
+	// One choke point: every evaluator grades with the criterion's threshold
+	// when a criterion is set.
+	metric.Threshold = models.EffectiveThreshold(metric)
 	return entry.factory(metric, &cfg)
 }
 

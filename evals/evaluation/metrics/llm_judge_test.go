@@ -941,3 +941,40 @@ func TestAggregateOverallRubricsPreservesRationale(t *testing.T) {
 		}
 	}
 }
+
+// Mirrors adk-python test_rubric_based_evaluator.py: criterion threshold 0.1
+// grades a 0.5 score PASSED although the top-level threshold is 0.9.
+func TestRubricEvaluatorGradesWithCriterionThreshold(t *testing.T) {
+	rubrics := []models.Rubric{rubric("1", "be helpful"), rubric("2", "be concise")}
+	fake := &fakeJudge{responses: []string{
+		"Property: be helpful\nRationale: ok\nVerdict: yes\n\nProperty: be concise\nRationale: ok\nVerdict: no\n",
+	}}
+	reg := NewDefaultRegistry()
+	reg.SetConfig(RegistryConfig{JudgeClient: fake})
+	metric := models.EvalMetric{
+		MetricName: models.MetricRubricBasedFinalResponseQualityV1,
+		Threshold:  0.9,
+		Criterion: models.CriterionField(models.RubricsBasedCriterion{
+			BaseCriterion: models.BaseCriterion{Threshold: 0.1},
+			Rubrics:       rubrics,
+		}),
+	}
+	ev, err := reg.GetEvaluator(metric)
+	if err != nil {
+		t.Fatalf("GetEvaluator: %v", err)
+	}
+	inv := models.Invocation{
+		UserContent:   genai.NewContentFromText("q", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("a", genai.RoleModel),
+	}
+	result, err := ev.EvaluateInvocations(context.Background(), []models.Invocation{inv}, []models.Invocation{inv}, nil)
+	if err != nil {
+		t.Fatalf("EvaluateInvocations: %v", err)
+	}
+	if result.OverallScore == nil || *result.OverallScore != 0.5 {
+		t.Fatalf("score = %v, want 0.5", result.OverallScore)
+	}
+	if result.OverallEvalStatus != models.EvalStatusPassed {
+		t.Errorf("status = %d, want PASSED (0.5 >= criterion threshold 0.1)", result.OverallEvalStatus)
+	}
+}
