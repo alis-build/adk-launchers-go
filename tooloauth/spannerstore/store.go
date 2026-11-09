@@ -72,7 +72,8 @@ func newStore(client *spanner.Client, keys keyWrapper) *Store {
 	return &Store{client: client, keys: keys}
 }
 
-// Get implements auth.CredentialStore. A row that does not decrypt, such as
+// Get implements auth.CredentialStore. A row within auth.ExpirySkew of its
+// expiry is a miss. A row that does not decrypt, such as
 // a ciphertext copied from another row, is an error, never another user's
 // token. Errors never name the key or carry token text.
 func (s *Store) Get(ctx context.Context, key auth.CredentialKey) (auth.Credential, bool, error) {
@@ -93,6 +94,12 @@ func (s *Store) Get(ctx context.Context, key auth.CredentialKey) (auth.Credentia
 	}
 	if err := row.Columns(&stored.rowKey, &stored.wrappedKey, &stored.nonce, &stored.ciphertext, &stored.expireTime); err != nil {
 		return nil, false, fmt.Errorf("spannerstore: read credential: %w", err)
+	}
+	// Expired, or within the skew producers decline to cache inside, as the
+	// CredentialStore contract and ADK's in-memory store treat it. The row
+	// deletion policy removes it later; Get neither decrypts nor deletes it.
+	if !stored.expireTime.After(time.Now().Add(auth.ExpirySkew)) {
+		return nil, false, nil
 	}
 	dataKey, err := s.keys.Unwrap(ctx, stored.wrappedKey, rk)
 	if err != nil {
