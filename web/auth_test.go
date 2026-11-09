@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	iam "go.alis.build/iam/v3"
+	alismux "go.alis.build/mux"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/cmd/launcher"
 	adkapi "google.golang.org/adk/v2/cmd/launcher/web/api"
@@ -134,5 +135,35 @@ func TestAPIIdentityThroughLauncher(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://localhost/api/health", nil))
 	if rec.Code != http.StatusOK {
 		t.Errorf("anonymous GET /api/health = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestRequireIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		identity *iam.Identity
+		wantNext bool
+	}{
+		{name: "identity with an ID", identity: &iam.Identity{ID: "u", Type: iam.User}, wantNext: true},
+		{name: "no identity"},
+		{name: "identity without an ID", identity: &iam.Identity{Email: "a@x.com", Type: iam.User}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://localhost/x", nil)
+			if tc.identity != nil {
+				req = req.WithContext(tc.identity.Context(req.Context()))
+			}
+			called := false
+			err := RequireIdentity(httptest.NewRecorder(), req, func(http.ResponseWriter, *http.Request) error {
+				called = true
+				return nil
+			})
+			if called != tc.wantNext {
+				t.Errorf("next called = %v, want %v", called, tc.wantNext)
+			}
+			if !tc.wantNext && alismux.StatusCode(err) != http.StatusUnauthorized {
+				t.Errorf("error = %v (status %d), want 401", err, alismux.StatusCode(err))
+			}
+		})
 	}
 }

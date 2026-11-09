@@ -106,9 +106,10 @@ func DefaultAuthGateway(w http.ResponseWriter, r *http.Request, next alismux.Fun
 // 401 instead of a panic. The identity is normally injected by the
 // authorization gateway (see [DefaultAuthGateway]) from the upstream
 // x-alis-identity header; this middleware only enforces its presence and never
-// authenticates.
+// authenticates. An identity with an empty ID counts as missing: a handler
+// would otherwise act as user "".
 func RequireIdentity(w http.ResponseWriter, r *http.Request, next alismux.Func) error {
-	if _, err := iam.FromContext(r.Context()); err != nil {
+	if id, err := iam.FromContext(r.Context()); err != nil || id.ID == "" {
 		return alismux.UnauthorizedErr("identity required")
 	}
 	return next(w, r)
