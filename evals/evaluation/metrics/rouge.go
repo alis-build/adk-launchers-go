@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"golang.org/x/text/unicode/norm"
 	"google.golang.org/genai"
 )
@@ -51,7 +53,10 @@ func CalculateRouge1Scores(candidate, reference string) Rouge1Scores {
 // words; anything else separates. ASCII words then go through the default
 // [a-z0-9]+ tokenizer, so English scoring is unchanged.
 func tokens(text string) []string {
-	text = strings.ToLower(norm.NFKC.String(text))
+	// cases.Lower applies the full Unicode rules (Greek final sigma, Turkish
+	// dotted capital I) that Python's str.lower() applies; strings.ToLower
+	// maps rune by rune and does not.
+	text = cases.Lower(language.Und).String(norm.NFKC.String(text))
 	var b strings.Builder
 	for _, r := range text {
 		switch {

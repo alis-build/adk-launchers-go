@@ -274,3 +274,15 @@ func TestRouge1CombiningMarksStayAttached(t *testing.T) {
 func TestRouge1NormalizesCompatibilityForms(t *testing.T) {
 	assertRouge(t, "ｈｅｌｌｏ", "hello", 1, 1, 1)
 }
+
+// adk-python lowercases with str.lower(), which applies the Greek final-sigma
+// rule: ΟΔΟΣ tokenizes as "οδος" (captured from adk-python's tokenizer).
+func TestRouge1LowercasesLikePython(t *testing.T) {
+	assertRouge(t, "ΟΔΟΣ", "οδος", 1, 1, 1)
+}
+
+// Devanagari vowel signs are combining marks and stay part of the word, so
+// नमस्ते and नमस are different tokens.
+func TestRouge1DevanagariMarksStayInWord(t *testing.T) {
+	assertRouge(t, "नमस्ते", "नमस", 0, 0, 0)
+}
