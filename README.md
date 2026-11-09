@@ -225,12 +225,17 @@ All routes are under `/api/dev/apps/{appName}/...` by default (match webui `-api
 | GET            | `/api/dev/apps/{app}/eval_sets/{id}/evals`          | List eval case IDs (legacy)    |
 | GET/PUT/DELETE | `/api/dev/apps/{app}/eval_sets/{id}/evals/{caseId}` | CRUD eval case                 |
 | POST           | `/api/dev/apps/{app}/eval_sets/{id}/add_session`    | Session → eval case            |
-| POST           | `/api/dev/apps/{app}/eval_sets/{id}/run_eval`       | Run inference + evaluate       |
+| POST           | `/api/dev/apps/{app}/eval-sets/{id}/run`            | Run inference + evaluate; answers `{"runEvalResults": [...]}` (canonical) |
+| POST           | `/api/dev/apps/{app}/eval_sets/{id}/run_eval`       | Run inference + evaluate; answers a bare array (legacy) |
 | GET            | `/api/dev/apps/{app}/eval_results`                  | List result IDs                |
 | GET            | `/api/dev/apps/{app}/eval_results/{resultId}`       | Get eval result                |
 | GET            | `/api/dev/apps/{app}/metrics-info`                  | Registered metric metadata     |
 
-See [`evals/doc.go`](evals/doc.go) for routes and storage options.
+A run body that sets `live_model_config` or `user_simulator_config` is answered 400 until live and simulator runs are supported.
+
+Runs execute as the caller, so an agent that reads `user:` state or the memory service can score differently for different people. Seed what the agent needs in the case's session state, or compare results only within one caller's runs.
+
+See [`evals/doc.go`](evals/doc.go) for routes, request and response shapes, and storage options.
 
 #### AG-UI architecture
 
@@ -285,6 +290,7 @@ ADK v2.4 to v2.7 change runtime behaviour that tests do not catch:
 - **Telemetry schema.** Traces follow the OpenTelemetry GenAI semantic conventions v2. Dashboards and alerts built on the old fields need updating; `ADK_TELEMETRY_SCHEMA_VERSION_OPT_IN=otel_semconv_1_36` restores the old format until at least March 31, 2027.
 - **ADK's REST API refuses cross-origin browsers** whose origin is not allowed. Add origins with the web launcher's `-allow_origins` or `launcher.Config.AllowedOrigins`. This affects ADK's `api` sublauncher only; agui, scheduler, evals and console keep their own CORS options.
 - **Optional instruction placeholders.** `{key?}` and `{artifact.name?}` render empty only when the key or artifact is missing; any other session or artifact service error now fails the run, and an `agenttool` sub-agent with an optional artifact placeholder fails when no artifact service is configured. The web launcher does not default one, so configure a real service.
+- **Eval scores can change without any agent change.** Criterion thresholds now grade HTTP runs (many used to grade against 0 and pass), thought parts no longer count as response text, a partial judge reply scores nothing, and an informational metric no longer passes or fails a case. Compare results from before and after the update with that in mind.
 - **Memory service default.** The web launcher defaults a missing memory service to an in-memory one (ADK's REST API panics without one). That config is shared, so agui, scheduler and evals get it too: a memory tool that used to fail without a service now gets instance-local results that are lost on restart. Configure a real memory service in production.
 
 ## License

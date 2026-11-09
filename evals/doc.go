@@ -23,6 +23,12 @@
 //     (OAuth client secrets, tokens, PKCE verifiers, API keys) from the
 //     response, as adk-python's dev server does. The stored data keeps them.
 //
+// Because a run executes as the caller, an agent that reads user:-prefixed
+// state or the memory service sees the caller's own data, so the same eval
+// set can score differently for different people. Keep evaluated agents off
+// user state and memory, seeding what they need in the case's session state,
+// or compare results only within one caller's runs.
+//
 // # Usage
 //
 // Register with the web launcher and enable the keyword at runtime:
@@ -92,6 +98,28 @@
 // [generator.Generator] and [simulation.UserSimulator] implementations; scoring
 // uses [metrics.Registry]. See the evaluation/ subpackages for programmatic use
 // without the HTTP launcher.
+//
+// A metric result may carry status 4 (INFORMATIONAL): the metric reports a
+// value but never passes or fails a case.
+//
+// # Run request and response
+//
+// The run body is accepted in adk-web main's snake_case form (eval_case_ids,
+// eval_metrics) and in the ADK v2.7.1 bundle's camelCase form (evalCaseIds,
+// evalMetrics). A body that sets live_model_config or user_simulator_config
+// is answered 400 until live and simulator runs are supported.
+//
+// POST .../eval-sets/{id}/run answers {"runEvalResults": [...]}, as adk-python
+// does; the legacy POST .../eval_sets/{id}/run_eval answers a bare array.
+// adk-web main types the run response as a bare array, a mismatch it also has
+// with adk-python, and its History tab loads results through eval_results.
+//
+// # Eval sessions
+//
+// Each run's inference session ID starts with adk-eval-session-, a valid
+// Agent Engine session ID. [generator.IsEvalSessionID] recognizes it and the
+// legacy ___eval___session___ prefix, so a launcher that lists sessions can
+// hide eval runs.
 //
 // # Run-level session state
 //
