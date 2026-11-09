@@ -80,14 +80,20 @@ func meanMetricResults(cases []models.EvalCaseResult) []models.EvalMetricResult 
 		total  float64
 		count  int
 		metric models.EvalMetricResult
+		// informational stays true while every run reported the metric as
+		// informational: its mean is a value, not a verdict.
+		informational bool
 	}
 	byName := make(map[string]*acc)
 	for _, c := range cases {
 		for _, m := range c.OverallEvalMetricResults {
 			a := byName[m.MetricName]
 			if a == nil {
-				a = &acc{metric: m}
+				a = &acc{metric: m, informational: true}
 				byName[m.MetricName] = a
+			}
+			if m.EvalStatus != models.EvalStatusInformational {
+				a.informational = false
 			}
 			if m.Score != nil {
 				a.total += *m.Score
@@ -101,7 +107,11 @@ func meanMetricResults(cases []models.EvalCaseResult) []models.EvalMetricResult 
 		if a.count > 0 {
 			mean := a.total / float64(a.count)
 			m.Score = &mean
-			m.EvalStatus = statusForMean(mean, m.Threshold)
+			if a.informational {
+				m.EvalStatus = models.EvalStatusInformational
+			} else {
+				m.EvalStatus = statusForMean(mean, m.Threshold)
+			}
 		}
 		out = append(out, m)
 	}
@@ -117,10 +127,13 @@ func statusForMean(score, threshold float64) models.EvalStatus {
 }
 
 // finalStatus derives case status from aggregated metric results.
+// Informational metrics never pass or fail a case.
 func finalStatus(metrics []models.EvalMetricResult) models.EvalStatus {
 	status := models.EvalStatusNotEvaluated
 	for _, m := range metrics {
 		switch m.EvalStatus {
+		case models.EvalStatusInformational:
+			continue
 		case models.EvalStatusPassed:
 			status = models.EvalStatusPassed
 		case models.EvalStatusFailed:

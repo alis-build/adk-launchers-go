@@ -10,4 +10,7 @@ const (
 	EvalStatusFailed EvalStatus = 2
 	// EvalStatusNotEvaluated means scoring did not run or could not produce a score.
 	EvalStatusNotEvaluated EvalStatus = 3
+	// EvalStatusInformational means a value was reported but the metric gives
+	// no verdict: it never passes or fails a case.
+	EvalStatusInformational EvalStatus = 4
 )

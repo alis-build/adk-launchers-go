@@ -437,11 +437,14 @@ func (s *LocalEvalService) evaluateMetric(
 }
 
 // finalEvalStatus aggregates metric statuses: any Failed fails the case; otherwise
-// Passed when at least one metric passed; else NotEvaluated.
+// Passed when at least one metric passed; else NotEvaluated. Informational
+// metrics never pass or fail a case, as in adk-python.
 func finalEvalStatus(overall []models.EvalMetricResult) models.EvalStatus {
 	status := models.EvalStatusNotEvaluated
 	for _, m := range overall {
 		switch m.EvalStatus {
+		case models.EvalStatusInformational:
+			continue
 		case models.EvalStatusPassed:
 			status = models.EvalStatusPassed
 		case models.EvalStatusFailed:
