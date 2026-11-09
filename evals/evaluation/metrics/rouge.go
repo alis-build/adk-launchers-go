@@ -56,13 +56,15 @@ func tokenCounts(tok []string) map[string]int {
 }
 
 // textFromContent concatenates text parts from genai Content for metric input.
+// Thought parts are model reasoning, not the response, and are left out, as
+// in adk-python.
 func textFromContent(c *genai.Content) string {
 	if c == nil {
 		return ""
 	}
 	var parts []string
 	for _, p := range c.Parts {
-		if p != nil && p.Text != "" {
+		if p != nil && p.Text != "" && !p.Thought {
 			parts = append(parts, p.Text)
 		}
 	}

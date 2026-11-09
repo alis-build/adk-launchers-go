@@ -978,3 +978,62 @@ func TestRubricEvaluatorGradesWithCriterionThreshold(t *testing.T) {
 		t.Errorf("status = %d, want PASSED (0.5 >= criterion threshold 0.1)", result.OverallEvalStatus)
 	}
 }
+
+// Inputs from adk-python test_final_response_match_v2.py; Go's prompt template
+// differs, so only containment is asserted.
+func TestFinalResponseMatchV2PromptExcludesThoughtParts(t *testing.T) {
+	fake := &fakeJudge{responses: []string{`{"is_the_agent_response_valid": "valid"}`}}
+	reg := NewDefaultRegistry()
+	reg.SetConfig(RegistryConfig{JudgeClient: fake})
+	ev, err := reg.GetEvaluator(models.EvalMetric{MetricName: models.MetricFinalResponseMatchV2, Threshold: 0.5})
+	if err != nil {
+		t.Fatalf("GetEvaluator: %v", err)
+	}
+	withThought := func(thought, text string) *genai.Content {
+		return &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: thought, Thought: true}, {Text: text}}}
+	}
+	user := genai.NewContentFromText("q", genai.RoleUser)
+	actual := models.Invocation{UserContent: user, FinalResponse: withThought("candidate thought", "candidate text")}
+	expected := models.Invocation{UserContent: user, FinalResponse: withThought("reference thought", "reference text")}
+	_, _ = ev.EvaluateInvocations(context.Background(), []models.Invocation{actual}, []models.Invocation{expected}, nil)
+	if len(fake.prompts) == 0 {
+		t.Fatal("judge was not called")
+	}
+	p := fake.prompts[0]
+	for _, want := range []string{"candidate text", "reference text"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"candidate thought", "reference thought"} {
+		if strings.Contains(p, unwanted) {
+			t.Errorf("prompt contains thought text %q", unwanted)
+		}
+	}
+}
+
+// Mirrors adk-python test_rubric_based_multi_turn_trajectory_evaluator.py:
+// agent thought parts are left out of the judge's dialogue.
+func TestMultiTurnDialogueLeavesOutThoughtParts(t *testing.T) {
+	inv := models.Invocation{
+		InvocationID: "banking_agent",
+		UserContent:  &genai.Content{Parts: []*genai.Part{{Text: "What is my balance?"}}},
+		IntermediateData: models.InvocationEventsField(models.InvocationEvents{InvocationEvents: []models.InvocationEvent{{
+			Author: "banking_agent",
+			Content: &genai.Content{Parts: []*genai.Part{
+				{Text: "I need the balance tool.", Thought: true},
+				{Text: "Let me check."},
+			}},
+		}}}),
+		FinalResponse: &genai.Content{Parts: []*genai.Part{
+			{Text: "The tool said 100.", Thought: true},
+			{Text: "Your balance is $100."},
+		}},
+	}
+	want := "USER TURN 1: What is my balance?\n" +
+		"AGENT (banking_agent) TURN 1: Let me check.\n" +
+		"AGENT (banking_agent) TURN 1: Your balance is $100."
+	if got := assembleDialogueHistory([]models.Invocation{inv}); got != want {
+		t.Errorf("dialogue =\n%s\nwant\n%s", got, want)
+	}
+}

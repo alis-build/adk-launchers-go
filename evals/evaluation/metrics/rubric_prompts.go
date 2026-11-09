@@ -488,7 +488,8 @@ func assembleDialogueHistory(actuals []models.Invocation) string {
 					if p == nil {
 						continue
 					}
-					if p.Text != "" {
+					// Thought parts are reasoning, not dialogue.
+					if p.Text != "" && !p.Thought {
 						texts = append(texts, p.Text)
 					}
 				}

@@ -199,3 +199,33 @@ func TestResponseMatchScoreGradesWithCriterionThreshold(t *testing.T) {
 		}
 	}
 }
+
+// Mirrors adk-python test_final_response_match_v1.py: a thought part is not
+// part of the response ROUGE scores.
+func TestResponseMatchScoreIgnoresThoughtParts(t *testing.T) {
+	ev, err := metrics.DefaultRegistry.GetEvaluator(models.EvalMetric{MetricName: models.MetricResponseMatchScore, Threshold: 0.8})
+	if err != nil {
+		t.Fatalf("GetEvaluator: %v", err)
+	}
+	actual := models.Invocation{
+		UserContent: genai.NewContentFromText("q", genai.RoleUser),
+		FinalResponse: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{
+			{Text: "Let me reason about the weather.", Thought: true},
+			{Text: "It is sunny today."},
+		}},
+	}
+	expected := models.Invocation{
+		UserContent:   actual.UserContent,
+		FinalResponse: genai.NewContentFromText("It is sunny today.", genai.RoleModel),
+	}
+	result, err := ev.EvaluateInvocations(context.Background(), []models.Invocation{actual}, []models.Invocation{expected}, nil)
+	if err != nil {
+		t.Fatalf("EvaluateInvocations: %v", err)
+	}
+	if result.OverallScore == nil {
+		t.Fatal("no score, want 1")
+	}
+	if *result.OverallScore != 1 {
+		t.Errorf("score = %v, want 1 (thought text ignored)", *result.OverallScore)
+	}
+}
