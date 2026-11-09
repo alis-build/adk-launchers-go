@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/auth"
 	"google.golang.org/adk/v2/plugin"
 	"google.golang.org/adk/v2/tool"
 )
@@ -24,10 +25,11 @@ func NewPlugin(cfg Config) (*plugin.Plugin, error) {
 }
 
 // beforeTool runs before every tool call. Tools the Config does not name run
-// untouched, and so does a configured tool whose user has a usable token. In
-// a run marked by WithNonInteractive, a tool with no token stops with
-// "connect <Provider> in chat first". A store failure stops the call with an
-// error the model sees, which names the provider but not the user.
+// untouched, and so does a configured tool whose user has a usable token. A
+// tool with no token pauses for the user's consent; in a run marked by
+// WithNonInteractive it stops with "connect <Provider> in chat first"
+// instead. A store failure stops the call with an error the model sees,
+// which names the provider but not the user.
 func (r *resolver) beforeTool(ctx agent.Context, t tool.Tool, _ map[string]any) (map[string]any, error) {
 	cfgTool, ok := r.cfg.Tools[t.Name()]
 	if !ok {
@@ -41,8 +43,30 @@ func (r *resolver) beforeTool(ctx agent.Context, t tool.Tool, _ map[string]any) 
 		// No auth URI here: this text is persisted and fed to the model.
 		return nil, fmt.Errorf("connect %s in chat first", cfgTool.Provider)
 	case errors.Is(err, errMiss):
-		return nil, nil
+		return r.pauseForConsent(ctx, t.Name(), cfgTool)
 	default:
-		return nil, fmt.Errorf("%s sign-in is unavailable right now", cfgTool.Provider)
+		return nil, unavailable(cfgTool)
 	}
+}
+
+// pauseForConsent asks the user to sign in to t's provider: it requests a
+// confirmation whose payload is the auth config, and stops the call with
+// tool.ErrConfirmationRequired, ADK's own pause, so the tool does not run in
+// this turn.
+func (r *resolver) pauseForConsent(ctx agent.Context, name string, t Tool) (map[string]any, error) {
+	key := auth.CredentialKey{AppName: ctx.AppName(), UserID: ctx.UserID(), Key: t.slot()}
+	req, err := r.authRequest(t, key)
+	if err != nil {
+		return nil, unavailable(t)
+	}
+	if err := ctx.RequestConfirmation(fmt.Sprintf(consentHint, t.Provider), req); err != nil {
+		return nil, unavailable(t)
+	}
+	return nil, fmt.Errorf("tool %q: %w", name, tool.ErrConfirmationRequired)
+}
+
+// unavailable is the error the model sees when t's sign-in cannot be checked
+// or started. It names the provider but not the user.
+func unavailable(t Tool) error {
+	return fmt.Errorf("%s sign-in is unavailable right now", t.Provider)
 }
