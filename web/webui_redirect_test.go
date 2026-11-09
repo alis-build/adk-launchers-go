@@ -44,6 +44,7 @@ func TestWebUIUserRedirect(t *testing.T) {
 		method    string
 		target    string
 		identity  string
+		emptyID   bool // put an identity with an empty ID on the request
 		wantCode  int
 		wantQuery url.Values // checked only for a redirect
 	}{
@@ -52,11 +53,12 @@ func TestWebUIUserRedirect(t *testing.T) {
 		{name: "HEAD redirected too", method: http.MethodHead, target: "/ui/", identity: "123", wantCode: http.StatusFound, wantQuery: url.Values{"userId": {"123"}}},
 		{name: "userId already set", method: http.MethodGet, target: "/ui/?userId=9", identity: "123", wantCode: http.StatusOK},
 		{name: "anonymous", method: http.MethodGet, target: "/ui/", wantCode: http.StatusOK},
+		{name: "identity without an ID", method: http.MethodGet, target: "/ui/", identity: "", emptyID: true, wantCode: http.StatusOK},
 		{name: "asset", method: http.MethodGet, target: "/ui/assets/x.js", identity: "123", wantCode: http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, "http://localhost"+tc.target, nil)
-			if tc.identity != "" {
+			if tc.identity != "" || tc.emptyID {
 				req = req.WithContext((&iam.Identity{ID: tc.identity, Type: iam.User}).Context(req.Context()))
 			}
 			rec := httptest.NewRecorder()

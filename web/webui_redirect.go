@@ -26,7 +26,7 @@ func webUIUserRedirect(next http.Handler) http.Handler {
 		// under the same path ever accepts one.
 		if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
 			r.URL.Path == webUIPath && !r.URL.Query().Has("userId") {
-			if id, err := iam.FromContext(r.Context()); err == nil {
+			if id, err := iam.FromContext(r.Context()); err == nil && id.ID != "" {
 				q := r.URL.Query()
 				q.Set("userId", id.ID)
 				http.Redirect(w, r, webUIPath+"?"+q.Encode(), http.StatusFound)
