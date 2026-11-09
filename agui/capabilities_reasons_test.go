@@ -10,7 +10,8 @@ import (
 // interrupt reasons this launcher can now produce, so a client knows to expect
 // input_required and confirmation and not just tool_call.
 func TestInterruptReasonsAdvertised(t *testing.T) {
-	want := []string{"tool_call", "input_required", "confirmation"}
+	// auth_required added by tooloauth_20261109 FR7: OAuth sign-in pauses.
+	want := []string{"tool_call", "input_required", "confirmation", "auth_required"}
 
 	t.Run("defaults list every supported reason", func(t *testing.T) {
 		caps := DefaultInterruptCapabilities()

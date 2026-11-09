@@ -164,13 +164,14 @@ type HumanInTheLoopCapabilities struct {
 }
 
 // SupportedInterruptReasons returns the interrupt reasons this launcher emits
-// out of the box: tool confirmations, and the two shapes a workflow input
-// request is classified into.
+// out of the box: tool confirmations, the two shapes a workflow input
+// request is classified into, and OAuth sign-in confirmations
+// (auth_required, from go.alis.build/adk/launchers/tooloauth).
 //
 // A host classifier can return reasons outside this set; those are the host's
 // to advertise.
 func SupportedInterruptReasons() []string {
-	return []string{interrupt.ReasonToolCall, interrupt.ReasonInputRequired, interrupt.ReasonConfirmation}
+	return []string{interrupt.ReasonToolCall, interrupt.ReasonInputRequired, interrupt.ReasonConfirmation, interrupt.ReasonAuthRequired}
 }
 
 // MergeInterruptCapabilities ensures humanInTheLoop.interrupts and
