@@ -4,7 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+
+	"go.alis.build/adk/launchers/evals/evaluation/storage"
 
 	alismux "go.alis.build/mux"
 )
@@ -12,11 +15,25 @@ import (
 // TestEveryEvalRouteRequiresIdentity mounts the evals routes on the
 // process-wide host mux, once per test binary, and sends an anonymous request
 // to each one. Every route must refuse it before its handler runs.
+// routeTest is the launcher whose routes are on the process-wide host mux.
+// The mux panics on a duplicate pattern, so it is mounted once per test
+// binary, which also lets the test run under -count=N.
+var routeTest struct {
+	once sync.Once
+	l    *evalsLauncher
+	sets storage.EvalSetsManager
+	err  error
+}
+
 func TestEveryEvalRouteRequiresIdentity(t *testing.T) {
-	l, sets := newHandlerTestLauncher(t)
-	if err := l.mountHostRoutes(l.launcherCfg); err != nil {
-		t.Fatalf("mountHostRoutes() failed: %v", err)
+	routeTest.once.Do(func() {
+		routeTest.l, routeTest.sets = newHandlerTestLauncher(t)
+		routeTest.err = routeTest.l.mountHostRoutes(routeTest.l.launcherCfg)
+	})
+	if routeTest.err != nil {
+		t.Fatalf("mountHostRoutes() failed: %v", routeTest.err)
 	}
+	l, sets := routeTest.l, routeTest.sets
 
 	routes := l.routes()
 	// 13 hyphen routes on the dev base, plus the 12 legacy underscore routes
