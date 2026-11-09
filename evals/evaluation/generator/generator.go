@@ -36,6 +36,12 @@ func NewEvalSessionID() string {
 	return EvalSessionIDPrefix + uuid.NewString()
 }
 
+// IsEvalSessionID reports whether id was created for an eval run, under
+// either prefix. Embedders that list sessions can use it to hide eval runs.
+func IsEvalSessionID(id string) bool {
+	return strings.HasPrefix(id, EvalSessionIDPrefix) || strings.HasPrefix(id, LegacyEvalSessionIDPrefix)
+}
+
 // evalSessionID returns opts.SessionID when set, otherwise a new eval session id.
 func evalSessionID(opts InferenceOptions) string {
 	if strings.TrimSpace(opts.SessionID) != "" {

@@ -3,6 +3,7 @@ package generator
 import (
 	"context"
 	"iter"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -227,4 +228,31 @@ func testReplyRuntime(t *testing.T) *adkrun.Runtime {
 		t.Fatalf("NewRuntime: %v", err)
 	}
 	return rt
+}
+
+// Mirrors adk-python test_local_eval_service.py: eval session IDs must be
+// valid Agent Engine session IDs.
+func TestNewEvalSessionIDMatchesAgentEngineConstraints(t *testing.T) {
+	id := NewEvalSessionID()
+	if !strings.HasPrefix(id, "adk-eval-session-") {
+		t.Errorf("NewEvalSessionID() = %q, want prefix adk-eval-session-", id)
+	}
+	if len(id) > 63 {
+		t.Errorf("NewEvalSessionID() = %q is %d bytes, want at most 63", id, len(id))
+	}
+	if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`).MatchString(id) {
+		t.Errorf("NewEvalSessionID() = %q, want lowercase letters, digits and inner hyphens only", id)
+	}
+}
+
+func TestIsEvalSessionIDAcceptsBothPrefixes(t *testing.T) {
+	for id, want := range map[string]bool{
+		"adk-eval-session-abc":    true,
+		"___eval___session___abc": true,
+		"chat-session-1":          false,
+	} {
+		if got := IsEvalSessionID(id); got != want {
+			t.Errorf("IsEvalSessionID(%q) = %v, want %v", id, got, want)
+		}
+	}
 }
