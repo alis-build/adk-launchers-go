@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"go.alis.build/adk/launchers/evals/evaluation/storage"
 	iam "go.alis.build/iam/v3"
@@ -849,5 +851,112 @@ func TestRunAcceptsNullLiveModelConfig(t *testing.T) {
 		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
 	if err != nil || rec.Code != http.StatusOK {
 		t.Fatalf("run with null live_model_config: status = %d, err = %v", rec.Code, err)
+	}
+}
+
+// keysOf returns the sorted keys of a decoded JSON object.
+func keysOf(t *testing.T, v any, where string) []string {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("%s is %T, want a JSON object", where, v)
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// metricNamed returns the metric result named name from a decoded list.
+func metricNamed(t *testing.T, list any, name, where string) any {
+	t.Helper()
+	items, _ := list.([]any)
+	for _, it := range items {
+		if m, ok := it.(map[string]any); ok && m["metricName"] == name {
+			return m
+		}
+	}
+	t.Fatalf("%s has no %q metric", where, name)
+	return nil
+}
+
+// TestRunAdkWebMainBodyMatchesAdkPythonShape posts adk-web main's run body and
+// compares the response's keys with adk-python's captured response
+// (testdata/adkpy/run_eval_response.json) at the levels adk-web reads.
+func TestRunAdkWebMainBodyMatchesAdkPythonShape(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	for _, id := range []string{"case1", "case2"} {
+		_ = sets.AddEvalCase("my_app", "set1", models.EvalCase{
+			EvalID: id,
+			Conversation: []models.Invocation{{
+				UserContent:   genai.NewContentFromText("hi", genai.RoleUser),
+				FinalResponse: genai.NewContentFromText("ok", genai.RoleModel),
+			}},
+		})
+	}
+	rec, err := callHandlerAs(t, l.runEvalHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/set1/run", "user1",
+		json.RawMessage(`{"eval_case_ids": ["case2"], "eval_metrics": [{"metricName": "response_match_score", "threshold": 0.7}]}`),
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("run: status = %d, err = %v", rec.Code, err)
+	}
+
+	var got, want map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode Go response: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "adkpy", "run_eval_response.json"))
+	if err != nil {
+		t.Fatalf("read capture: %v", err)
+	}
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatalf("decode capture: %v", err)
+	}
+
+	gotRes, _ := got["runEvalResults"].([]any)
+	if len(gotRes) != 1 {
+		t.Fatalf("runEvalResults = %v, want one result", got["runEvalResults"])
+	}
+	g0 := gotRes[0].(map[string]any)
+	if g0["evalId"] != "case2" || g0["finalEvalStatus"] != float64(models.EvalStatusPassed) {
+		t.Errorf("result evalId = %v, finalEvalStatus = %v; want case2, %d", g0["evalId"], g0["finalEvalStatus"], models.EvalStatusPassed)
+	}
+	w0 := want["runEvalResults"].([]any)[0].(map[string]any)
+	gPer := g0["evalMetricResultPerInvocation"].([]any)[0]
+	wPer := w0["evalMetricResultPerInvocation"].([]any)[0]
+
+	for _, level := range []struct {
+		where     string
+		got, want any
+	}{
+		{"top level", got, want},
+		{"runEvalResults[0]", g0, w0},
+		{"overall response_match_score", metricNamed(t, g0["overallEvalMetricResults"], "response_match_score", "Go overall"), metricNamed(t, w0["overallEvalMetricResults"], "response_match_score", "capture overall")},
+		{"evalMetricResultPerInvocation[0]", gPer, wPer},
+		{"per-invocation response_match_score", metricNamed(t, gPer.(map[string]any)["evalMetricResults"], "response_match_score", "Go per-invocation"), metricNamed(t, wPer.(map[string]any)["evalMetricResults"], "response_match_score", "capture per-invocation")},
+	} {
+		if diff := cmp.Diff(keysOf(t, level.want, "capture "+level.where), keysOf(t, level.got, "Go "+level.where)); diff != "" {
+			t.Errorf("%s keys differ from adk-python (-adk-python +go):\n%s", level.where, diff)
+		}
+	}
+}
+
+func TestRunEvalLegacyBundleBodyStillWorks(t *testing.T) {
+	l, _ := runSetWithOneCase(t)
+	rec, err := callHandlerAs(t, l.runEvalLegacyHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/run_eval", "user1",
+		json.RawMessage(`{"evalIds": ["case1"], "evalMetrics": [{"metricName": "response_match_score", "threshold": 0.7}]}`),
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("legacy run: status = %d, err = %v", rec.Code, err)
+	}
+	var results []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatalf("legacy response is not a bare array: %v (%s)", err, rec.Body)
+	}
+	if len(results) != 1 || results[0]["evalId"] != "case1" {
+		t.Errorf("legacy results = %v, want one result for case1", results)
 	}
 }

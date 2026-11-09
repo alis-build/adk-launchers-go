@@ -888,6 +888,7 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 			FinalEvalStatus:               cr.FinalEvalStatus,
 			OverallEvalMetricResults:      cr.OverallEvalMetricResults,
 			EvalMetricResultPerInvocation: cr.EvalMetricResultPerInvocation,
+			EvalMetricResults:             []models.EvalMetricResult{},
 			UserID:                        cr.UserID,
 			SessionID:                     cr.SessionID,
 		})

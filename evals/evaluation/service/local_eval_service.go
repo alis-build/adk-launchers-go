@@ -386,6 +386,7 @@ func (s *LocalEvalService) evaluateMetric(
 			MetricName: metric.MetricName,
 			Threshold:  metric.Threshold,
 			EvalStatus: models.EvalStatusNotEvaluated,
+			Details:    &models.EvalMetricResultDetails{},
 		}}
 	}
 	result, err := evaluator.EvaluateInvocations(ctx, actual, evalCase.Conversation, evalCase.ConversationScenario)
@@ -395,17 +396,17 @@ func (s *LocalEvalService) evaluateMetric(
 			MetricName: metric.MetricName,
 			Threshold:  metric.Threshold,
 			EvalStatus: models.EvalStatusNotEvaluated,
+			Details:    &models.EvalMetricResultDetails{},
 		}}
 	}
 
+	// Every result carries Details, as adk-python always builds them.
 	overall := models.EvalMetricResult{
 		MetricName: metric.MetricName,
 		Threshold:  metric.Threshold,
 		Score:      result.OverallScore,
 		EvalStatus: result.OverallEvalStatus,
-	}
-	if len(result.OverallRubricScores) > 0 {
-		overall.Details = &models.EvalMetricResultDetails{RubricScores: result.OverallRubricScores}
+		Details:    &models.EvalMetricResultDetails{RubricScores: result.OverallRubricScores},
 	}
 
 	if result.OverallEvalStatus != models.EvalStatusNotEvaluated {
@@ -416,10 +417,7 @@ func (s *LocalEvalService) evaluateMetric(
 			invResult := result.PerInvocationResults[i]
 			score := invResult.Score
 			status := invResult.EvalStatus
-			var details *models.EvalMetricResultDetails
-			if len(invResult.RubricScores) > 0 {
-				details = &models.EvalMetricResultDetails{RubricScores: invResult.RubricScores}
-			}
+			details := &models.EvalMetricResultDetails{RubricScores: invResult.RubricScores}
 			perInvocation[i].EvalMetricResults = append(perInvocation[i].EvalMetricResults, models.EvalMetricResult{
 				MetricName: metric.MetricName,
 				Threshold:  metric.Threshold,

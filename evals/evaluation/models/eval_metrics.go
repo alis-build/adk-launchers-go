@@ -187,11 +187,13 @@ type EvalMetricResultDetails struct {
 
 // EvalMetricResult is the outcome for one metric.
 type EvalMetricResult struct {
-	MetricName string                   `json:"metricName"`
-	Threshold  float64                  `json:"threshold"`
-	Score      *float64                 `json:"score,omitempty"`
-	EvalStatus EvalStatus               `json:"evalStatus"`
-	Details    *EvalMetricResultDetails `json:"details,omitempty"`
+	MetricName string     `json:"metricName"`
+	Threshold  float64    `json:"threshold"`
+	Score      *float64   `json:"score,omitempty"`
+	EvalStatus EvalStatus `json:"evalStatus"`
+	// Details is always present on the wire, as adk-python always builds it;
+	// it is {} when the metric reports nothing beyond its score.
+	Details *EvalMetricResultDetails `json:"details"`
 }
 
 // EvalMetricResultPerInvocation holds per-turn metric results.
@@ -230,6 +232,9 @@ type RunEvalResult struct {
 	FinalEvalStatus               EvalStatus                      `json:"finalEvalStatus"`
 	OverallEvalMetricResults      []EvalMetricResult              `json:"overallEvalMetricResults"`
 	EvalMetricResultPerInvocation []EvalMetricResultPerInvocation `json:"evalMetricResultPerInvocation"`
-	UserID                        *string                         `json:"userId,omitempty"`
-	SessionID                     string                          `json:"sessionId"`
+	// EvalMetricResults is adk-python's deprecated per-case field, kept on the
+	// wire (always []) for clients that still read it.
+	EvalMetricResults []EvalMetricResult `json:"evalMetricResults"`
+	UserID            *string            `json:"userId,omitempty"`
+	SessionID         string             `json:"sessionId"`
 }
