@@ -14,6 +14,8 @@ Subcommands:
   run   POST adk-web main's run body to /dev/apps/test_app/eval-sets/set1/run
         and GET the stored result; writes run_eval_response.json and
         eval_set_result.json next to this script.
+  metrics
+        GET /dev/apps/test_app/metrics-info; writes metrics_info.json.
 
 No model is called: the agent yields a fixed "ok" reply.
 """
@@ -137,8 +139,15 @@ def capture_run():
            _check(client.get(f"/dev/apps/{APP}/eval-results/{ids[0]}"), "get eval result"))
 
 
+def capture_metrics():
+  with tempfile.TemporaryDirectory() as results_dir:
+    client = _client(results_dir)
+    _write("metrics_info.json",
+           _check(client.get(f"/dev/apps/{APP}/metrics-info"), "metrics-info"))
+
+
 if __name__ == "__main__":
-  commands = {"run": capture_run}
+  commands = {"run": capture_run, "metrics": capture_metrics}
   if len(sys.argv) != 2 or sys.argv[1] not in commands:
     print(f"usage: {sys.argv[0]} {{{'|'.join(commands)}}}", file=sys.stderr)
     sys.exit(2)
