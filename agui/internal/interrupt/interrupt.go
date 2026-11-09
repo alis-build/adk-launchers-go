@@ -25,6 +25,11 @@ const (
 	ReasonInputRequired = "input_required"
 	// ReasonConfirmation is a free-standing yes/no decision not bound to a tool.
 	ReasonConfirmation = "confirmation"
+	// ReasonAuthRequired is a tool call paused for the user's OAuth sign-in:
+	// a tool confirmation whose payload is an auth config, as the tooloauth
+	// plugin sends. The client signs the user in and resumes with the config
+	// filled in.
+	ReasonAuthRequired = "auth_required"
 )
 
 // Record is the JSON-serializable subset of [types.Interrupt] stored in ADK
@@ -71,6 +76,19 @@ func ToolConfirmationResponseSchema() map[string]any {
 			},
 		},
 		"required": []any{"approved"},
+	}
+}
+
+// AuthRequiredResponseSchema returns the JSON Schema advertised to clients on
+// auth_required interrupts: the filled auth config, of which only the
+// exchanged credential (carrying the auth response URI) is required.
+func AuthRequiredResponseSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"exchangedAuthCredential": map[string]any{"type": "object"},
+		},
+		"required": []any{"exchangedAuthCredential"},
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"go.alis.build/adk/launchers/agui/internal/interrupt"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolauth"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/adk/v2/workflow"
 	"google.golang.org/genai"
@@ -708,7 +709,17 @@ func buildToolCallInterrupt(p *Processor, sink eventSink, state *State, fc *gena
 	if invocationID != "" {
 		adkMeta["invocationId"] = invocationID
 	}
-	if tc.Payload != nil {
+	reason, schema := interrupt.ReasonToolCall, interrupt.ToolConfirmationResponseSchema()
+	if authCfg, ok := authConfigFrom(tc.Payload); ok {
+		// An OAuth sign-in: send the config the client needs, with its
+		// secrets stripped, and never the raw payload.
+		if stripped, err := authCfg.WithoutSecrets(); err != nil {
+			log.Printf("agui: emitInterrupt: auth config: %v", err)
+		} else {
+			adkMeta["authConfig"] = stripped
+			reason, schema = interrupt.ReasonAuthRequired, interrupt.AuthRequiredResponseSchema()
+		}
+	} else if tc.Payload != nil {
 		adkMeta["confirmationPayload"] = tc.Payload
 	}
 	interruptMeta := map[string]any{
@@ -726,13 +737,42 @@ func buildToolCallInterrupt(p *Processor, sink eventSink, state *State, fc *gena
 	// constants and helpers are used just below.
 	intr := types.Interrupt{
 		ID:             fc.ID,
-		Reason:         interrupt.ReasonToolCall,
+		Reason:         reason,
 		Message:        hintMessage,
 		ToolCallID:     originalCall.ID,
-		ResponseSchema: interrupt.ToolConfirmationResponseSchema(),
+		ResponseSchema: schema,
 		Metadata:       interruptMeta,
 	}
 	return intr, nil
+}
+
+// authConfigFrom reports whether a tool confirmation's payload is an OAuth
+// auth config a client can act on: one that decodes as a toolauth.Config and
+// carries an authorization URI. The payload is a *toolauth.Config in a live
+// run and a JSON map when read back from a stored session.
+func authConfigFrom(payload any) (*toolauth.Config, bool) {
+	var cfg *toolauth.Config
+	switch v := payload.(type) {
+	case nil:
+		return nil, false
+	case *toolauth.Config:
+		cfg = v
+	case toolauth.Config:
+		cfg = &v
+	default:
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil, false
+		}
+		cfg = &toolauth.Config{}
+		if json.Unmarshal(raw, cfg) != nil {
+			return nil, false
+		}
+	}
+	if cfg == nil || cfg.ExchangedAuthCredential == nil || cfg.ExchangedAuthCredential.OAuth2 == nil || cfg.ExchangedAuthCredential.OAuth2.AuthURI == "" {
+		return nil, false
+	}
+	return cfg, true
 }
 
 // buildInputRequestInterrupt converts an adk_request_input FunctionCall into an
