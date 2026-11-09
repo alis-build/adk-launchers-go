@@ -9,6 +9,7 @@ import (
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"go.alis.build/adk/launchers/evals/evaluation/simulation"
 	"go.alis.build/adk/launchers/internal/adkrun"
+	"go.alis.build/adk/launchers/tooloauth"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
@@ -50,8 +51,11 @@ func evalSessionID(opts InferenceOptions) string {
 	return NewEvalSessionID()
 }
 
-// GenerateInferences runs the agent against the user simulator and returns invocations.
+// GenerateInferences runs the agent against the user simulator and returns
+// invocations. The run is marked non-interactive: nobody can answer a
+// tooloauth sign-in pause during an eval, so such tools fail instead.
 func (g *Generator) GenerateInferences(ctx context.Context, opts InferenceOptions) ([]models.Invocation, error) {
+	ctx = tooloauth.WithNonInteractive(ctx)
 	if g == nil || g.Runtime == nil {
 		return nil, fmt.Errorf("generator: runtime is required")
 	}
