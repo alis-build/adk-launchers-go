@@ -105,6 +105,12 @@ launchersweb.NewLauncherWithOptions(
 
 **Scheduler cron callback.** The Cloud Tasks cron callback (`.../handler`) is privileged — it runs agents and impersonates the cron owner — so it is authenticated in-launcher as the environment service account by default. When a trusted upstream already authenticates that caller (and the endpoint is not directly reachable), opt out with `scheduler.WithoutSystemAuth()`.
 
+**ADK's REST API.** With ADK's `api` sublauncher, the web launcher fills `launcher.Config.Authenticator` with `web.IdentityAuthenticator()` and `Authorizer` with `authz.NewStrict()` when you leave them nil. A request without an identity answers 401, and a caller acting as another user answers 403; `/api/health` stays open. There is no flag to loosen it. In code, `authz.NewNoop()` lets any signed-in caller act as any user, and a fully open API also needs `authn.NewNoop()`. ADK's A2A routes are not covered and have no authentication.
+
+**ADK's web UI.** The UI acts as user `"user"` unless loaded with `?userId=`, so the launcher redirects `/ui/` to `/ui/?userId=<caller>` and the UI then sends the caller's real ID. The UI itself sends no credentials, so **the upstream gateway must forward `x-alis-identity` on page navigations and on the `/run_live` WebSocket upgrade**, not only on API calls; otherwise every REST call answers 403, and a refused chat shows as an empty stream.
+
+**Evals.** Every eval route requires an identity. add-session and runs act only as the caller, on the route's app; reads of eval cases and results strip credential secrets.
+
 **Trust boundary.** Because the launchers no longer authenticate, the `x-alis-identity` header must only ever be set by the trusted upstream. Deployments must ensure the process is not directly reachable and that the header is stripped or overwritten at the edge.
 
 ### Console embed build
@@ -205,7 +211,7 @@ Params are protojson-compatible camelCase. See [`agui/doc.go`](agui/doc.go) and 
 
 Requires `evals` on the `adk web` command line. Local storage needs `-agents_dir=./agents` or [evals.WithAgentsDir](./evals). GCS storage: `-eval_storage_uri=gs://bucket` or [evals.WithEvalStorageURI](./evals).
 
-This sublauncher is separate from [`console`](./console): it serves the dev evaluation API for adk-web, not the operator console SPA. Routes do not enforce caller identity; restrict access at a trusted upstream.
+This sublauncher is separate from [`console`](./console): it serves the dev evaluation API for adk-web, not the operator console SPA. Every route requires a caller identity; see [Authentication and authorization](#authentication-and-authorization).
 
 All routes are under `/api/dev/apps/{appName}/...` by default (match webui `-api_server_address=/api`). Override with `-path_prefix` or [evals.WithPathPrefix](./evals). adk-web uses the legacy underscore paths (`eval_sets`, `run_eval`, etc.); canonical hyphen paths are also registered.
 

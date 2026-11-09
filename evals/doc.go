@@ -8,11 +8,20 @@
 // go.alis.build/mux via [go.alis.build/adk/launchers/web.HostRouteSetup]. Routes
 // are dev-only; production deployments typically omit this sublauncher.
 //
-// # Authentication
+// # Identity
 //
-// Eval routes do not enforce caller identity. Access control is delegated to a
-// trusted upstream (gateway or BFF); do not expose this sublauncher directly on
-// the public internet without that boundary.
+// Every eval route requires a caller identity, forwarded by the trusted
+// upstream as x-alis-identity, and answers 401 without one. Eval sets, cases
+// and results are shared by every caller of the app; the identity decides
+// whose sessions a route touches:
+//
+//   - add-session reads the session, and stores the new case, under the
+//     caller's ID. A body userId naming anyone else answers 403.
+//   - A run executes as the caller, on the agent of the route's app, whatever
+//     user and app the stored case names. Its sessions are the caller's.
+//   - Reading an eval case or an eval result strips credential secrets
+//     (OAuth client secrets, tokens, PKCE verifiers, API keys) from the
+//     response, as adk-python's dev server does. The stored data keeps them.
 //
 // # Usage
 //

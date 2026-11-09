@@ -86,6 +86,30 @@
 // GET /health answers {"status":"ok"} for probes, whatever sublaunchers are
 // active.
 //
+// # ADK's REST API and web UI
+//
+// ADK's api sublauncher builds its REST server with launcher.Config's
+// Authenticator and Authorizer. When the embedder leaves them nil, the launcher
+// fills them with [IdentityAuthenticator] and authz.NewStrict: a request with no
+// identity (or one without an ID) answers 401, and a caller acting as any user
+// but themselves, in the path, the JSON body or the query, answers 403. ADK's
+// public routes such as /api/health stay open. There is no flag to loosen this.
+// In code, Config.Authorizer = authz.NewNoop() lets any signed-in caller act as
+// any user, and a fully open API also needs Config.Authenticator =
+// authn.NewNoop().
+//
+// The checks cover ADK's REST API only. ADK's A2A routes have no
+// authentication.
+//
+// ADK's web UI acts as user "user" unless its page is loaded with ?userId=. A
+// browser opening /ui/ without one, with an identity on the request, is
+// redirected to /ui/?userId=<identity ID>, so the UI sends the caller's real ID
+// on every call. This needs the upstream gateway to forward x-alis-identity on
+// page navigations and on the /run_live WebSocket upgrade, not only on API
+// calls; otherwise the UI acts as "user" and every REST call answers 403. With
+// [WithoutAuthGateway] and no gateway of the host's own, every /api route
+// answers 401.
+//
 // # HostRouteSetup examples
 //
 // Implement [HostRouteSetup] on the same type that implements [Sublauncher].
