@@ -1,6 +1,10 @@
 package evals
 
-import "go.alis.build/adk/launchers/evals/evaluation/models"
+import (
+	"encoding/json"
+
+	"go.alis.build/adk/launchers/evals/evaluation/models"
+)
 
 const missingMetricRegistryMessage = "evals: metric registry is not configured"
 
@@ -22,6 +26,11 @@ type RunEvalRequest struct {
 	EvalCaseIDs  []string            `json:"eval_case_ids,omitempty"`
 	EvalMetrics  []models.EvalMetric `json:"eval_metrics"`
 	SessionState map[string]any      `json:"session_state,omitempty"`
+	// LiveModelConfig and UserSimulatorConfig are adk-web main's live-mode and
+	// audio-simulator settings, kept raw until they are supported. A field is
+	// set when present and not JSON null; {} counts as set, as in adk-python.
+	LiveModelConfig     json.RawMessage `json:"live_model_config,omitempty"`
+	UserSimulatorConfig json.RawMessage `json:"user_simulator_config,omitempty"`
 }
 
 // RunEvalResponse wraps per-case run results.

@@ -793,3 +793,61 @@ func TestGetEvalSetRedactsSecrets(t *testing.T) {
 		t.Errorf("response lost the credential call: %s", body)
 	}
 }
+
+// runSetWithOneCase stores set1 with case1, a one-turn case the echo agent passes.
+func runSetWithOneCase(t *testing.T) (*evalsLauncher, storage.EvalSetsManager) {
+	t.Helper()
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	_ = sets.AddEvalCase("my_app", "set1", models.EvalCase{
+		EvalID: "case1",
+		Conversation: []models.Invocation{{
+			UserContent:   genai.NewContentFromText("hi", genai.RoleUser),
+			FinalResponse: genai.NewContentFromText("ok", genai.RoleModel),
+		}},
+	})
+	return l, sets
+}
+
+func assertNoResults(t *testing.T, l *evalsLauncher) {
+	t.Helper()
+	ids, err := l.resultsManager.ListEvalSetResults("my_app")
+	if err != nil && !storageNotFound(err) {
+		t.Fatalf("ListEvalSetResults: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("eval results after a refused run = %v, want none", ids)
+	}
+}
+
+func TestRunRejectsLiveModelConfig(t *testing.T) {
+	l, _ := runSetWithOneCase(t)
+	_, err := callHandlerAs(t, l.runEvalHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/set1/run", "user1",
+		json.RawMessage(`{"eval_case_ids": ["case1"], "eval_metrics": [{"metricName": "response_match_score", "threshold": 0.7}], "live_model_config": {}}`),
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if alismux.StatusCode(err) != http.StatusBadRequest || !strings.Contains(err.Error(), "live_model_config is not supported yet") {
+		t.Errorf("run with live_model_config: err = %v, want 400 naming live_model_config", err)
+	}
+	assertNoResults(t, l)
+}
+
+func TestRunRejectsUserSimulatorConfig(t *testing.T) {
+	l, _ := runSetWithOneCase(t)
+	_, err := callHandlerAs(t, l.runEvalLegacyHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/run_eval", "user1",
+		json.RawMessage(`{"evalMetrics": [{"metricName": "response_match_score", "threshold": 0.7}], "userSimulatorConfig": {"type": "llm_audio"}}`),
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if alismux.StatusCode(err) != http.StatusBadRequest || !strings.Contains(err.Error(), "user_simulator_config is not supported yet") {
+		t.Errorf("run with userSimulatorConfig: err = %v, want 400 naming user_simulator_config", err)
+	}
+	assertNoResults(t, l)
+}
+
+func TestRunAcceptsNullLiveModelConfig(t *testing.T) {
+	l, _ := runSetWithOneCase(t)
+	rec, err := callHandlerAs(t, l.runEvalHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/set1/run", "user1",
+		json.RawMessage(`{"eval_case_ids": ["case1"], "eval_metrics": [{"metricName": "response_match_score", "threshold": 0.7}], "live_model_config": null}`),
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("run with null live_model_config: status = %d, err = %v", rec.Code, err)
+	}
+}

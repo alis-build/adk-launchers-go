@@ -1,6 +1,7 @@
 package evals
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -412,6 +413,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
+// rawSet reports whether a raw JSON field was sent with a value: present and
+// not null. {} counts as set, as adk-python's truthiness check treats it.
+func rawSet(raw json.RawMessage) bool {
+	v := bytes.TrimSpace(raw)
+	return len(v) > 0 && !bytes.Equal(v, []byte("null"))
+}
+
 // writeRedactedJSON writes v as JSON with credential secrets stripped, as
 // adk-python's dev server does for stored eval cases and results. A recorded
 // conversation can hold an adk_request_credential call carrying an OAuth
@@ -816,6 +824,14 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 	var req RunEvalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return nil, alismux.BadRequestErr("invalid request body: %s", err.Error())
+	}
+	// Refused before anything loads or runs, rather than ignored: a caller
+	// asking for live mode or an audio simulator must not get a plain run.
+	if rawSet(req.LiveModelConfig) {
+		return nil, alismux.BadRequestErr("live_model_config is not supported yet")
+	}
+	if rawSet(req.UserSimulatorConfig) {
+		return nil, alismux.BadRequestErr("user_simulator_config is not supported yet")
 	}
 
 	evalSet, err := l.setsManager.GetEvalSet(appName, evalSetID)

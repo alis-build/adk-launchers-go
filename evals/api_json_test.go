@@ -172,3 +172,23 @@ func TestCreateEvalSetRequestUnmarshalAdkWebBody(t *testing.T) {
 		t.Fatalf("model_execution_mode = %v", req.EvalSet.ModelExecutionMode)
 	}
 }
+
+// Payloads follow adk-python's tests/unittests/cli/test_fast_api.py live and
+// audio-simulator run cases.
+func TestRunEvalRequestUnmarshalLiveFieldsSnakeAndCamel(t *testing.T) {
+	var snake RunEvalRequest
+	if err := json.Unmarshal([]byte(`{"eval_metrics": [], "live_model_config": {"timeoutSeconds": 600}}`), &snake); err != nil {
+		t.Fatalf("Unmarshal snake: %v", err)
+	}
+	if got := string(snake.LiveModelConfig); got != `{"timeoutSeconds": 600}` {
+		t.Errorf("LiveModelConfig = %q, want the raw object", got)
+	}
+
+	var camel RunEvalRequest
+	if err := json.Unmarshal([]byte(`{"evalMetrics": [], "userSimulatorConfig": {"type": "llm_audio", "audioModel": "cloud_tts"}}`), &camel); err != nil {
+		t.Fatalf("Unmarshal camel: %v", err)
+	}
+	if got := string(camel.UserSimulatorConfig); got != `{"type": "llm_audio", "audioModel": "cloud_tts"}` {
+		t.Errorf("UserSimulatorConfig = %q, want the raw object", got)
+	}
+}

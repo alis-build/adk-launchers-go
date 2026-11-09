@@ -42,10 +42,12 @@ func (r *RunEvalRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var camel struct {
-		EvalIDs      []string            `json:"evalIds"`
-		EvalCaseIDs  []string            `json:"evalCaseIds"`
-		EvalMetrics  []models.EvalMetric `json:"evalMetrics"`
-		SessionState map[string]any      `json:"sessionState"`
+		EvalIDs             []string            `json:"evalIds"`
+		EvalCaseIDs         []string            `json:"evalCaseIds"`
+		EvalMetrics         []models.EvalMetric `json:"evalMetrics"`
+		SessionState        map[string]any      `json:"sessionState"`
+		LiveModelConfig     json.RawMessage     `json:"liveModelConfig"`
+		UserSimulatorConfig json.RawMessage     `json:"userSimulatorConfig"`
 	}
 	if err := json.Unmarshal(data, &camel); err != nil {
 		return err
@@ -60,6 +62,12 @@ func (r *RunEvalRequest) UnmarshalJSON(data []byte) error {
 		r.EvalMetrics = camel.EvalMetrics
 	}
 	r.SessionState = mergeRunEvalSessionState(camel.SessionState, r.SessionState)
+	if len(r.LiveModelConfig) == 0 {
+		r.LiveModelConfig = camel.LiveModelConfig
+	}
+	if len(r.UserSimulatorConfig) == 0 {
+		r.UserSimulatorConfig = camel.UserSimulatorConfig
+	}
 	return nil
 }
 
