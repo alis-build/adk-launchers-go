@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -1489,5 +1490,31 @@ func TestRubricFinalResponsePromptIncludesGroundingMetadata(t *testing.T) {
 	}
 	if strings.Contains(p, "{grounding_metadata}") {
 		t.Error("prompt still holds the {grounding_metadata} slot")
+	}
+}
+
+// Every rubric prompt fills each of its slots and names the rubric by ID, so
+// the judge's echoed ID can be matched back to it.
+func TestRubricPromptsFillEverySlot(t *testing.T) {
+	inv := groundedInvocation()
+	inv.AppDetails = &models.AppDetails{AgentDetails: map[string]models.AgentDetails{
+		"agent": {Name: "agent", Instructions: "Answer with sources."},
+	}}
+	rubrics := []models.Rubric{rubric("r-42", "cites sources")}
+	slot := regexp.MustCompile(`\{[a-z_]+\}`)
+	for name, p := range map[string]string{
+		"final response": formatRubricFinalResponsePrompt(inv, nil, rubrics),
+		"tool use":       formatRubricToolUsePrompt(inv, rubrics),
+		"multi-turn":     formatRubricMultiTurnPrompt([]models.Invocation{inv}, rubrics),
+	} {
+		if left := slot.FindAllString(p, -1); len(left) > 0 {
+			t.Errorf("%s prompt leaves slots %v unfilled", name, left)
+		}
+		if !strings.Contains(p, "r-42") {
+			t.Errorf("%s prompt does not name rubric r-42", name)
+		}
+		if !strings.Contains(p, "What's new in AI?") {
+			t.Errorf("%s prompt is missing the user's message", name)
+		}
 	}
 }
