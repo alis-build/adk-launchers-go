@@ -17,6 +17,7 @@ require (
 	go.alis.build/iam/v3 v3.16.0
 	go.alis.build/lro/v2 v2.10.0
 	go.alis.build/mux v0.7.0
+	golang.org/x/oauth2 v0.38.0
 	golang.org/x/text v0.43.0
 	google.golang.org/adk/v2 v2.7.1
 	google.golang.org/api v0.311.0
@@ -84,7 +85,6 @@ require (
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/time v0.16.0 // indirect

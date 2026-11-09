@@ -17,8 +17,9 @@ var ErrNotConnected = errors.New("tooloauth: not connected")
 // Provider returns the credential provider toolName sends its requests
 // through, typically as &http.Client{Transport: &auth.Transport{Provider: p}}
 // with the tool's context as each request's context. It reads the acting user
-// from that context and serves the token the plugin keeps for them. It fails
-// when c is invalid or toolName is not configured.
+// from that context and serves the token the plugin keeps for them,
+// refreshing an expired one. It fails when c is invalid or toolName is not
+// configured.
 //
 // The provider's errors are meant for the tool to return, and so reach the
 // model and the session: they never name the user or carry a store's text.
