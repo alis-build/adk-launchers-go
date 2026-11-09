@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -12,10 +11,13 @@ import (
 // rubric_based_evaluator.py:59-89. Python's parser strips wrapping punctuation
 // (e.g. "[[yes]]") before an exact yes/no match; we mirror that in
 // stripVerdictPunct below rather than relaxing the regex.
+//
+// adk-python's Rationale and Verdict patterns use a look-behind, which RE2
+// lacks; capture group 1 takes its place. As there, neither is line-anchored.
 var (
-	rubricPropertyRe  = regexp.MustCompile(`(?m)^\s*Property:\s*(.+)$`)
-	rubricRationaleRe = regexp.MustCompile(`(?m)^\s*Rationale:\s*(.+)$`)
-	rubricVerdictRe   = regexp.MustCompile(`(?m)^\s*Verdict:\s*(.+)$`)
+	rubricPropertyRe  = regexp.MustCompile(`(?m)^\s*Property: (.*)$`)
+	rubricRationaleRe = regexp.MustCompile(`Rationale: (.*)`)
+	rubricVerdictRe   = regexp.MustCompile(`Verdict: (.*)`)
 )
 
 // normalizeText lowercases and trims whitespace to match Python's
@@ -35,16 +37,19 @@ func stripVerdictPunct(v string) string {
 
 // parseRubricVerdicts extracts Property/Rationale/Verdict blocks from the
 // judge response and maps each to the rubric with matching normalized
-// text_property. Returns (mean, scores, error) where mean is the arithmetic
-// mean of scored rubrics and error is set only when no verdicts could be
-// parsed at all.
-func parseRubricVerdicts(response string, rubrics []models.Rubric) (*float64, []models.RubricScore, error) {
+// text_property. It returns the mean over scored rubrics, or nil when nothing
+// scored, plus the matched rubric scores.
+//
+// When the Property, Rationale and Verdict counts differ the reply is a
+// partial parse, which could silently drop a failed rubric and inflate the
+// score, so it scores nothing, as in adk-python.
+func parseRubricVerdicts(response string, rubrics []models.Rubric) (*float64, []models.RubricScore) {
 	props := rubricPropertyRe.FindAllStringSubmatch(response, -1)
 	rats := rubricRationaleRe.FindAllStringSubmatch(response, -1)
 	verds := rubricVerdictRe.FindAllStringSubmatch(response, -1)
 
-	if len(props) == 0 || len(verds) == 0 {
-		return nil, nil, fmt.Errorf("judge response contained no Property/Verdict blocks")
+	if len(props) == 0 || len(props) != len(rats) || len(props) != len(verds) {
+		return nil, nil
 	}
 
 	byText := make(map[string]models.Rubric, len(rubrics))
@@ -57,11 +62,7 @@ func parseRubricVerdicts(response string, rubrics []models.Rubric) (*float64, []
 	var scores []models.RubricScore
 	var total float64
 	var counted int
-	n := len(props)
-	if len(verds) < n {
-		n = len(verds)
-	}
-	for i := 0; i < n; i++ {
+	for i := range props {
 		text := normalizeText(props[i][1])
 		r, ok := byText[text]
 		if !ok {
@@ -79,11 +80,8 @@ func parseRubricVerdicts(response string, rubrics []models.Rubric) (*float64, []
 			s = &v
 		}
 		rs := models.RubricScore{RubricID: r.RubricID, Score: s}
-		if i < len(rats) {
-			rat := strings.TrimSpace(rats[i][1])
-			if rat != "" {
-				rs.Rationale = &rat
-			}
+		if rat := strings.TrimSpace(rats[i][1]); rat != "" {
+			rs.Rationale = &rat
 		}
 		scores = append(scores, rs)
 		if s != nil {
@@ -92,8 +90,8 @@ func parseRubricVerdicts(response string, rubrics []models.Rubric) (*float64, []
 		}
 	}
 	if counted == 0 {
-		return nil, scores, fmt.Errorf("no rubric verdicts parsed (yes/no) from judge response")
+		return nil, scores
 	}
 	mean := total / float64(counted)
-	return &mean, scores, nil
+	return &mean, scores
 }

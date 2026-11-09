@@ -119,10 +119,7 @@ Property: be concise
 Rationale: A bit long.
 Verdict: no
 `
-	mean, scores, err := parseRubricVerdicts(resp, rubrics)
-	if err != nil {
-		t.Fatalf("parseRubricVerdicts: %v", err)
-	}
+	mean, scores := parseRubricVerdicts(resp, rubrics)
 	if mean == nil || math.Abs(*mean-0.5) > 1e-9 {
 		t.Fatalf("mean = %v, want 0.5", mean)
 	}
@@ -143,12 +140,57 @@ Verdict: no
 	}
 }
 
-// 3. Off-format reply: parser rejects prose that has no Property/Verdict lines.
+// 3. Off-format reply: prose with no Property/Verdict lines scores nothing.
 func TestParseRubricVerdictsOffFormat(t *testing.T) {
 	rubrics := []models.Rubric{rubric("r1", "be helpful")}
-	_, _, err := parseRubricVerdicts("# Sorry, I don't have an answer.", rubrics)
-	if err == nil {
-		t.Fatal("expected parse error")
+	mean, scores := parseRubricVerdicts("# Sorry, I don't have an answer.", rubrics)
+	if mean != nil || len(scores) != 0 {
+		t.Fatalf("mean = %v, scores = %+v; want no score", mean, scores)
+	}
+}
+
+// Mirrors adk-python test_rubric_based_evaluator.py incomplete-entry case: a
+// partial parse could silently drop a failed rubric, so it scores nothing.
+func TestParseRubricVerdictsRejectsIncompleteEntry(t *testing.T) {
+	rubrics := []models.Rubric{rubric("1", "Is the response good?"), rubric("2", "Is the response bad?")}
+	resp := `
+      Property: Is the response good?
+      Rationale: It was good.
+      Verdict: yes
+
+      Property: Is the response bad?
+      Rationale: It was not bad.
+      `
+	mean, scores := parseRubricVerdicts(resp, rubrics)
+	if mean != nil || len(scores) != 0 {
+		t.Fatalf("mean = %v, scores = %+v; want no score for a partial parse", mean, scores)
+	}
+}
+
+// An incomplete judge reply leaves the invocation NOT_EVALUATED instead of
+// failing the metric.
+func TestRubricEvaluatorIncompleteReplyIsNotEvaluated(t *testing.T) {
+	rubrics := []models.Rubric{rubric("1", "Is the response good?"), rubric("2", "Is the response bad?")}
+	fake := &fakeJudge{responses: []string{"Property: Is the response good?\nRationale: It was good.\nVerdict: yes\n\nProperty: Is the response bad?\nRationale: It was not bad.\n"}}
+	reg := NewDefaultRegistry()
+	reg.SetConfig(RegistryConfig{JudgeClient: fake})
+	ev, err := reg.GetEvaluator(rubricMetric(models.MetricRubricBasedFinalResponseQualityV1, 0.5, rubrics))
+	if err != nil {
+		t.Fatalf("GetEvaluator: %v", err)
+	}
+	inv := models.Invocation{
+		UserContent:   genai.NewContentFromText("q", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("a", genai.RoleModel),
+	}
+	result, err := ev.EvaluateInvocations(context.Background(), []models.Invocation{inv}, []models.Invocation{inv}, nil)
+	if err != nil {
+		t.Fatalf("EvaluateInvocations: %v", err)
+	}
+	if len(result.PerInvocationResults) != 1 || result.PerInvocationResults[0].Score != nil || result.PerInvocationResults[0].EvalStatus != models.EvalStatusNotEvaluated {
+		t.Errorf("per-invocation = %+v, want one unscored NOT_EVALUATED result", result.PerInvocationResults)
+	}
+	if result.OverallEvalStatus != models.EvalStatusNotEvaluated {
+		t.Errorf("overall status = %d, want %d", result.OverallEvalStatus, models.EvalStatusNotEvaluated)
 	}
 }
 
@@ -200,10 +242,7 @@ Property: not in list
 Rationale: n/a
 Verdict: no
 `
-	mean, scores, err := parseRubricVerdicts(resp, rubrics)
-	if err != nil {
-		t.Fatalf("parseRubricVerdicts: %v", err)
-	}
+	mean, scores := parseRubricVerdicts(resp, rubrics)
 	if mean == nil || *mean != 1.0 {
 		t.Fatalf("mean = %v, want 1.0", mean)
 	}
@@ -500,11 +539,10 @@ Property: prop no
 Rationale: n/a
 Verdict: not applicable
 `
-	// Both verdicts should be unparseable (no exact yes/no match), leaving
-	// counted=0 and returning an error.
-	_, _, err := parseRubricVerdicts(resp, rubrics)
-	if err == nil {
-		t.Fatal("expected parse error: 'yesterday'/'not applicable' must not count as verdicts")
+	// Neither verdict is an exact yes/no, so nothing scores.
+	mean, _ := parseRubricVerdicts(resp, rubrics)
+	if mean != nil {
+		t.Fatalf("mean = %v, want no score: 'yesterday'/'not applicable' must not count as verdicts", *mean)
 	}
 }
 
@@ -515,10 +553,7 @@ func TestParseRubricVerdictsBracketedVerdict(t *testing.T) {
 Rationale: ok
 Verdict: [[yes]]
 `
-	mean, scores, err := parseRubricVerdicts(resp, rubrics)
-	if err != nil {
-		t.Fatalf("parseRubricVerdicts: %v", err)
-	}
+	mean, scores := parseRubricVerdicts(resp, rubrics)
 	if mean == nil || *mean != 1.0 || len(scores) != 1 || scores[0].Score == nil || *scores[0].Score != 1.0 {
 		t.Fatalf("mean = %v, scores = %+v", mean, scores)
 	}

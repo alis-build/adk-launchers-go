@@ -302,7 +302,8 @@ func newRubricBasedEvaluator(metric models.EvalMetric, kind rubricKind, cfg *Reg
 			if err != nil {
 				eff = critRubrics
 			}
-			return parseRubricVerdicts(resp, eff)
+			score, rubrics := parseRubricVerdicts(resp, eff)
+			return score, rubrics, nil
 		},
 		aggregatePerInvocation: func(s []PerInvocationResult) PerInvocationResult {
 			return majorityVoteAggregate(s, metric.Threshold)
@@ -384,10 +385,7 @@ func (e *multiTurnRubricEvaluator) EvaluateInvocations(
 		if err != nil {
 			return EvaluationResult{}, err
 		}
-		score, rubrics, err := parseRubricVerdicts(resp, eff)
-		if err != nil {
-			return EvaluationResult{}, err
-		}
+		score, rubrics := parseRubricVerdicts(resp, eff)
 		sampleResults = append(sampleResults, judgeSample(last, lastExp, score, rubrics, e.metric.Threshold))
 	}
 	lastResult := sampleResults[0]
