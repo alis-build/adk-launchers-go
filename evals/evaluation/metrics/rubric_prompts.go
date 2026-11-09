@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -33,8 +34,9 @@ Only respond to the properties provided. Do not make up new properties.
 
 # Key Evaluation Principles
 Your evaluation must follow a two-part process: first, collect trusted evidence from the agent's work, and second, judge the final answer against it.
-1. **Establish Trusted Evidence from Tool Calls**: You must first examine the agent's tool calls to determine if they are procedurally sound, meaning that the agent used the appropriate tools with logical parameters to address the user's prompt.
-  * Your ONLY sources of truth are the <user_prompt> and the direct output ('tool_response') from PROCEDURALLY SOUND tool calls found in the <response_steps>. Examples of procedural flaws include:
+1. **Establish Trusted Evidence from Tool Calls and Grounding**: You must first examine the agent's tool calls to determine if they are procedurally sound, meaning that the agent used the appropriate tools with logical parameters to address the user's prompt.
+  * Your ONLY sources of truth are the <user_prompt>, the direct output ('tool_response') from PROCEDURALLY SOUND tool calls found in the <response_steps>, and model-supplied grounding metadata found in <grounding_metadata>.
+  * Grounding metadata is trusted evidence for model-internal tools such as google_search whose raw search results may not appear as function tool responses. Examples of procedural flaws include:
     * The agent failed to call a tool that will enable it to answer the user's prompt despite having all the necessary parameters to do so.
     * The agent called the tool with incorrect or missing parameters.
     * The agent called a tool that does not exist, or called a tool with a parameter that does not exist.
@@ -86,6 +88,9 @@ REMEMBER: Your answer will help improve the AI agent. It is important to determi
   <response_steps>
   {response_steps}
   </response_steps>
+  <grounding_metadata>
+  {grounding_metadata}
+  </grounding_metadata>
   <final_answer>
   {final_response}
   </final_answer>
@@ -420,6 +425,79 @@ func snakeCase(s string) string {
 	return b.String()
 }
 
+const noGroundingMetadata = "No grounding metadata was provided."
+
+// renderGroundingMetadataJSON lists the grounding metadata on inv's events,
+// each with its event index and author, matching adk-python's
+// get_grounding_metadata_as_json_str. Keys are snake_case because
+// adk-python dumps field names rather than their camelCase aliases.
+func renderGroundingMetadataJSON(inv models.Invocation) string {
+	events, ok := inv.IntermediateData.AsInvocationEvents()
+	if !ok {
+		return noGroundingMetadata
+	}
+	type entry struct {
+		Step              int    `json:"step"`
+		Author            string `json:"author,omitempty"`
+		GroundingMetadata any    `json:"grounding_metadata"`
+	}
+	var entries []entry
+	for i, ev := range events.InvocationEvents {
+		if ev.GroundingMetadata == nil {
+			continue
+		}
+		metadata, err := snakeCaseJSON(ev.GroundingMetadata)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, entry{Step: i, Author: ev.Author, GroundingMetadata: metadata})
+	}
+	if len(entries) == 0 {
+		return noGroundingMetadata
+	}
+	out, err := json.MarshalIndent(struct {
+		GroundingMetadata []entry `json:"grounding_metadata"`
+	}{entries}, "", "  ")
+	if err != nil {
+		return noGroundingMetadata
+	}
+	return string(out)
+}
+
+// snakeCaseJSON round-trips v through JSON and renames every object key to
+// snake_case, recursively.
+func snakeCaseJSON(v any) (any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var decoded any
+	if err := dec.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	return snakeCaseKeys(decoded), nil
+}
+
+func snakeCaseKeys(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, val := range v {
+			out[snakeCase(k)] = snakeCaseKeys(val)
+		}
+		return out
+	case []any:
+		for i, val := range v {
+			v[i] = snakeCaseKeys(val)
+		}
+		return v
+	default:
+		return v
+	}
+}
+
 // renderToolCallsAndResponsesJSON marshals tool calls paired with responses
 // to JSON matching Python get_tool_calls_and_responses_as_json_str.
 func renderToolCallsAndResponsesJSON(inv models.Invocation) string {
@@ -476,6 +554,7 @@ func formatRubricFinalResponsePrompt(actual models.Invocation, _ *models.Invocat
 		"{tool_declarations}", renderToolDeclarationsJSON(actual.AppDetails),
 		"{user_input}", textFromContent(actual.UserContent),
 		"{response_steps}", renderToolCallsAndResponsesJSON(actual),
+		"{grounding_metadata}", renderGroundingMetadataJSON(actual),
 		"{final_response}", textFromContent(actual.FinalResponse),
 		"{rubrics}", renderRubricsList(rubrics),
 	)

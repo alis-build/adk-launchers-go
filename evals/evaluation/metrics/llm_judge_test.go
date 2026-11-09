@@ -1420,3 +1420,74 @@ func TestMultiTurnPromptListsSharedBuiltInToolPerAgent(t *testing.T) {
 		t.Errorf("tool definitions =\n%s\nwant\n%s", got, want)
 	}
 }
+
+func groundedInvocation() models.Invocation {
+	return models.Invocation{
+		UserContent:   genai.NewContentFromText("What's new in AI?", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("Here are sources.", genai.RoleModel),
+		IntermediateData: models.InvocationEventsField(models.InvocationEvents{InvocationEvents: []models.InvocationEvent{{
+			Author:            "agent",
+			GroundingMetadata: &genai.GroundingMetadata{WebSearchQueries: []string{"recent AI news"}},
+		}}}),
+	}
+}
+
+// Mirrors adk-python test_llm_as_judge_utils.py
+// test_get_grounding_metadata_as_json_str_with_invocation_events.
+func TestRenderGroundingMetadataJSON(t *testing.T) {
+	var got struct {
+		GroundingMetadata []struct {
+			Step              *int   `json:"step"`
+			Author            string `json:"author"`
+			GroundingMetadata struct {
+				WebSearchQueries []string `json:"web_search_queries"`
+			} `json:"grounding_metadata"`
+		} `json:"grounding_metadata"`
+	}
+	out := renderGroundingMetadataJSON(groundedInvocation())
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("renderGroundingMetadataJSON() = %q, not JSON: %v", out, err)
+	}
+	if len(got.GroundingMetadata) != 1 {
+		t.Fatalf("entries = %d, want 1 in %s", len(got.GroundingMetadata), out)
+	}
+	entry := got.GroundingMetadata[0]
+	if entry.Step == nil || *entry.Step != 0 {
+		t.Errorf("step = %v, want 0 in %s", entry.Step, out)
+	}
+	if entry.Author != "agent" {
+		t.Errorf("author = %q, want agent", entry.Author)
+	}
+	if diff := cmp.Diff([]string{"recent AI news"}, entry.GroundingMetadata.WebSearchQueries); diff != "" {
+		t.Errorf("web_search_queries (-want +got):\n%s", diff)
+	}
+}
+
+// Mirrors adk-python test_llm_as_judge_utils.py
+// test_get_grounding_metadata_as_json_str_without_metadata.
+func TestRenderGroundingMetadataJSONWithoutMetadata(t *testing.T) {
+	const want = "No grounding metadata was provided."
+	for name, inv := range map[string]models.Invocation{
+		"no events":    {IntermediateData: models.InvocationEventsField(models.InvocationEvents{})},
+		"no grounding": {IntermediateData: models.InvocationEventsField(models.InvocationEvents{InvocationEvents: []models.InvocationEvent{{Author: "agent"}}})},
+		"legacy shape": {IntermediateData: models.IntermediateDataField(models.IntermediateData{})},
+	} {
+		if got := renderGroundingMetadataJSON(inv); got != want {
+			t.Errorf("%s: renderGroundingMetadataJSON() = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// Mirrors adk-python test_rubric_based_final_response_quality_v1.py
+// test_format_auto_rater_prompt_with_grounding_metadata.
+func TestRubricFinalResponsePromptIncludesGroundingMetadata(t *testing.T) {
+	p := formatRubricFinalResponsePrompt(groundedInvocation(), nil, []models.Rubric{rubric("1", "cites sources")})
+	for _, want := range []string{"<grounding_metadata>", "recent AI news", "model-supplied grounding metadata"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt is missing %q", want)
+		}
+	}
+	if strings.Contains(p, "{grounding_metadata}") {
+		t.Error("prompt still holds the {grounding_metadata} slot")
+	}
+}
