@@ -992,3 +992,30 @@ func TestRunEvalLegacyBundleBodyStillWorks(t *testing.T) {
 		t.Errorf("legacy results = %v, want one result for case1", results)
 	}
 }
+
+// Mirrors adk-python test_fast_api.py's add-session missing-session case.
+func TestAddSessionMissingSessionIs404(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	_, err := callHandlerAs(t, l.addSessionHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/set1/add-session", "user1",
+		map[string]string{"evalId": "test_eval_case_id", "sessionId": "session_that_does_not_exist"},
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if alismux.StatusCode(err) != http.StatusNotFound || !strings.Contains(err.Error(), "Session not found") {
+		t.Errorf("add-session for a missing session: err = %v, want 404 Session not found", err)
+	}
+}
+
+// Mirrors adk-python test_fast_api.py's add-session missing-eval-set case.
+func TestAddSessionMissingEvalSetIs404(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	seedSession(t, l, "user1", "sess1")
+	_, err := callHandlerAs(t, l.addSessionHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/missing_eval_set/add-session", "user1",
+		map[string]string{"evalId": "c1", "sessionId": "sess1"},
+		map[string]string{"app_name": "my_app", "eval_set_id": "missing_eval_set"})
+	if alismux.StatusCode(err) != http.StatusNotFound {
+		t.Errorf("add-session to a missing eval set: err = %v, want 404", err)
+	}
+	if c, _ := sets.GetEvalCase("my_app", "missing_eval_set", "c1"); c != nil {
+		t.Errorf("eval case written for a missing set: %+v", c)
+	}
+}

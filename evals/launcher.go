@@ -743,11 +743,10 @@ func (l *evalsLauncher) addSessionHandler() alismux.Func {
 			UserID:    caller.ID,
 			SessionID: req.SessionID,
 		})
-		if err != nil {
-			return alismux.BadRequestErr("session not found: %s", err.Error())
-		}
-		if resp == nil || resp.Session == nil {
-			return alismux.BadRequestErr("session not found")
+		// 404 with adk-python's detail, so clients can tell a missing session
+		// from a bad request.
+		if err != nil || resp == nil || resp.Session == nil {
+			return alismux.NotFoundErr("Session not found")
 		}
 
 		rootAgent, err := l.launcherCfg.AgentLoader.LoadAgent(appName)
@@ -767,6 +766,9 @@ func (l *evalsLauncher) addSessionHandler() alismux.Func {
 			CreationTimestamp: float64(time.Now().Unix()),
 		}
 		if err := l.setsManager.AddEvalCase(appName, evalSetID, newCase); err != nil {
+			if storageNotFound(err) {
+				return alismux.NotFoundErr("%s", err.Error())
+			}
 			return alismux.BadRequestErr("%s", err.Error())
 		}
 		w.WriteHeader(http.StatusNoContent)
