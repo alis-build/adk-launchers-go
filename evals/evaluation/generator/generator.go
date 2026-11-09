@@ -148,6 +148,15 @@ func (g *Generator) runSingleUserTurn(ctx context.Context, p runTurnParams) ([]*
 		}
 		out = append(out, ev)
 	}
+	// A turn the agent answered with no events is still a turn: record the
+	// user's message under a fresh invocation ID so the case keeps one
+	// invocation per turn, as adk-python does.
+	if invocationID == "" {
+		userEv := session.NewEvent(ctx, uuid.NewString())
+		userEv.Author = userAuthor
+		userEv.Content = p.userContent
+		out = append(out, userEv)
+	}
 	return out, nil
 }
 

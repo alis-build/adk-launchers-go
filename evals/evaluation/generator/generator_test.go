@@ -256,3 +256,51 @@ func TestIsEvalSessionIDAcceptsBothPrefixes(t *testing.T) {
 		}
 	}
 }
+
+// Mirrors adk-python test_evaluation_generator.py: a turn the agent answers
+// with no events is still recorded as an invocation.
+func TestGenerateInferencesRecordsSilentTurns(t *testing.T) {
+	silent, err := agent.New(agent.Config{
+		Name: "silent-agent",
+		Run: func(agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(func(*session.Event, error) bool) {}
+		},
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	rt, err := adkrun.NewRuntime(&launcher.Config{AgentLoader: agent.NewSingleLoader(silent), SessionService: session.InMemoryService()}, "silent-agent")
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	provider := simulation.UserSimulatorProvider{}
+	sim, err := provider.Provide(models.EvalCase{
+		EvalID: "case-1",
+		Conversation: []models.Invocation{
+			{UserContent: genai.NewContentFromText("First silent query", genai.RoleUser)},
+			{UserContent: genai.NewContentFromText("Second silent query", genai.RoleUser)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Provide: %v", err)
+	}
+
+	inv, err := (&Generator{Runtime: rt}).GenerateInferences(context.Background(), InferenceOptions{UserSimulator: sim})
+	if err != nil {
+		t.Fatalf("GenerateInferences: %v", err)
+	}
+	if len(inv) != 2 {
+		t.Fatalf("invocations = %d, want 2", len(inv))
+	}
+	for i, want := range []string{"First silent query", "Second silent query"} {
+		if inv[i].UserContent == nil || len(inv[i].UserContent.Parts) == 0 || inv[i].UserContent.Parts[0].Text != want {
+			t.Errorf("invocation %d user content = %+v, want %q", i, inv[i].UserContent, want)
+		}
+		if inv[i].FinalResponse != nil {
+			t.Errorf("invocation %d FinalResponse = %+v, want nil", i, inv[i].FinalResponse)
+		}
+	}
+	if inv[0].InvocationID == "" || inv[1].InvocationID == "" || inv[0].InvocationID == inv[1].InvocationID {
+		t.Errorf("invocation IDs = %q, %q; want two distinct non-empty IDs", inv[0].InvocationID, inv[1].InvocationID)
+	}
+}
