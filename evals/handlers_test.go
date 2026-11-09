@@ -668,3 +668,103 @@ func (nilSliceResultsManager) GetEvalSetResult(string, string) (*models.EvalSetR
 func (nilSliceResultsManager) ListEvalSetResults(string) ([]string, error) {
 	return nil, nil
 }
+
+// credentialCall is an adk_request_credential call whose auth config carries
+// an OAuth2 client secret and PKCE verifier, as in adk-python's
+// oauth2_auth_config_dict fixture.
+func credentialCall() *genai.FunctionCall {
+	return &genai.FunctionCall{
+		ID:   "fc-1",
+		Name: "adk_request_credential",
+		Args: map[string]any{
+			"functionCallId": "call-1",
+			"authConfig": map[string]any{
+				"exchangedAuthCredential": map[string]any{
+					"authType": "oauth2",
+					"oauth2": map[string]any{
+						"clientId":     "public-client-id",
+						"clientSecret": "s3cret-client",
+						"codeVerifier": "s3cret-verifier",
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestGetEvalCaseRedactsSecrets(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	_ = sets.AddEvalCase("my_app", "set1", models.EvalCase{
+		EvalID: "case1",
+		Conversation: []models.Invocation{{
+			UserContent:      genai.NewContentFromText("hi", genai.RoleUser),
+			IntermediateData: models.IntermediateDataField(models.IntermediateData{ToolUses: []*genai.FunctionCall{credentialCall()}}),
+		}},
+	})
+
+	rec, err := callHandlerAs(t, l.getEvalCaseHandler(), http.MethodGet, "/dev/apps/my_app/eval_sets/set1/evals/case1", "user1", nil,
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1", "eval_case_id": "case1"})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("get eval case: status = %d, err = %v", rec.Code, err)
+	}
+	body := rec.Body.String()
+	for _, secret := range []string{"s3cret-client", "s3cret-verifier"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("response contains %q", secret)
+		}
+	}
+	for _, kept := range []string{"adk_request_credential", "public-client-id"} {
+		if !strings.Contains(body, kept) {
+			t.Errorf("response lost %q: %s", kept, body)
+		}
+	}
+
+	stored, err := sets.GetEvalCase("my_app", "set1", "case1")
+	if err != nil || stored == nil {
+		t.Fatalf("GetEvalCase: %v", err)
+	}
+	raw, _ := json.Marshal(stored)
+	if !strings.Contains(string(raw), "s3cret-client") {
+		t.Error("stored case lost its secret; redaction must only touch the response")
+	}
+}
+
+func TestGetEvalResultRedactsSecrets(t *testing.T) {
+	l, _ := newHandlerTestLauncher(t)
+	details, _ := json.Marshal(map[string]any{"events": []any{map[string]any{
+		"content": map[string]any{"parts": []any{map[string]any{"functionCall": credentialCall()}}},
+	}}})
+	saved, err := l.resultsManager.SaveEvalSetResult("my_app", "set1", []models.EvalCaseResult{{
+		EvalSetID: "set1", EvalID: "case1", SessionDetails: details,
+	}})
+	if err != nil {
+		t.Fatalf("SaveEvalSetResult: %v", err)
+	}
+
+	rec, err := callHandlerAs(t, l.getEvalResultHandler(), http.MethodGet, "/dev/apps/my_app/eval_results/"+saved.EvalSetResultID, "user1", nil,
+		map[string]string{"app_name": "my_app", "eval_result_id": saved.EvalSetResultID})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("get eval result: status = %d, err = %v", rec.Code, err)
+	}
+	body := rec.Body.String()
+	for _, secret := range []string{"s3cret-client", "s3cret-verifier"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("response contains %q", secret)
+		}
+	}
+	for _, kept := range []string{"adk_request_credential", "public-client-id"} {
+		if !strings.Contains(body, kept) {
+			t.Errorf("response lost %q: %s", kept, body)
+		}
+	}
+
+	stored, err := l.resultsManager.GetEvalSetResult("my_app", saved.EvalSetResultID)
+	if err != nil || stored == nil {
+		t.Fatalf("GetEvalSetResult: %v", err)
+	}
+	raw, _ := json.Marshal(stored)
+	if !strings.Contains(string(raw), "s3cret-client") {
+		t.Error("stored result lost its secret; redaction must only touch the response")
+	}
+}

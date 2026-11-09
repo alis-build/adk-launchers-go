@@ -7,6 +7,7 @@
 package credredact
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -82,8 +83,12 @@ func JSON(v any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("credredact: encode: %w", err)
 	}
+	// UseNumber keeps numbers exactly as encoded; float64 would round large
+	// integers.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	if err := dec.Decode(&decoded); err != nil {
 		return nil, fmt.Errorf("credredact: decode: %w", err)
 	}
 	out, err := json.Marshal(Value(decoded))

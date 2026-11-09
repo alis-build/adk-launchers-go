@@ -20,6 +20,7 @@ import (
 	"go.alis.build/adk/launchers/evals/evaluation/simulation"
 	"go.alis.build/adk/launchers/evals/evaluation/storage"
 	"go.alis.build/adk/launchers/internal/adkrun"
+	"go.alis.build/adk/launchers/internal/credredact"
 	"go.alis.build/adk/launchers/internal/launcherutils"
 	_ "go.alis.build/adk/launchers/internal/testenv"
 	launchersweb "go.alis.build/adk/launchers/web"
@@ -411,6 +412,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
+// writeRedactedJSON writes v as JSON with credential secrets stripped, as
+// adk-python's dev server does for stored eval cases and results. A recorded
+// conversation can hold an adk_request_credential call carrying an OAuth
+// client secret or tokens; the stored value keeps them, the response does not.
+func writeRedactedJSON(w http.ResponseWriter, v any) error {
+	body, err := credredact.JSON(v)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write(append(body, '\n'))
+	return err
+}
+
 // decodeJSON decodes the request body into dst.
 func decodeJSON(r *http.Request, dst any) error {
 	return json.NewDecoder(r.Body).Decode(dst)
@@ -623,7 +639,7 @@ func (l *evalsLauncher) getEvalCaseHandler() alismux.Func {
 		if evalCase == nil {
 			return alismux.NotFoundErr("Eval set `%s` or Eval `%s` not found.", evalSetID, evalCaseID)
 		}
-		return writeJSON(w, http.StatusOK, evalCase)
+		return writeRedactedJSON(w, evalCase)
 	}
 }
 
@@ -906,7 +922,7 @@ func (l *evalsLauncher) getEvalResultHandler() alismux.Func {
 			}
 			return err
 		}
-		return writeJSON(w, http.StatusOK, result)
+		return writeRedactedJSON(w, result)
 	}
 }
 

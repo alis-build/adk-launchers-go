@@ -188,3 +188,13 @@ func TestJSONRedactsTypedValues(t *testing.T) {
 		t.Errorf("JSON() = %s, lost the client ID", b)
 	}
 }
+
+func TestJSONKeepsLargeIntegersExact(t *testing.T) {
+	b, err := JSON(map[string]int64{"n": 9007199254740993}) // 2^53 + 1
+	if err != nil {
+		t.Fatalf("JSON() error = %v", err)
+	}
+	if got, want := string(b), `{"n":9007199254740993}`; got != want {
+		t.Errorf("JSON() = %s, want %s", got, want)
+	}
+}
