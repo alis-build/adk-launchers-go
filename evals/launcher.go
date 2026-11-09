@@ -196,44 +196,81 @@ func (l *evalsLauncher) mountHostRoutes(config *adklauncher.Config) error {
 		return err
 	}
 
-	devApp := l.devAppBase()
-
-	alismux.Post(devApp+"/eval-sets", l.createEvalSetHandler())
-	alismux.Get(devApp+"/eval-sets", l.listEvalSetsHandler())
-	alismux.Get(devApp+"/eval-sets/{eval_set_id}", l.getEvalSetHandler())
-	alismux.Delete(devApp+"/eval-sets/{eval_set_id}", l.deleteEvalSetHandler())
-	alismux.Post(devApp+"/eval-sets/{eval_set_id}/add-session", l.addSessionHandler())
-	alismux.Post(devApp+"/eval-sets/{eval_set_id}/run", l.runEvalHandler())
-	alismux.Get(devApp+"/eval-sets/{eval_set_id}/eval-cases", l.listEvalCasesHandler())
-	alismux.Get(devApp+"/eval-sets/{eval_set_id}/eval-cases/{eval_case_id}", l.getEvalCaseHandler())
-	alismux.Put(devApp+"/eval-sets/{eval_set_id}/eval-cases/{eval_case_id}", l.updateEvalCaseHandler())
-	alismux.Delete(devApp+"/eval-sets/{eval_set_id}/eval-cases/{eval_case_id}", l.deleteEvalCaseHandler())
-
-	l.mountLegacyEvalRoutes(devApp)
-	// Bundled adk-web calls legacy underscore paths at {pathPrefix}/apps/... (no /dev).
-	l.mountLegacyEvalRoutes(l.webuiAppBase())
-
-	alismux.Get(devApp+"/eval-results", l.listEvalResultsHandler())
-	alismux.Get(devApp+"/eval-results/{eval_result_id}", l.getEvalResultHandler())
-
-	alismux.Get(devApp+"/metrics-info", l.metricsInfoHandler())
+	for _, r := range l.routes() {
+		register(r)
+	}
 	return nil
 }
 
-// mountLegacyEvalRoutes registers underscore-named eval routes for adk-web / DevServer parity.
-func (l *evalsLauncher) mountLegacyEvalRoutes(base string) {
-	alismux.Post(base+"/eval_sets/{eval_set_id}", l.createEvalSetLegacyHandler())
-	alismux.Get(base+"/eval_sets", l.listEvalSetsLegacyHandler())
-	alismux.Get(base+"/eval_sets/{eval_set_id}", l.getEvalSetHandler())
-	alismux.Delete(base+"/eval_sets/{eval_set_id}", l.deleteEvalSetHandler())
-	alismux.Post(base+"/eval_sets/{eval_set_id}/add_session", l.addSessionHandler())
-	alismux.Post(base+"/eval_sets/{eval_set_id}/run_eval", l.runEvalLegacyHandler())
-	alismux.Get(base+"/eval_sets/{eval_set_id}/evals", l.listEvalCasesHandler())
-	alismux.Get(base+"/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.getEvalCaseHandler())
-	alismux.Put(base+"/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.updateEvalCaseHandler())
-	alismux.Delete(base+"/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.deleteEvalCaseHandler())
-	alismux.Get(base+"/eval_results", l.listEvalResultsLegacyHandler())
-	alismux.Get(base+"/eval_results/{eval_result_id}", l.getEvalResultHandler())
+// evalRoute is one evals HTTP route as registered on the host mux.
+type evalRoute struct {
+	method  string
+	pattern string
+	handler alismux.Func
+}
+
+// register mounts r on the host mux behind launchersweb.RequireIdentity, so
+// every evals route answers 401 to a caller with no identity before its
+// handler runs. Eval sets and results stay shared per app.
+func register(r evalRoute) {
+	switch r.method {
+	case http.MethodGet:
+		alismux.Get(r.pattern, r.handler, launchersweb.RequireIdentity)
+	case http.MethodPost:
+		alismux.Post(r.pattern, r.handler, launchersweb.RequireIdentity)
+	case http.MethodPut:
+		alismux.Put(r.pattern, r.handler, launchersweb.RequireIdentity)
+	case http.MethodDelete:
+		alismux.Delete(r.pattern, r.handler, launchersweb.RequireIdentity)
+	default:
+		panic("evals: unsupported route method " + r.method)
+	}
+}
+
+// routes lists every evals route, each registered behind
+// launchersweb.RequireIdentity: the canonical hyphen routes on the dev base,
+// and the legacy underscore routes on both the dev base and the base the
+// bundled adk-web calls ({pathPrefix}/apps/..., no /dev).
+func (l *evalsLauncher) routes() []evalRoute {
+	devApp := l.devAppBase()
+	routes := []evalRoute{
+		{http.MethodPost, devApp + "/eval-sets", l.createEvalSetHandler()},
+		{http.MethodGet, devApp + "/eval-sets", l.listEvalSetsHandler()},
+		{http.MethodGet, devApp + "/eval-sets/{eval_set_id}", l.getEvalSetHandler()},
+		{http.MethodDelete, devApp + "/eval-sets/{eval_set_id}", l.deleteEvalSetHandler()},
+		{http.MethodPost, devApp + "/eval-sets/{eval_set_id}/add-session", l.addSessionHandler()},
+		{http.MethodPost, devApp + "/eval-sets/{eval_set_id}/run", l.runEvalHandler()},
+		{http.MethodGet, devApp + "/eval-sets/{eval_set_id}/eval-cases", l.listEvalCasesHandler()},
+		{http.MethodGet, devApp + "/eval-sets/{eval_set_id}/eval-cases/{eval_case_id}", l.getEvalCaseHandler()},
+		{http.MethodPut, devApp + "/eval-sets/{eval_set_id}/eval-cases/{eval_case_id}", l.updateEvalCaseHandler()},
+		{http.MethodDelete, devApp + "/eval-sets/{eval_set_id}/eval-cases/{eval_case_id}", l.deleteEvalCaseHandler()},
+	}
+	routes = append(routes, l.legacyEvalRoutes(devApp)...)
+	routes = append(routes, l.legacyEvalRoutes(l.webuiAppBase())...)
+	return append(routes,
+		evalRoute{http.MethodGet, devApp + "/eval-results", l.listEvalResultsHandler()},
+		evalRoute{http.MethodGet, devApp + "/eval-results/{eval_result_id}", l.getEvalResultHandler()},
+		evalRoute{http.MethodGet, devApp + "/metrics-info", l.metricsInfoHandler()},
+	)
+}
+
+// legacyEvalRoutes lists the underscore-named eval routes for adk-web /
+// DevServer parity under base.
+func (l *evalsLauncher) legacyEvalRoutes(base string) []evalRoute {
+	return []evalRoute{
+		{http.MethodPost, base + "/eval_sets/{eval_set_id}", l.createEvalSetLegacyHandler()},
+		{http.MethodGet, base + "/eval_sets", l.listEvalSetsLegacyHandler()},
+		{http.MethodGet, base + "/eval_sets/{eval_set_id}", l.getEvalSetHandler()},
+		{http.MethodDelete, base + "/eval_sets/{eval_set_id}", l.deleteEvalSetHandler()},
+		{http.MethodPost, base + "/eval_sets/{eval_set_id}/add_session", l.addSessionHandler()},
+		{http.MethodPost, base + "/eval_sets/{eval_set_id}/run_eval", l.runEvalLegacyHandler()},
+		{http.MethodGet, base + "/eval_sets/{eval_set_id}/evals", l.listEvalCasesHandler()},
+		{http.MethodGet, base + "/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.getEvalCaseHandler()},
+		{http.MethodPut, base + "/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.updateEvalCaseHandler()},
+		{http.MethodDelete, base + "/eval_sets/{eval_set_id}/evals/{eval_case_id}", l.deleteEvalCaseHandler()},
+		{http.MethodGet, base + "/eval_results", l.listEvalResultsLegacyHandler()},
+		{http.MethodGet, base + "/eval_results/{eval_result_id}", l.getEvalResultHandler()},
+	}
 }
 
 // initStorage constructs eval set and result managers from options or defaults.
