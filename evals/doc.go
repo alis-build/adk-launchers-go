@@ -19,7 +19,7 @@
 //     caller's ID. A body userId naming anyone else answers 403.
 //   - A run executes as the caller, on the agent of the route's app, whatever
 //     user and app the stored case names. Its sessions are the caller's.
-//   - Reading an eval case or an eval result strips credential secrets
+//   - Reading an eval set, an eval case or an eval result strips credential secrets
 //     (OAuth client secrets, tokens, PKCE verifiers, API keys) from the
 //     response, as adk-python's dev server does. The stored data keeps them.
 //

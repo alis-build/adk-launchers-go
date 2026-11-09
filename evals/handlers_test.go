@@ -768,3 +768,28 @@ func TestGetEvalResultRedactsSecrets(t *testing.T) {
 		t.Error("stored result lost its secret; redaction must only touch the response")
 	}
 }
+
+func TestGetEvalSetRedactsSecrets(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	_ = sets.AddEvalCase("my_app", "set1", models.EvalCase{
+		EvalID: "case1",
+		Conversation: []models.Invocation{{
+			UserContent:      genai.NewContentFromText("hi", genai.RoleUser),
+			IntermediateData: models.IntermediateDataField(models.IntermediateData{ToolUses: []*genai.FunctionCall{credentialCall()}}),
+		}},
+	})
+
+	rec, err := callHandlerAs(t, l.getEvalSetHandler(), http.MethodGet, "/dev/apps/my_app/eval-sets/set1", "user1", nil,
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("get eval set: status = %d, err = %v", rec.Code, err)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "s3cret-client") {
+		t.Error("response contains the client secret")
+	}
+	if !strings.Contains(body, "adk_request_credential") {
+		t.Errorf("response lost the credential call: %s", body)
+	}
+}

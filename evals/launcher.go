@@ -567,7 +567,9 @@ func (l *evalsLauncher) getEvalSetHandler() alismux.Func {
 		if set == nil {
 			return alismux.NotFoundErr("eval set %q not found", evalSetID)
 		}
-		return writeJSON(w, http.StatusOK, set)
+		// The set carries every case's conversation, so it is redacted like a
+		// single case.
+		return writeRedactedJSON(w, set)
 	}
 }
 
