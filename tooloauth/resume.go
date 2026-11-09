@@ -22,12 +22,12 @@ import (
 // the tool's own approval; the model's next call is a fresh one.
 const connectedResult = "connected to %s, call the tool again"
 
-// signInRequest is one sign-in request found in a session: the auth config
-// the plugin sent, and the author of the event that carried it.
-type signInRequest struct {
-	author string
-	config *toolauth.Config
-}
+// pendingTTL is how long a run's record of sign-in requests is kept after
+// the run's last start. A resumed call is dispatched right after its run
+// starts, so the record only has to outlive that moment; an hour leaves a
+// wide margin and bounds memory without tying the record to run ends, which
+// ADK does not report reliably to every plugin.
+const pendingTTL = time.Hour
 
 // signInKey identifies a sign-in request by the author of its event and the
 // call it paused, so an event from another author can neither replace nor
@@ -37,88 +37,107 @@ type signInKey struct {
 	callID string
 }
 
-// pendingRun is what beforeRun recorded for one invocation: its sign-in
-// requests, and how many runs of it are in flight. A resume runs under the
-// paused run's invocation ID, so two resumes of one turn can overlap; the
-// record is dropped only when the last of them ends.
-type pendingRun struct {
-	runs     int
-	requests map[signInKey]*toolauth.Config
+// signInRequest is one sign-in request found in a session.
+type signInRequest struct {
+	config *toolauth.Config
+	// answered is set when a reply to the paused call follows the request:
+	// the sign-in already completed or failed, and its code must not be sent
+	// again.
+	answered bool
+	// conflicting is set when the session holds two different sign-in
+	// requests for the same call, which only a tampered session does.
+	conflicting bool
 }
 
-// pendingSignIns holds the sign-in requests of running invocations. A tool
+// pendingRun is the record of one invocation's sign-in requests, as of the
+// latest start of a run under that invocation. Resumes run under the paused
+// run's invocation ID, so several runs can share a record.
+type pendingRun struct {
+	requests map[signInKey]signInRequest
+	// claimed holds the requests whose code a resume is exchanging, so a
+	// concurrent duplicate of the reply does not send the code again.
+	claimed map[signInKey]bool
+	seen    time.Time
+}
+
+// pendingSignIns holds the sign-in requests of recent invocations. A tool
 // callback cannot read the session (ADK hides it from tool contexts), so the
-// plugin reads it when a run starts and drops it when the run ends. A run
-// whose AfterRun hook never fires leaves its record behind: in ADK's live
-// mode that happens when the agent fails to start, when the event iterator
-// is never ranged, or when another plugin's BeforeRun ends the run early.
-// Records are small, one per such invocation.
+// plugin reads it when a run starts.
 type pendingSignIns struct {
 	mu           sync.Mutex
 	byInvocation map[string]*pendingRun
 }
 
 // beforeRun records the sign-in requests in the run's session, so a resumed
-// call can be checked against the request the plugin sent.
+// call can be checked against the request the plugin sent, and prunes
+// records no run has started under for pendingTTL.
 func (r *resolver) beforeRun(ctx agent.InvocationContext) (*genai.Content, error) {
 	reqs := signInRequests(ctx.Session())
+	now := time.Now()
 	r.pending.mu.Lock()
 	defer r.pending.mu.Unlock()
-	// Every run is counted, even one with nothing to record yet: a resume
-	// can start before the run it resumes has ended, under the same
-	// invocation ID, and must not lose its record when that run ends.
+	for id, run := range r.pending.byInvocation {
+		if now.Sub(run.seen) > pendingTTL {
+			delete(r.pending.byInvocation, id)
+		}
+	}
 	run := r.pending.byInvocation[ctx.InvocationID()]
 	if run == nil {
+		if len(reqs) == 0 {
+			return nil, nil
+		}
 		if r.pending.byInvocation == nil {
 			r.pending.byInvocation = map[string]*pendingRun{}
 		}
-		run = &pendingRun{}
+		run = &pendingRun{claimed: map[signInKey]bool{}}
 		r.pending.byInvocation[ctx.InvocationID()] = run
 	}
-	run.runs++
-	// The session only grows, so a later run's snapshot covers an earlier
-	// one's.
+	// The session only grows, so a later snapshot covers an earlier one.
 	run.requests = reqs
+	run.seen = now
 	return nil, nil
 }
 
-// afterRun drops what beforeRun recorded once no run of the invocation is
-// left.
-func (r *resolver) afterRun(ctx agent.InvocationContext) {
+// lookupSignIn returns the sign-in request the current agent made for the
+// current call, if any, as ADK itself matches confirmations by author.
+func (r *resolver) lookupSignIn(ctx agent.Context) (signInRequest, bool) {
 	r.pending.mu.Lock()
 	defer r.pending.mu.Unlock()
 	run := r.pending.byInvocation[ctx.InvocationID()]
 	if run == nil {
-		return
+		return signInRequest{}, false
 	}
-	if run.runs--; run.runs <= 0 {
-		delete(r.pending.byInvocation, ctx.InvocationID())
-	}
+	req, ok := run.requests[signInKey{author: ctx.AgentName(), callID: ctx.FunctionCallID()}]
+	return req, ok
 }
 
-// requestedAuthConfig returns the auth config the plugin sent when it paused
-// the current call for sign-in, from a request event authored by the
-// current agent, as ADK itself matches confirmations. It reports false when
-// there is none.
-func (r *resolver) requestedAuthConfig(ctx agent.Context) (*toolauth.Config, bool) {
+// claimSignIn marks the current call's sign-in request as being exchanged,
+// and reports false when another resume already claimed it.
+func (r *resolver) claimSignIn(ctx agent.Context) bool {
 	r.pending.mu.Lock()
 	defer r.pending.mu.Unlock()
 	run := r.pending.byInvocation[ctx.InvocationID()]
 	if run == nil {
-		return nil, false
+		return false
 	}
-	cfg, ok := run.requests[signInKey{author: ctx.AgentName(), callID: ctx.FunctionCallID()}]
-	return cfg, ok
+	key := signInKey{author: ctx.AgentName(), callID: ctx.FunctionCallID()}
+	if run.claimed[key] {
+		return false
+	}
+	run.claimed[key] = true
+	return true
 }
 
 // signInRequests returns the sign-in requests in sess, keyed by author and
-// the ID of the call each paused; a later request from the same author for
-// the same call replaces an earlier one. User-authored events never count.
-func signInRequests(sess session.Session) map[signInKey]*toolauth.Config {
+// the ID of the call each paused. User-authored events never count. A
+// request is marked answered when a non-user reply to its call follows it,
+// and conflicting when another request for the same call carries a
+// different state.
+func signInRequests(sess session.Session) map[signInKey]signInRequest {
 	if sess == nil {
 		return nil
 	}
-	out := map[signInKey]*toolauth.Config{}
+	out := map[signInKey]signInRequest{}
 	events := sess.Events()
 	for i := range events.Len() {
 		ev := events.At(i)
@@ -126,18 +145,29 @@ func signInRequests(sess session.Session) map[signInKey]*toolauth.Config {
 			continue
 		}
 		for _, p := range ev.Content.Parts {
-			if p == nil || p.FunctionCall == nil || p.FunctionCall.Name != toolconfirmation.FunctionCallName {
-				continue
-			}
-			orig, err := toolconfirmation.OriginalCallFrom(p.FunctionCall)
-			if err != nil || orig.ID == "" {
-				continue
-			}
-			key := signInKey{author: ev.Author, callID: orig.ID}
-			if cfg, ok := decodeRequestedConfig(p.FunctionCall.Args["toolConfirmation"]); ok {
-				out[key] = cfg
-			} else {
-				delete(out, key)
+			switch {
+			case p == nil:
+			case p.FunctionResponse != nil:
+				key := signInKey{author: ev.Author, callID: p.FunctionResponse.ID}
+				if req, ok := out[key]; ok {
+					req.answered = true
+					out[key] = req
+				}
+			case p.FunctionCall != nil && p.FunctionCall.Name == toolconfirmation.FunctionCallName:
+				orig, err := toolconfirmation.OriginalCallFrom(p.FunctionCall)
+				if err != nil || orig.ID == "" {
+					continue
+				}
+				cfg, ok := decodeRequestedConfig(p.FunctionCall.Args["toolConfirmation"])
+				if !ok {
+					continue
+				}
+				key := signInKey{author: ev.Author, callID: orig.ID}
+				if prev, seen := out[key]; seen && prev.config.ExchangedAuthCredential.OAuth2.State != cfg.ExchangedAuthCredential.OAuth2.State {
+					out[key] = signInRequest{config: cfg, conflicting: true}
+					continue
+				}
+				out[key] = signInRequest{config: cfg}
 			}
 		}
 	}
@@ -219,6 +249,11 @@ func (r *resolver) completeSignIn(ctx agent.Context, t Tool, requested *toolauth
 	// A Config changed between pause and resume would file a token granted
 	// for the old scopes or client under the new key.
 	if subtle.ConstantTimeCompare([]byte(requested.CredentialKey), []byte(key.Key)) != 1 {
+		return nil, failed("the sign-in request is out of date")
+	}
+	// A code may be sent once: a concurrent duplicate of this reply waits
+	// for nothing and fails instead.
+	if !r.claimSignIn(ctx) {
 		return nil, failed("the sign-in request is out of date")
 	}
 	// The exchange repeats the redirect URI the authorization used (RFC 6749

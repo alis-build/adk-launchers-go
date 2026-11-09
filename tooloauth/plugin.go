@@ -10,9 +10,13 @@ import (
 	"google.golang.org/adk/v2/tool"
 )
 
-// NewPlugin returns the runner plugin, named "tooloauth", that checks the
-// user's token before each configured tool runs. Add it through
-// launcher.Config.PluginConfig. It fails when cfg is invalid.
+// NewPlugin returns the runner plugin, named "tooloauth", that gives each
+// configured tool the user's token: it serves a stored one, refreshing it
+// when expired; pauses a tool with no token for the user's sign-in; and
+// completes the sign-in when the user answers, without running the tool on
+// that answer. When each run starts it reads the run's session for the
+// sign-in requests it made. Add it through launcher.Config.PluginConfig. It
+// fails when cfg is invalid.
 func NewPlugin(cfg Config) (*plugin.Plugin, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -21,7 +25,6 @@ func NewPlugin(cfg Config) (*plugin.Plugin, error) {
 	return plugin.New(plugin.Config{
 		Name:               "tooloauth",
 		BeforeRunCallback:  r.beforeRun,
-		AfterRunCallback:   r.afterRun,
 		BeforeToolCallback: r.beforeTool,
 	})
 }
@@ -39,8 +42,14 @@ func (r *resolver) beforeTool(ctx agent.Context, t tool.Tool, _ map[string]any) 
 		return nil, nil
 	}
 	if conf := ctx.ToolConfirmation(); conf != nil {
-		if requested, ok := r.requestedAuthConfig(ctx); ok {
-			return r.completeSignIn(ctx, cfgTool, requested, conf)
+		if req, ok := r.lookupSignIn(ctx); ok {
+			// An answered or conflicting request, or one another resume is
+			// already exchanging, is never completed again and never passes
+			// as the tool's own approval.
+			if req.answered || req.conflicting {
+				return nil, fmt.Errorf("%s sign-in failed: the sign-in request is out of date", cfgTool.Provider)
+			}
+			return r.completeSignIn(ctx, cfgTool, req.config, conf)
 		}
 		// A sign-in response with no sign-in request on record must never
 		// pass as the tool's own approval, which any confirmed

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -520,4 +521,160 @@ func TestResume_requestFromAnotherAuthorIsIgnored(t *testing.T) {
 		"http://localhost:4200/?state="+state+"&code=code-43", "http://localhost:4200")}))
 
 	connected(t, events)
+}
+
+// Replaying a sign-in reply, as a client double-submit or a network retry
+// does, must not send the spent code to the provider again: providers
+// revoke the tokens issued from a reused code.
+func TestResume_replayedReplyIsRefused(t *testing.T) {
+	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
+	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
+	rs := newResourceServer(t)
+	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
+	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+	payload := pausedPayload(t, fc)
+	reply := confirmationResponse(fc, map[string]any{"confirmed": true, "payload": withADKWebResponse(payload,
+		"http://localhost:4200/?state="+pausedState(t, payload)+"&code=code-44", "http://localhost:4200")})
+	connected(t, h.run(t.Context(), "user-7", "s-1", reply))
+
+	events := h.run(t.Context(), "user-7", "s-1", reply)
+
+	if got := te.callCount(); got != 1 {
+		t.Errorf("token endpoint called %d times, want 1", got)
+	}
+	resp, ok := functionResponse(events, "calendar_list")
+	if !ok {
+		t.Fatal("no calendar_list response on the replay")
+	}
+	if got, _ := resp["error"].(string); got != "Google Calendar sign-in failed: the sign-in request is out of date" {
+		t.Errorf("replay response = %v, want the out-of-date error", resp)
+	}
+	if got := rs.handlerRuns(); got != 0 {
+		t.Errorf("calendar_list ran %d times, want 0", got)
+	}
+}
+
+// A run that another plugin ends in its BeforeRun never reaches tooloauth's
+// hooks. It must not cost a resume in flight its record: a bare
+// {"confirmed": true} answering a sign-in would otherwise fall through to a
+// token stored meanwhile and pass as the tool's own approval.
+func TestResume_runEndedEarlyByAnotherPluginKeepsTheRecord(t *testing.T) {
+	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
+	store := newRecordingStore()
+	cfg := refreshConfig(store, te, 72*time.Hour)
+	rs := newResourceServer(t)
+	held, release := make(chan struct{}), make(chan struct{})
+	var endEarly atomic.Bool
+	guard, err := plugin.New(plugin.Config{
+		Name: "guard",
+		BeforeRunCallback: func(agent.InvocationContext) (*genai.Content, error) {
+			if endEarly.Load() {
+				return genai.NewContentFromText("quota exceeded", genai.RoleModel), nil
+			}
+			return nil, nil
+		},
+		BeforeToolCallback: func(ctx agent.Context, _ tool.Tool, _ map[string]any) (map[string]any, error) {
+			if ctx.FunctionCallID() == "call-2" && ctx.ToolConfirmation() != nil {
+				close(held)
+				<-release
+			}
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("plugin.New() error = %v", err)
+	}
+	h := newHarnessOn(t, session.InMemoryService(), "app-resume", "calendar_list", 2, cfg, []*plugin.Plugin{guard}, calendarToolWith(t, cfg, rs, true))
+	calls := pausedCalls(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+
+	done := make(chan []*session.Event)
+	go func() {
+		var evs []*session.Event
+		for ev, err := range h.runner.Run(t.Context(), "user-7", "s-1", confirmationResponse(calls["call-2"], map[string]any{"confirmed": true}), agent.RunConfig{}) {
+			if err == nil {
+				evs = append(evs, ev)
+			}
+		}
+		done <- evs
+	}()
+	<-held
+	seed(t, cfg, "app-resume", "user-7", &Token{AccessToken: "at-other-tab", Expiry: time.Now().Add(time.Hour)}, time.Now().Add(24*time.Hour))
+	endEarly.Store(true)
+	h.run(t.Context(), "user-7", "s-1", confirmationResponse(calls["call-1"], map[string]any{"confirmed": true}))
+	close(release)
+	second := <-done
+
+	if got := rs.handlerRuns(); got != 0 {
+		t.Errorf("calendar_list ran %d times, want 0", got)
+	}
+	resp, ok := functionResponse(second, "calendar_list")
+	if !ok {
+		t.Fatal("no calendar_list response on the held resume")
+	}
+	if got, _ := resp["error"].(string); got != "Google Calendar sign-in failed: no auth response" {
+		t.Errorf("held resume response = %v, want the no-auth-response error", resp)
+	}
+}
+
+// pausedCalls returns the sign-in requests in events by the call each paused.
+func pausedCalls(t *testing.T, events []*session.Event) map[string]*genai.FunctionCall {
+	t.Helper()
+	calls := map[string]*genai.FunctionCall{}
+	for _, ev := range events {
+		if ev.Content == nil {
+			continue
+		}
+		for _, p := range ev.Content.Parts {
+			if p != nil && p.FunctionCall != nil && p.FunctionCall.Name == "adk_request_confirmation" {
+				orig, err := toolconfirmation.OriginalCallFrom(p.FunctionCall)
+				if err != nil {
+					t.Fatalf("OriginalCallFrom: %v", err)
+				}
+				calls[orig.ID] = p.FunctionCall
+			}
+		}
+	}
+	return calls
+}
+
+// Two sign-in requests from the agent for one call that disagree on the
+// state only come from a tampered session: the sign-in is refused.
+func TestResume_conflictingRequestsAreRefused(t *testing.T) {
+	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
+	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
+	rs := newResourceServer(t)
+	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
+	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+	payload := pausedPayload(t, fc)
+	state := pausedState(t, payload)
+
+	second := pausedPayload(t, fc)
+	second["exchangedAuthCredential"].(map[string]any)["oauth2"].(map[string]any)["state"] = "other-state"
+	got, err := h.sessions.Get(t.Context(), &session.GetRequest{AppName: "app-resume", UserID: "user-7", SessionID: "s-1"})
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	ev := session.NewEvent(t.Context(), "tampered")
+	ev.Author = "assistant"
+	ev.Content = &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+		ID: "tampered-call", Name: "adk_request_confirmation",
+		Args: map[string]any{
+			"originalFunctionCall": map[string]any{"id": "call-1", "name": "calendar_list"},
+			"toolConfirmation":     map[string]any{"hint": "x", "confirmed": false, "payload": second},
+		},
+	}}}}
+	if err := h.sessions.AppendEvent(t.Context(), got.Session, ev); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+
+	events := h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": withADKWebResponse(payload,
+		"http://localhost:4200/?state="+state+"&code=code-45", "http://localhost:4200")}))
+
+	resp, _ := functionResponse(events, "calendar_list")
+	if got, _ := resp["error"].(string); got != "Google Calendar sign-in failed: the sign-in request is out of date" {
+		t.Errorf("response = %v, want the out-of-date error", resp)
+	}
+	if te.callCount() != 0 {
+		t.Errorf("token endpoint called %d times, want 0", te.callCount())
+	}
 }
