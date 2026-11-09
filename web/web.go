@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 	"google.golang.org/adk/v2/cmd/launcher"
 	"google.golang.org/adk/v2/cmd/launcher/universal"
 	adkweb "google.golang.org/adk/v2/cmd/launcher/web"
+	"google.golang.org/adk/v2/memory"
+	"google.golang.org/adk/v2/server/adkrest"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/telemetry"
 )
@@ -33,6 +36,11 @@ type webConfig struct {
 	shutdownTimeout time.Duration
 	otelToCloud     bool
 	useH2C          bool
+	// maxPayloadSize is the -max_request_body_size flag. Zero leaves the limit
+	// to launcher.Config.MaxPayloadSize, and failing that to adkrest's default.
+	maxPayloadSize int64
+	// allowOrigins collects the repeated -allow_origins flag.
+	allowOrigins []string
 	// authGateway is the package-wide go.alis.build/mux gateway installed before
 	// serving. It is responsible for resolving the upstream caller identity into
 	// the request context so sublauncher handlers can authorize. A nil value
@@ -193,34 +201,45 @@ func (w *webLauncher) SimpleDescription() string {
 	return "starts web server with additional sub-servers specified by sublaunchers"
 }
 
-// Run implements launcher.SubLauncher.
-func (w *webLauncher) Run(ctx context.Context, config *launcher.Config) error {
+// applyServiceDefaults fills in the in-memory services it is safe to default.
+//
+// Every sublauncher shares this config, so a default here reaches agui, the
+// scheduler and evals as well as ADK's REST API. Each default is logged,
+// because an in-memory service is lost on restart and is not shared between
+// instances.
+//
+//   - Session: defaulted, as this launcher always has.
+//   - Memory: defaulted. ADK's REST handlers panic on a nil memory service,
+//     dropping the connection with no response, and an in-memory one only
+//     costs recall: nothing a user saved lives there.
+//   - Artifact: deliberately not defaulted, unlike ADK's own web launcher. A
+//     file saved to one instance's memory would vanish on restart or on the
+//     next request served elsewhere. Without a service, ADK's REST API
+//     answers 503 and a run that saves an artifact fails, which is the loud
+//     failure a deployment that forgot to configure one needs.
+func applyServiceDefaults(config *launcher.Config) {
+	var defaulted []string
 	if config.SessionService == nil {
 		config.SessionService = session.InMemoryService()
+		defaulted = append(defaulted, "session")
 	}
-
-	router := BuildBaseRouter()
-
-	if len(w.activeSublaunchers) == 0 {
-		availableSublaunchers := make([]string, len(w.sublaunchers))
-		for i, l := range w.sublaunchers {
-			availableSublaunchers[i] = l.Keyword()
-		}
-		return fmt.Errorf("no active sublaunchers found - please specify them in the command line. Possible values: %v", availableSublaunchers)
+	if config.MemoryService == nil {
+		config.MemoryService = memory.InMemoryService()
+		defaulted = append(defaulted, "memory")
 	}
+	for _, name := range defaulted {
+		log.Printf("No %s service configured. Using an in-memory one, so whatever it holds is lost when the process exits.", name)
+	}
+}
 
-	for _, l := range w.sublaunchers {
-		if _, isActive := w.activeSublaunchers[l.Keyword()]; !isActive {
-			continue
-		}
-		if hr, ok := l.(HostRouteSetup); ok {
-			if err := hr.SetupHostRoutes(config); err != nil {
-				return fmt.Errorf("%s host route setup failed: %w", l.Keyword(), err)
-			}
-		}
-		if err := l.SetupSubrouters(router, config); err != nil {
-			return fmt.Errorf("%s subrouter setup failed: %w", l.Keyword(), err)
-		}
+// Run implements launcher.SubLauncher. It owns the telemetry providers it
+// initializes and shuts them down on every exit path.
+func (w *webLauncher) Run(ctx context.Context, config *launcher.Config) error {
+	applyServiceDefaults(config)
+
+	router, err := w.buildRouter(config)
+	if err != nil {
+		return err
 	}
 
 	if w.config.authGateway != nil {
@@ -230,6 +249,22 @@ func (w *webLauncher) Run(ctx context.Context, config *launcher.Config) error {
 	if err := mountGorillaOnHostMux(router); err != nil {
 		return fmt.Errorf("gorilla host mount failed: %w", err)
 	}
+
+	// After the sublaunchers are set up, because ADK's api sublauncher adds its
+	// span and log processors to config.TelemetryOptions in SetupSubrouters.
+	// Before the listener opens, so the first request is traced and a failed
+	// init does not leave a server running.
+	telemetryProviders, err := initTelemetry(ctx, config, w.config.otelToCloud)
+	if err != nil {
+		return fmt.Errorf("telemetry initialization failed: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), w.config.shutdownTimeout)
+		defer cancel()
+		if err := telemetryProviders.Shutdown(shutdownCtx); err != nil {
+			log.Printf("telemetry shutdown failed: %v", err)
+		}
+	}()
 
 	log.Printf("Starting the web server: %+v", w.config)
 	log.Println()
@@ -250,19 +285,12 @@ func (w *webLauncher) Run(ctx context.Context, config *launcher.Config) error {
 		close(errChan)
 	}()
 
-	telemetryService, err := initTelemetry(ctx, config, w.config.otelToCloud)
-	if err != nil {
-		return fmt.Errorf("telemetry initialization failed: %w", err)
-	}
-
 	select {
 	case <-ctx.Done():
 		log.Println("Shutting down the web server...")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), w.config.shutdownTimeout)
 		defer cancel()
-		serverErr := srv.Shutdown(shutdownCtx)
-		telemetryErr := telemetryService.Shutdown(shutdownCtx)
-		return errors.Join(serverErr, telemetryErr)
+		return srv.Shutdown(shutdownCtx)
 	case err, ok := <-errChan:
 		if !ok {
 			return nil
@@ -271,15 +299,83 @@ func (w *webLauncher) Run(ctx context.Context, config *launcher.Config) error {
 	}
 }
 
+// buildRouter builds the gorilla base router and sets up the active
+// sublaunchers on it, host routes first.
+//
+// It touches no process-wide state: the auth gateway and the host mount are
+// Run's job, so this can be driven directly from tests.
+func (w *webLauncher) buildRouter(config *launcher.Config) (*mux.Router, error) {
+	if len(w.activeSublaunchers) == 0 {
+		availableSublaunchers := make([]string, len(w.sublaunchers))
+		for i, l := range w.sublaunchers {
+			availableSublaunchers[i] = l.Keyword()
+		}
+		return nil, fmt.Errorf("no active sublaunchers found - please specify them in the command line. Possible values: %v", availableSublaunchers)
+	}
+
+	router := BuildBaseRouter()
+	registerHealthRoute(router)
+
+	// The flag overrides a limit the embedder set in code only when it was
+	// given, and the resolved value feeds both the base router and the
+	// sublaunchers, so ADK's REST server and every other gorilla route agree.
+	//
+	// Only gorilla routes are limited. Host routes are left alone because a
+	// body limit counts every byte of a request, so it would cut off a
+	// long-lived gRPC stream.
+	if w.config.maxPayloadSize > 0 {
+		config.MaxPayloadSize = w.config.maxPayloadSize
+	}
+	router.Use(adkrest.MaxBytesMiddleware(config.MaxPayloadSize))
+
+	// Before any sublauncher runs, so the REST server ADK's api sublauncher
+	// builds is given the operator's origins too. Clipped so neither this
+	// append nor a sublauncher's writes into a slice the caller owns.
+	//
+	// config.BindHost is deliberately left empty: this launcher listens on
+	// every interface (Cloud Run needs that), so ADK's loopback-only Host
+	// check does not apply.
+	config.AllowedOrigins = append(slices.Clip(config.AllowedOrigins), w.config.allowOrigins...)
+
+	for _, l := range w.sublaunchers {
+		if _, isActive := w.activeSublaunchers[l.Keyword()]; !isActive {
+			continue
+		}
+		if hr, ok := l.(HostRouteSetup); ok {
+			if err := hr.SetupHostRoutes(config); err != nil {
+				return nil, fmt.Errorf("%s host route setup failed: %w", l.Keyword(), err)
+			}
+		}
+		if err := l.SetupSubrouters(router, config); err != nil {
+			return nil, fmt.Errorf("%s subrouter setup failed: %w", l.Keyword(), err)
+		}
+	}
+	return router, nil
+}
+
 // initTelemetry initializes OpenTelemetry providers for the web server process.
 func initTelemetry(ctx context.Context, config *launcher.Config, otelToCloud bool) (*telemetry.Providers, error) {
-	opts := append(config.TelemetryOptions, telemetry.WithOtelToCloud(otelToCloud))
-	telemetryProviders, err := telemetry.New(ctx, opts...)
+	telemetryProviders, err := telemetry.New(ctx, telemetryOptions(config, otelToCloud)...)
 	if err != nil {
 		return nil, err
 	}
 	telemetryProviders.SetGlobalOtelProviders()
 	return telemetryProviders, nil
+}
+
+// telemetryOptions returns the options telemetry is initialized with.
+//
+// otelToCloud is the -otel_to_cloud flag. Set, it turns export to GCP on.
+// Unset, it leaves the choice to config.TelemetryOptions, so the flag's default
+// does not override a telemetry.WithOtelToCloud(true) the embedder passed.
+func telemetryOptions(config *launcher.Config, otelToCloud bool) []telemetry.Option {
+	// A copy: appending to config.TelemetryOptions could write into the
+	// embedder's backing array.
+	opts := slices.Clone(config.TelemetryOptions)
+	if otelToCloud {
+		opts = append(opts, telemetry.WithOtelToCloud(true))
+	}
+	return opts
 }
 
 // NewLauncher creates a web launcher that serves through go.alis.build/mux and
@@ -306,7 +402,15 @@ func NewLauncherWithOptions(sublaunchers []Sublauncher, opts ...Option) launcher
 	fs.DurationVar(&config.readTimeout, "read-timeout", 300*time.Second, "Server read timeout (i.e. '10s', '2m' - see time.ParseDuration for details) - for reading the whole request including body")
 	fs.DurationVar(&config.idleTimeout, "idle-timeout", 300*time.Second, "Server idle timeout (i.e. '10s', '2m' - see time.ParseDuration for details) - for waiting for the next request (only when keep-alive is enabled)")
 	fs.DurationVar(&config.shutdownTimeout, "shutdown-timeout", 30*time.Second, "Server shutdown timeout (i.e. '10s', '2m' - see time.ParseDuration for details) - for waiting for active requests to finish during shutdown")
-	fs.BoolVar(&config.otelToCloud, "otel_to_cloud", false, "Enables/disables OpenTelemetry export to GCP: telemetry.googleapis.com. See adk-go/telemetry package for details about supported options, credentials and environment variables.")
+	fs.BoolVar(&config.otelToCloud, "otel_to_cloud", false, "Enables OpenTelemetry export to GCP: telemetry.googleapis.com. When not set, a telemetry.WithOtelToCloud option in launcher.Config.TelemetryOptions decides. See adk-go/telemetry package for details about supported options, credentials and environment variables.")
+	fs.Int64Var(&config.maxPayloadSize, "max_request_body_size", 0, "Maximum request body size in bytes for routes registered through SetupSubrouters (ADK's api, webui and a2a sublaunchers, and lro). Larger requests are rejected. 0 uses the value set by an embedder, or the ADK default (10 MiB). Routes registered through SetupHostRoutes (agui, scheduler, evals, console and gRPC) are not limited.")
+	// Upstream's -allow_origins also feeds a launcher-wide origin guard. This
+	// launcher has none: callers are authenticated upstream and arrive with a
+	// forwarded identity, so a browser origin is not what decides access here.
+	fs.Func("allow_origins", "Optional. Browser origins to add to launcher.Config.AllowedOrigins (e.g. 'https://example.com'; a bare hostname and optional port is read as http). Repeat the flag for more than one. ADK's api sublauncher allows these for CORS and refuses cross-origin browser requests from any other origin with 403. '*' allows any origin.", func(origin string) error {
+		config.allowOrigins = append(config.allowOrigins, origin)
+		return nil
+	})
 	// Defaults on, where ADK's own web launcher defaults it off: the host mux
 	// serves gRPC and gRPC-Web on this same listener (see HostRouteSetup), and
 	// those need HTTP/2. Turning it off is for hosts that register no gRPC.
@@ -339,10 +443,32 @@ func logger(inner http.Handler) http.Handler {
 //
 // Named to match ADK's own web launcher, so a sublauncher written against
 // upstream needs no change to build its routes here.
+//
+// It registers no routes of its own: gorilla/mux serves the first route that
+// matches, so anything registered here would shadow the same path a caller
+// registers afterwards.
 func BuildBaseRouter() *mux.Router {
 	router := mux.NewRouter().StrictSlash(true)
 	router.Use(logger)
 	return router
+}
+
+// registerHealthRoute serves /health for load balancers and container probes,
+// which are configured with a fixed path and cannot know which sublaunchers
+// are enabled. Run registers it, rather than BuildBaseRouter, so an embedder
+// building its own server keeps /health for itself.
+func registerHealthRoute(router *mux.Router) {
+	router.HandleFunc("/health", healthHandler).Methods(http.MethodGet, http.MethodHead)
+}
+
+// healthHandler reports that the web server is up. It says nothing about the
+// agent or its models. The body matches ADK's /api/health, so a probe can point
+// at either.
+func healthHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write([]byte(`{"status":"ok"}` + "\n")); err != nil {
+		log.Printf("failed to write health response: %v", err)
+	}
 }
 
 // buildHTTPServer constructs the host HTTP server with timeouts and, unless

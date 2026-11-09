@@ -64,6 +64,28 @@
 // Importing go.alis.build/mux requires IDENTITY_SERVICE_URL and ALIS_OS_PROJECT
 // to be set at process start.
 //
+// # Server behaviour
+//
+// The launcher tracks ADK's own web launcher, with these deliberate differences
+// for deployments behind a trusted gateway on Cloud Run:
+//
+//   - It listens on every interface. ADK defaults to loopback, which a
+//     container cannot be reached on.
+//   - -h2c defaults on, because gRPC and gRPC-Web share the listener.
+//   - It defaults the session and memory services to in-memory ones but leaves
+//     the artifact service unset, so a deployment that forgot to configure one
+//     fails loudly instead of losing files on restart.
+//   - -allow_origins only adds to launcher.Config.AllowedOrigins, which ADK's
+//     api sublauncher uses for CORS and its own cross-origin check. There is no
+//     launcher-wide origin guard: access is decided by the forwarded identity.
+//   - -max_request_body_size limits routes registered through SetupSubrouters
+//     only (ADK's api, webui and a2a, and lro). Host routes are not limited:
+//     a body limit counts every byte, so it would cut off a long-lived gRPC
+//     stream.
+//
+// GET /health answers {"status":"ok"} for probes, whatever sublaunchers are
+// active.
+//
 // # HostRouteSetup examples
 //
 // Implement [HostRouteSetup] on the same type that implements [Sublauncher].

@@ -1,6 +1,6 @@
 # adk-launchers-go
 
-Go modules that extend [Google ADK](https://google.golang.org/adk) with optional **web sublaunchers**. Each sublauncher plugs into `google.golang.org/adk/v2/cmd/launcher/web` and adds HTTP routes or protocols on top of the standard ADK web server.
+Go modules that extend [Google ADK](https://google.golang.org/adk) with optional **web sublaunchers**. Each sublauncher implements ADK's web `Sublauncher` contract and runs under this repository's [`web`](./web) launcher, which serves them through `go.alis.build/mux` alongside gRPC on one listener. ADK's own sublaunchers (`api`, `webui`, `a2a`) compose the same way.
 
 Use this repository when you need extra capabilities beyond the core ADK launchers—for example streaming to AG-UI frontends, resuming long-running operations from Cloud Tasks, running scheduled agent prompts in-process, or serving the dev evaluation API for adk-web.
 
@@ -31,7 +31,6 @@ import (
     launchersweb "go.alis.build/adk/launchers/web"
     "go.alis.build/iam/v3"
     hostmux "go.alis.build/mux"
-    weblauncher "google.golang.org/adk/v2/cmd/launcher/web"
     "google.golang.org/grpc"
 )
 
@@ -46,7 +45,6 @@ grpcServer := grpc.NewServer(
 )
 
 web := launchersweb.NewLauncher(
-    weblauncher.NewLauncher(),
     agui.NewLauncher("my-agent", agui.WithCORS(agui.CORSConfig{
         AllowedOrigins: []string{"http://localhost:3000"},
     })),
@@ -76,6 +74,8 @@ At runtime, activate sublaunchers by keyword on the `adk web` command line, for 
 ```bash
 adk web --port 8080 agui lro scheduler evals console -service_id=my-service -app_name=my-agent -agents_dir=./agents
 ```
+
+The web launcher also serves `GET /health`, and takes `-max_request_body_size` and a repeatable `-allow_origins`; see the [`web` package docs](./web) for what each covers.
 
 Importing [`web`](./web) (and the scheduler sublauncher) pulls in `go.alis.build/mux`, which requires `ALIS_OS_PROJECT` and `IDENTITY_SERVICE_URL` at process start.
 
@@ -268,8 +268,18 @@ While the module is below **v1.0.0**, open pull requests and land work on the **
 
 ## Requirements
 
-- Go 1.26+
+- Go 1.26.10+ (required by `google.golang.org/adk/v2` v2.7)
 - `google.golang.org/adk/v2` (see [go.mod](./go.mod) for the pinned version)
+
+### Upgrading to ADK v2.7
+
+ADK v2.4 to v2.7 change runtime behaviour that tests do not catch:
+
+- **Model-call budget.** One invocation may make at most 500 model calls; past that the run ends with `agent.ErrLLMCallsLimitExceeded` (an AG-UI `RunError`, a failed cron tick, a failed eval). Raise it per deployment with `ADK_MAX_LLM_CALLS`, or set it to a negative number for no limit. With `scheduler.WithSynchronousExecution`, a budget-exhausted tick is acknowledged rather than retried, since a retry would spend the budget again.
+- **Telemetry schema.** Traces follow the OpenTelemetry GenAI semantic conventions v2. Dashboards and alerts built on the old fields need updating; `ADK_TELEMETRY_SCHEMA_VERSION_OPT_IN=otel_semconv_1_36` restores the old format until at least March 31, 2027.
+- **ADK's REST API refuses cross-origin browsers** whose origin is not allowed. Add origins with the web launcher's `-allow_origins` or `launcher.Config.AllowedOrigins`. This affects ADK's `api` sublauncher only; agui, scheduler, evals and console keep their own CORS options.
+- **Optional instruction placeholders.** `{key?}` and `{artifact.name?}` render empty only when the key or artifact is missing; any other session or artifact service error now fails the run, and an `agenttool` sub-agent with an optional artifact placeholder fails when no artifact service is configured. The web launcher does not default one, so configure a real service.
+- **Memory service default.** The web launcher defaults a missing memory service to an in-memory one (ADK's REST API panics without one). That config is shared, so agui, scheduler and evals get it too: a memory tool that used to fail without a service now gets instance-local results that are lost on restart. Configure a real memory service in production.
 
 ## License
 
