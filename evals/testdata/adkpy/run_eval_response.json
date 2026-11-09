@@ -1,0 +1,152 @@
+{
+  "runEvalResults": [
+    {
+      "evalId": "case2",
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "appDetails": {
+              "agentDetails": {}
+            },
+            "creationTimestamp": 1794235042.382215,
+            "duration": 0.034,
+            "finalResponse": {
+              "parts": [
+                {
+                  "text": "ok"
+                }
+              ],
+              "role": "model"
+            },
+            "intermediateData": {
+              "invocationEvents": [
+                {
+                  "author": "echo_agent"
+                }
+              ]
+            },
+            "invocationId": "e-7b5966c2-2971-4eb2-bf42-1e555c8b99c7",
+            "modelDuration": 0.0,
+            "toolDuration": 0.0,
+            "userContent": {
+              "parts": [
+                {
+                  "text": "hi"
+                }
+              ],
+              "role": "user"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "details": {},
+              "evalStatus": 1,
+              "metricName": "response_match_score",
+              "score": 1.0,
+              "threshold": 0.7
+            },
+            {
+              "details": {},
+              "evalStatus": 4,
+              "metricName": "tool_call_count_v1",
+              "score": 0.0
+            },
+            {
+              "details": {},
+              "evalStatus": 4,
+              "metricName": "inference_call_count_v1",
+              "score": 0.0
+            },
+            {
+              "details": {
+                "tokenUsageDetails": {}
+              },
+              "evalStatus": 4,
+              "metricName": "token_usage_v1"
+            },
+            {
+              "details": {
+                "durationDetails": {
+                  "frameworkSeconds": 0.034,
+                  "modelSeconds": 0.0,
+                  "toolSeconds": 0.0,
+                  "totalSeconds": 0.034
+                }
+              },
+              "evalStatus": 4,
+              "metricName": "invocation_duration_v1",
+              "score": 0.034
+            }
+          ],
+          "expectedInvocation": {
+            "creationTimestamp": 0.0,
+            "finalResponse": {
+              "parts": [
+                {
+                  "text": "ok"
+                }
+              ],
+              "role": "model"
+            },
+            "invocationId": "",
+            "userContent": {
+              "parts": [
+                {
+                  "text": "hi"
+                }
+              ],
+              "role": "user"
+            }
+          }
+        }
+      ],
+      "evalMetricResults": [],
+      "evalSetFile": "set1",
+      "evalSetId": "set1",
+      "finalEvalStatus": 1,
+      "overallEvalMetricResults": [
+        {
+          "details": {},
+          "evalStatus": 1,
+          "metricName": "response_match_score",
+          "score": 1.0,
+          "threshold": 0.7
+        },
+        {
+          "details": {},
+          "evalStatus": 4,
+          "metricName": "tool_call_count_v1",
+          "score": 0.0
+        },
+        {
+          "details": {},
+          "evalStatus": 4,
+          "metricName": "inference_call_count_v1",
+          "score": 0.0
+        },
+        {
+          "details": {
+            "tokenUsageDetails": {}
+          },
+          "evalStatus": 4,
+          "metricName": "token_usage_v1"
+        },
+        {
+          "details": {
+            "durationDetails": {
+              "frameworkSeconds": 0.034,
+              "modelSeconds": 0.0,
+              "toolSeconds": 0.0,
+              "totalSeconds": 0.034
+            }
+          },
+          "evalStatus": 4,
+          "metricName": "invocation_duration_v1",
+          "score": 0.034
+        }
+      ],
+      "sessionId": "adk-eval-session-37627317-00c1-4276-9b29-fb1352903cc8",
+      "userId": "user-7"
+    }
+  ]
+}
