@@ -106,9 +106,10 @@
 // redirected to /ui/?userId=<identity ID>, so the UI sends the caller's real ID
 // on every call. This needs the upstream gateway to forward x-alis-identity on
 // page navigations and on the /run_live WebSocket upgrade, not only on API
-// calls; otherwise the UI acts as "user" and every REST call answers 403. With
-// [WithoutAuthGateway] and no gateway of the host's own, every /api route
-// answers 401.
+// calls; otherwise the UI acts as "user", every call naming a user answers
+// 403, and a /run_live upgrade without an identity answers 401. With
+// [WithoutAuthGateway] and no gateway of the host's own, every /api route except
+// ADK's public ones answers 401.
 //
 // # HostRouteSetup examples
 //

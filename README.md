@@ -107,7 +107,7 @@ launchersweb.NewLauncherWithOptions(
 
 **ADK's REST API.** With ADK's `api` sublauncher, the web launcher fills `launcher.Config.Authenticator` with `web.IdentityAuthenticator()` and `Authorizer` with `authz.NewStrict()` when you leave them nil. A request without an identity answers 401, and a caller acting as another user answers 403; `/api/health` stays open. There is no flag to loosen it. In code, `authz.NewNoop()` lets any signed-in caller act as any user, and a fully open API also needs `authn.NewNoop()`. ADK's A2A routes are not covered and have no authentication.
 
-**ADK's web UI.** The UI acts as user `"user"` unless loaded with `?userId=`, so the launcher redirects `/ui/` to `/ui/?userId=<caller>` and the UI then sends the caller's real ID. The UI itself sends no credentials, so **the upstream gateway must forward `x-alis-identity` on page navigations and on the `/run_live` WebSocket upgrade**, not only on API calls; otherwise every REST call answers 403, and a refused chat shows as an empty stream.
+**ADK's web UI.** The UI acts as user `"user"` unless loaded with `?userId=`, so the launcher redirects `/ui/` to `/ui/?userId=<caller>` and the UI then sends the caller's real ID. The UI itself sends no credentials, so **the upstream gateway must forward `x-alis-identity` on page navigations and on the `/run_live` WebSocket upgrade**, not only on API calls; otherwise every call naming a user answers 403 (a refused chat shows as an empty stream), and a `/run_live` upgrade without an identity answers 401.
 
 **Evals.** Every eval route requires an identity. add-session and runs act only as the caller, on the route's app; reads of eval cases and results strip credential secrets.
 
