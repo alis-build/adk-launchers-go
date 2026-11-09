@@ -229,3 +229,48 @@ func TestResponseMatchScoreIgnoresThoughtParts(t *testing.T) {
 		t.Errorf("score = %v, want 1 (thought text ignored)", *result.OverallScore)
 	}
 }
+
+// The ROUGE-1 cases below mirror adk-python's
+// tests/unittests/evaluation/test_final_response_match_v1.py Unicode tests.
+func assertRouge(t *testing.T, candidate, reference string, precision, recall, fmeasure float64) {
+	t.Helper()
+	got := metrics.CalculateRouge1Scores(candidate, reference)
+	for _, c := range []struct {
+		name      string
+		got, want float64
+	}{{"precision", got.Precision, precision}, {"recall", got.Recall, recall}, {"F", got.FMeasure, fmeasure}} {
+		if math.Abs(c.got-c.want) > 1e-9 {
+			t.Errorf("ROUGE-1(%q, %q) %s = %v, want %v", candidate, reference, c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestRouge1IdenticalNonEnglishText(t *testing.T) {
+	for _, s := range []string{"สวัสดี", "你好世界", "مرحبا بالعالم", "こんにちは", "Здравствуйте"} {
+		assertRouge(t, s, s, 1, 1, 1)
+	}
+}
+
+func TestRouge1DifferentNonEnglishText(t *testing.T) {
+	assertRouge(t, "мир привет", "привет только", 0.5, 0.5, 0.5)
+}
+
+func TestRouge1CJKInversion(t *testing.T) {
+	assertRouge(t, "天气很好今天", "今天天气很好", 1, 1, 1)
+}
+
+func TestRouge1MixedLanguage(t *testing.T) {
+	assertRouge(t, "hello สวัสดี", "hello world", 1.0/5, 1.0/2, 2.0/7)
+}
+
+func TestRouge1CombiningMarksStayAttached(t *testing.T) {
+	assertRouge(t, "ดี", "ดี", 1, 1, 1)
+	assertRouge(t, "ฉันรักคุณมาก", "ฉันรักคุณมาก", 1, 1, 1)
+	assertRouge(t, "ดี", "ด", 0, 0, 0)
+}
+
+// Go-only pin: NFKC maps fullwidth letters to ASCII, as adk-python's
+// tokenizer normalises before tokenizing.
+func TestRouge1NormalizesCompatibilityForms(t *testing.T) {
+	assertRouge(t, "ｈｅｌｌｏ", "hello", 1, 1, 1)
+}
