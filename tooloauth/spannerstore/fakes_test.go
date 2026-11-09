@@ -48,6 +48,9 @@ type fakeKMS struct {
 	mu      sync.Mutex
 	keys    map[string]wrapped
 	unwraps int
+	// ignoreAAD makes Unwrap skip the AAD check, so a test can show the
+	// token's own seal binds it to its row.
+	ignoreAAD bool
 }
 
 type wrapped struct {
@@ -74,7 +77,7 @@ func (f *fakeKMS) Unwrap(_ context.Context, ciphertext, aad []byte) ([]byte, err
 	defer f.mu.Unlock()
 	f.unwraps++
 	w, ok := f.keys[hex.EncodeToString(ciphertext)]
-	if !ok || !bytes.Equal(w.aad, aad) {
+	if !ok || (!f.ignoreAAD && !bytes.Equal(w.aad, aad)) {
 		return nil, errors.New("fake kms: decryption failed")
 	}
 	return bytes.Clone(w.plaintext), nil
