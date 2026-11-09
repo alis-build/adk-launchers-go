@@ -14,6 +14,8 @@ import (
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"go.alis.build/adk/launchers/evals/evaluation/storage"
+	iam "go.alis.build/iam/v3"
+	alismux "go.alis.build/mux"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/cmd/launcher"
 	"google.golang.org/adk/v2/session"
@@ -71,6 +73,52 @@ func callHandler(t *testing.T, fn func(http.ResponseWriter, *http.Request) error
 		t.Fatalf("handler error: %v", err)
 	}
 	return rec
+}
+
+// callHandlerAs runs h as the identity with id ("" for anonymous) and returns
+// the recorder and the handler's error without failing the test.
+func callHandlerAs(t *testing.T, h alismux.Func, method, target, id string, body any, pathValues map[string]string) (*httptest.ResponseRecorder, error) {
+	t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			t.Fatalf("encode body: %v", err)
+		}
+	}
+	req := httptest.NewRequest(method, target, &buf)
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range pathValues {
+		req.SetPathValue(k, v)
+	}
+	if id != "" {
+		req = req.WithContext((&iam.Identity{ID: id, Type: iam.User}).Context(req.Context()))
+	}
+	rec := httptest.NewRecorder()
+	return rec, h(rec, req)
+}
+
+// seedSession creates session sessionID for user with one user and one agent
+// turn, so add-session has a conversation to copy.
+func seedSession(t *testing.T, l *evalsLauncher, user, sessionID string) {
+	t.Helper()
+	ctx := context.Background()
+	svc := l.launcherCfg.SessionService
+	created, err := svc.Create(ctx, &session.CreateRequest{AppName: "my_app", UserID: user, SessionID: sessionID})
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	ev := session.NewEvent(ctx, "inv1")
+	ev.Author = "user"
+	ev.Content = genai.NewContentFromText("hello", genai.RoleUser)
+	if err := svc.AppendEvent(ctx, created.Session, ev); err != nil {
+		t.Fatalf("AppendEvent(user): %v", err)
+	}
+	agentEv := session.NewEvent(ctx, "inv1")
+	agentEv.Author = "agent"
+	agentEv.Content = genai.NewContentFromText("hi", genai.RoleModel)
+	if err := svc.AppendEvent(ctx, created.Session, agentEv); err != nil {
+		t.Fatalf("AppendEvent(agent): %v", err)
+	}
 }
 
 func TestCreateAndListEvalSets(t *testing.T) {
@@ -155,33 +203,73 @@ func TestEvalCaseCRUD(t *testing.T) {
 func TestAddSessionToEvalSet(t *testing.T) {
 	l, sets := newHandlerTestLauncher(t)
 	_, _ = sets.CreateEvalSet("my_app", "set1")
-	ctx := context.Background()
-	svc := l.launcherCfg.SessionService
-	createResp, err := svc.Create(ctx, &session.CreateRequest{
-		AppName: "my_app", UserID: "user1", SessionID: "sess1",
-	})
-	if err != nil {
-		t.Fatalf("Create session: %v", err)
-	}
-	ev := session.NewEvent(ctx, "inv1")
-	ev.Author = "user"
-	ev.Content = genai.NewContentFromText("hello", genai.RoleUser)
-	_ = svc.AppendEvent(ctx, createResp.Session, ev)
-	agentEv := session.NewEvent(ctx, "inv1")
-	agentEv.Author = "agent"
-	agentEv.Content = genai.NewContentFromText("hi", genai.RoleModel)
-	_ = svc.AppendEvent(ctx, createResp.Session, agentEv)
+	seedSession(t, l, "user1", "sess1")
 
-	rec := callHandler(t, l.addSessionHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/add_session", map[string]string{
+	rec, err := callHandlerAs(t, l.addSessionHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/add_session", "user1", map[string]string{
 		"evalId": "from_session", "sessionId": "sess1", "userId": "user1",
 	}, map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("add session status = %d body = %s", rec.Code, rec.Body.String())
+	if err != nil || rec.Code != http.StatusNoContent {
+		t.Fatalf("add session: status = %d, err = %v, body = %s", rec.Code, err, rec.Body.String())
 	}
 
 	got, err := sets.GetEvalCase("my_app", "set1", "from_session")
 	if err != nil || got == nil || len(got.Conversation) == 0 {
 		t.Fatalf("eval case = %+v err = %v", got, err)
+	}
+	if got.SessionInput == nil || got.SessionInput.UserID != "user1" {
+		t.Errorf("stored session_input.user_id = %+v, want user1", got.SessionInput)
+	}
+}
+
+func TestAddSessionRefusesOtherUser(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	seedSession(t, l, "user1", "sess1")
+
+	_, err := callHandlerAs(t, l.addSessionHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/add_session", "user2", map[string]string{
+		"evalId": "copied", "sessionId": "sess1", "userId": "user1",
+	}, map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if got := alismux.StatusCode(err); got != http.StatusForbidden {
+		t.Fatalf("add session as user2 for user1: status = %d (err %v), want %d", got, err, http.StatusForbidden)
+	}
+	if c, _ := sets.GetEvalCase("my_app", "set1", "copied"); c != nil {
+		t.Errorf("eval case written for a refused request: %+v", c)
+	}
+}
+
+// TestAddSessionRefusesIdentityWithoutID covers the handler's own check, which
+// backs up the route middleware: an empty ID would read user "" sessions.
+func TestAddSessionRefusesIdentityWithoutID(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+
+	req := httptest.NewRequest(http.MethodPost, "/dev/apps/my_app/eval_sets/set1/add_session", strings.NewReader(`{"evalId":"blank","sessionId":"sess1"}`))
+	req.SetPathValue("app_name", "my_app")
+	req.SetPathValue("eval_set_id", "set1")
+	req = req.WithContext((&iam.Identity{Email: "a@x.com", Type: iam.User}).Context(req.Context()))
+	err := l.addSessionHandler()(httptest.NewRecorder(), req)
+	if got := alismux.StatusCode(err); got != http.StatusUnauthorized {
+		t.Fatalf("add session with an empty identity ID: status = %d (err %v), want %d", got, err, http.StatusUnauthorized)
+	}
+	if c, _ := sets.GetEvalCase("my_app", "set1", "blank"); c != nil {
+		t.Errorf("eval case written for a refused request: %+v", c)
+	}
+}
+
+func TestAddSessionDefaultsToCaller(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	seedSession(t, l, "user1", "sess1")
+
+	rec, err := callHandlerAs(t, l.addSessionHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/add_session", "user1", map[string]string{
+		"evalId": "no_user", "sessionId": "sess1",
+	}, map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if err != nil || rec.Code != http.StatusNoContent {
+		t.Fatalf("add session without userId: status = %d, err = %v", rec.Code, err)
+	}
+	got, err := sets.GetEvalCase("my_app", "set1", "no_user")
+	if err != nil || got == nil || got.SessionInput == nil || got.SessionInput.UserID != "user1" {
+		t.Errorf("stored case = %+v err = %v, want session_input.user_id user1", got, err)
 	}
 }
 

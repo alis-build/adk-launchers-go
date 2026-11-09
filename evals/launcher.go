@@ -23,6 +23,7 @@ import (
 	"go.alis.build/adk/launchers/internal/launcherutils"
 	_ "go.alis.build/adk/launchers/internal/testenv"
 	launchersweb "go.alis.build/adk/launchers/web"
+	iam "go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
 	adklauncher "google.golang.org/adk/v2/cmd/launcher"
 	adkweb "google.golang.org/adk/v2/cmd/launcher/web"
@@ -694,17 +695,26 @@ func (l *evalsLauncher) addSessionHandler() alismux.Func {
 		if err != nil {
 			return err
 		}
+		// The session is always read as the caller: a body userId may only
+		// name the caller, so nobody can copy another user's session.
+		caller, err := iam.FromContext(r.Context())
+		if err != nil || caller.ID == "" {
+			return alismux.UnauthorizedErr("identity required")
+		}
 		var req AddSessionToEvalSetRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			return alismux.BadRequestErr("invalid request body: %s", err.Error())
 		}
-		if strings.TrimSpace(req.EvalID) == "" || strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.UserID) == "" {
-			return alismux.BadRequestErr("evalId, sessionId, and userId are required")
+		if strings.TrimSpace(req.EvalID) == "" || strings.TrimSpace(req.SessionID) == "" {
+			return alismux.BadRequestErr("evalId and sessionId are required")
+		}
+		if req.UserID != "" && req.UserID != caller.ID {
+			return alismux.ForbiddenErr("userId must be the caller")
 		}
 
 		resp, err := l.launcherCfg.SessionService.Get(r.Context(), &session.GetRequest{
 			AppName:   appName,
-			UserID:    req.UserID,
+			UserID:    caller.ID,
 			SessionID: req.SessionID,
 		})
 		if err != nil {
@@ -725,7 +735,7 @@ func (l *evalsLauncher) addSessionHandler() alismux.Func {
 			Conversation: invocations,
 			SessionInput: &models.SessionInput{
 				AppName: appName,
-				UserID:  req.UserID,
+				UserID:  caller.ID,
 				State:   createEmptyState(rootAgent),
 			},
 			CreationTimestamp: float64(time.Now().Unix()),
