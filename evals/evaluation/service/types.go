@@ -28,14 +28,19 @@ type InferenceRequest struct {
 	// SessionState is run-level ADK session bootstrap state merged into each
 	// case's sessionInput.state before inference; case keys win on conflict.
 	SessionState map[string]any `json:"sessionState,omitempty"`
+	// UserID, when set, is the ADK user every case runs as, replacing the
+	// case's stored sessionInput.userId.
+	UserID string `json:"userId,omitempty"`
 }
 
 // InferenceResult holds generated invocations for one eval case.
 type InferenceResult struct {
-	AppName      string              `json:"appName"`
-	EvalSetID    string              `json:"evalSetId"`
-	EvalCaseID   string              `json:"evalCaseId"`
-	SessionID    string              `json:"sessionId"`
+	AppName    string `json:"appName"`
+	EvalSetID  string `json:"evalSetId"`
+	EvalCaseID string `json:"evalCaseId"`
+	SessionID  string `json:"sessionId"`
+	// UserID is the ADK user the inference session ran as.
+	UserID       string              `json:"userId,omitempty"`
 	Inferences   []models.Invocation `json:"inferences,omitempty"`
 	Status       InferenceStatus     `json:"status"`
 	ErrorMessage string              `json:"errorMessage,omitempty"`

@@ -76,7 +76,7 @@ func (s *LocalEvalService) PerformInference(ctx context.Context, req InferenceRe
 			}
 		}()
 		for job := range work {
-			res := s.runInference(ctx, req.AppName, req.EvalSetID, job.c, req.InferenceConfig, req.SessionState)
+			res := s.runInference(ctx, req.AppName, req.EvalSetID, req.UserID, job.c, req.InferenceConfig, req.SessionState)
 			out[job.idx] = res
 		}
 	}
@@ -124,17 +124,39 @@ func sendJobs[T any](ctx context.Context, work chan<- T, workersDone <-chan stru
 	return nil
 }
 
+// runSessionInput returns a copy of input with the stored app cleared, so the
+// generator runs the runtime's own app (the launcher builds one runtime per
+// route app), and with userID as the user when it is set. The stored case is
+// never modified.
+func runSessionInput(input *models.SessionInput, userID string) *models.SessionInput {
+	cp := models.SessionInput{}
+	if input != nil {
+		cp = *input
+	}
+	cp.AppName = ""
+	if userID != "" {
+		cp.UserID = userID
+	}
+	return &cp
+}
+
 // runInference executes agent inference for a single eval case.
-func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID string, evalCase models.EvalCase, cfg InferenceConfig, runSessionState map[string]any) InferenceResult {
+//
+// The session always runs on the runtime's app, and as userID when it is set,
+// whatever the stored case names: a case is shared data, and must not choose
+// which agent runs or whose sessions a run writes to.
+func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID, userID string, evalCase models.EvalCase, cfg InferenceConfig, runSessionState map[string]any) InferenceResult {
 	sessionID := generator.NewEvalSessionID()
 	if s.NewSessionID != nil {
 		sessionID = s.NewSessionID()
 	}
+	input := runSessionInput(effectiveSessionInput(runSessionState, evalCase), userID)
 	result := InferenceResult{
 		AppName:    appName,
 		EvalSetID:  evalSetID,
 		EvalCaseID: evalCase.EvalID,
 		SessionID:  sessionID,
+		UserID:     evalCaseUserID(&models.EvalCase{SessionInput: input}),
 	}
 	sim, err := s.SimProvider.Provide(evalCase)
 	if err != nil {
@@ -144,7 +166,7 @@ func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID 
 	}
 	inv, err := s.Generator.GenerateInferences(ctx, generator.InferenceOptions{
 		SessionID:          sessionID,
-		SessionInput:       effectiveSessionInput(runSessionState, evalCase),
+		SessionInput:       input,
 		UserSimulator:      sim,
 		UseLive:            cfg.UseLive,
 		LiveTimeoutSeconds: cfg.LiveTimeoutSeconds,

@@ -296,14 +296,14 @@ func TestRunEvalDeterministicMetric(t *testing.T) {
 		}},
 	})
 
-	rec := callHandler(t, l.runEvalLegacyHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/run_eval", map[string]any{
+	rec, err := callHandlerAs(t, l.runEvalLegacyHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/run_eval", "user1", map[string]any{
 		"evalMetrics": []map[string]any{{
 			"metricName": models.MetricResponseMatchScore,
 			"threshold":  0.5,
 		}},
 	}, map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("run eval status = %d body = %s", rec.Code, rec.Body.String())
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("run eval: status = %d, err = %v, body = %s", rec.Code, err, rec.Body.String())
 	}
 	var results []models.RunEvalResult
 	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
@@ -311,6 +311,48 @@ func TestRunEvalDeterministicMetric(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].FinalEvalStatus != models.EvalStatusPassed {
 		t.Fatalf("results = %+v", results)
+	}
+}
+
+// TestRunEvalRunsAsCaller checks that a run executes as the caller on the
+// route's app, not as the user and app stored on the case.
+func TestRunEvalRunsAsCaller(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	_ = sets.AddEvalCase("my_app", "set1", models.EvalCase{
+		EvalID:       "case1",
+		SessionInput: &models.SessionInput{UserID: "someone", AppName: "other"},
+		Conversation: []models.Invocation{{
+			UserContent:   genai.NewContentFromText("hi", genai.RoleUser),
+			FinalResponse: genai.NewContentFromText("ok", genai.RoleModel),
+		}},
+	})
+
+	rec, err := callHandlerAs(t, l.runEvalLegacyHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/run_eval", "caller", map[string]any{
+		"evalMetrics": []map[string]any{{"metricName": models.MetricResponseMatchScore, "threshold": 0.5}},
+	}, map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("run eval: status = %d, err = %v, body = %s", rec.Code, err, rec.Body.String())
+	}
+
+	ids, err := l.resultsManager.ListEvalSetResults("my_app")
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("ListEvalSetResults = %v, %v; want one result", ids, err)
+	}
+	res, err := l.resultsManager.GetEvalSetResult("my_app", ids[0])
+	if err != nil || res == nil || len(res.EvalCaseResults) != 1 {
+		t.Fatalf("GetEvalSetResult = %+v, %v", res, err)
+	}
+	got := res.EvalCaseResults[0]
+	if got.UserID == nil || *got.UserID != "caller" {
+		gotUser := "<nil>"
+		if got.UserID != nil {
+			gotUser = *got.UserID
+		}
+		t.Errorf("evalCaseResults[0].userId = %q, want caller", gotUser)
+	}
+	if len(got.SessionDetails) == 0 {
+		t.Error("evalCaseResults[0].sessionDetails is empty, want the caller's inference session")
 	}
 }
 

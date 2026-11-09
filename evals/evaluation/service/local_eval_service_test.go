@@ -376,3 +376,70 @@ func TestEvaluateSingleTurnRubricPopulatesOverallDetails(t *testing.T) {
 		t.Fatalf("rubric score = %+v", got)
 	}
 }
+
+// TestRunInferenceOverridesStoredUserAndApp checks that inference runs as the
+// request's user on the runtime's app, whatever the stored case says.
+func TestRunInferenceOverridesStoredUserAndApp(t *testing.T) {
+	ctx := context.Background()
+	sessSvc := session.InMemoryService()
+	const sessionID = generator.EvalSessionIDPrefix + "override"
+
+	sets := storage.NewInMemoryEvalSetsManager()
+	_, _ = sets.CreateEvalSet("app", "set1")
+	_ = sets.AddEvalCase("app", "set1", models.EvalCase{
+		EvalID:       "case1",
+		SessionInput: &models.SessionInput{UserID: "someone", AppName: "other"},
+		Conversation: []models.Invocation{{UserContent: genai.NewContentFromText("Hello", genai.RoleUser)}},
+	})
+
+	a, err := agent.New(agent.Config{
+		Name: "app",
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				ev := session.NewEvent(ctx, ctx.InvocationID())
+				ev.Author = "app"
+				ev.Content = genai.NewContentFromText("ok", genai.RoleModel)
+				yield(ev, nil)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	rt, err := adkrun.NewRuntime(&launcher.Config{AgentLoader: agent.NewSingleLoader(a), SessionService: sessSvc}, "app")
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	svc := &service.LocalEvalService{
+		Generator:    &generator.Generator{Runtime: rt},
+		Sets:         sets,
+		SimProvider:  simulation.UserSimulatorProvider{},
+		Sessions:     sessSvc,
+		NewSessionID: func() string { return sessionID },
+	}
+
+	inf, err := svc.PerformInference(ctx, service.InferenceRequest{AppName: "app", EvalSetID: "set1", UserID: "caller"})
+	if err != nil {
+		t.Fatalf("PerformInference: %v", err)
+	}
+	if len(inf) != 1 || inf[0].Status != service.InferenceStatusSuccess {
+		t.Fatalf("inf = %+v", inf)
+	}
+	if inf[0].UserID != "caller" {
+		t.Errorf("InferenceResult.UserID = %q, want caller", inf[0].UserID)
+	}
+
+	if resp, err := sessSvc.Get(ctx, &session.GetRequest{AppName: "app", UserID: "caller", SessionID: sessionID}); err != nil || resp == nil || resp.Session == nil {
+		t.Errorf("no inference session under app %q user %q: %v", "app", "caller", err)
+	}
+	for _, other := range []struct{ app, user string }{{"app", "someone"}, {"other", "someone"}, {"other", "caller"}} {
+		if resp, err := sessSvc.Get(ctx, &session.GetRequest{AppName: other.app, UserID: other.user, SessionID: sessionID}); err == nil && resp != nil && resp.Session != nil {
+			t.Errorf("inference session found under app %q user %q, want none", other.app, other.user)
+		}
+	}
+
+	stored, err := sets.GetEvalCase("app", "set1", "case1")
+	if err != nil || stored == nil || stored.SessionInput == nil || stored.SessionInput.UserID != "someone" || stored.SessionInput.AppName != "other" {
+		t.Errorf("stored case changed: %+v (err %v)", stored, err)
+	}
+}

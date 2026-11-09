@@ -28,7 +28,13 @@ func (s *LocalEvalService) attachSessionMetadata(
 	if result == nil {
 		return
 	}
-	userID := evalCaseUserID(evalCase)
+	// The user the inference actually ran as, which may differ from the one
+	// stored on the case; the stored one is only a fallback for results built
+	// without inference metadata.
+	userID := inf.UserID
+	if userID == "" {
+		userID = evalCaseUserID(evalCase)
+	}
 	result.UserID = &userID
 	if s == nil || s.Sessions == nil || inf.SessionID == "" {
 		return

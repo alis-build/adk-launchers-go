@@ -783,6 +783,10 @@ func (l *evalsLauncher) runEvalLegacyHandler() alismux.Func {
 
 // executeRunEval loads the eval set, runs inference and scoring, and returns results.
 func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult, error) {
+	caller, err := iam.FromContext(r.Context())
+	if err != nil || caller.ID == "" {
+		return nil, alismux.UnauthorizedErr("identity required")
+	}
 	appName, err := l.pathAppName(r)
 	if err != nil {
 		return nil, err
@@ -821,6 +825,9 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 		EvalCaseIDs:     caseIDs,
 		InferenceConfig: service.InferenceConfig{},
 		SessionState:    req.SessionState,
+		// Runs write real sessions, so they are the caller's, never the user
+		// stored on a shared case.
+		UserID: caller.ID,
 	})
 	if err != nil {
 		return nil, alismux.BadRequestErr("%s", err.Error())
