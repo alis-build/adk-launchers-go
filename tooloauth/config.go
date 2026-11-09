@@ -145,9 +145,10 @@ func (c Config) store() auth.CredentialStore {
 	return defaultStore()
 }
 
-// cloneTools deep-copies tools, so the copy shares no slice, map or pointer
-// with the original: a caller changing its Config after NewPlugin or
-// Provider must not change the scopes or endpoints a running plugin uses.
+// cloneTools copies tools deeply enough that the scopes and endpoints a
+// running plugin uses are its own: a caller changing its Config after
+// NewPlugin or Provider changes nothing the plugin reads. Fields the plugin
+// never reads, such as the schemes' Extra maps, stay shared.
 func cloneTools(tools map[string]Tool) map[string]Tool {
 	out := make(map[string]Tool, len(tools))
 	for name, t := range tools {
