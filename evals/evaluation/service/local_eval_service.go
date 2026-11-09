@@ -236,6 +236,12 @@ func (s *LocalEvalService) Evaluate(ctx context.Context, req EvaluateRequest) ([
 					FinalEvalStatus: models.EvalStatusFailed,
 					SessionID:       job.inf.SessionID,
 				}
+				// A failed case still names its user and session, as in
+				// adk-python, so a client can open the session it failed in.
+				// The case is loaded best-effort; a missing one leaves the
+				// user to the inference result.
+				evalCase, _ := s.Sets.GetEvalCase(job.inf.AppName, job.inf.EvalSetID, job.inf.EvalCaseID)
+				s.attachSessionMetadata(ctx, job.inf, evalCase, &res)
 			}
 			results <- result{idx: job.idx, res: res}
 		}

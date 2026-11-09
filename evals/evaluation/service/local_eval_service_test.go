@@ -3,6 +3,8 @@ package service_test
 import (
 	"context"
 	"iter"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"go.alis.build/adk/launchers/evals/evaluation/generator"
@@ -441,5 +443,80 @@ func TestRunInferenceOverridesStoredUserAndApp(t *testing.T) {
 	stored, err := sets.GetEvalCase("app", "set1", "case1")
 	if err != nil || stored == nil || stored.SessionInput == nil || stored.SessionInput.UserID != "someone" || stored.SessionInput.AppName != "other" {
 		t.Errorf("stored case changed: %+v (err %v)", stored, err)
+	}
+}
+
+func twoTurnSet(t *testing.T) storage.EvalSetsManager {
+	t.Helper()
+	sets := storage.NewInMemoryEvalSetsManager()
+	_, _ = sets.CreateEvalSet("app", "set1")
+	turn := models.Invocation{
+		UserContent:   genai.NewContentFromText("hi", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("ok", genai.RoleModel),
+	}
+	_ = sets.AddEvalCase("app", "set1", models.EvalCase{EvalID: "case1", Conversation: []models.Invocation{turn, turn}})
+	return sets
+}
+
+// TestEvaluateFailedCaseCarriesUserID covers the evaluate error path: adk-python
+// sets user_id on every case result, failures included, and adk-web loads the
+// eval session under it.
+func TestEvaluateFailedCaseCarriesUserID(t *testing.T) {
+	svc := &service.LocalEvalService{Sets: twoTurnSet(t), Registry: metrics.DefaultRegistry}
+	turn := models.Invocation{
+		UserContent:   genai.NewContentFromText("hi", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("ok", genai.RoleModel),
+	}
+	// One actual invocation for a two-turn case: evaluation errors.
+	results, err := svc.Evaluate(context.Background(), service.EvaluateRequest{
+		InferenceResults: []service.InferenceResult{{
+			AppName: "app", EvalSetID: "set1", EvalCaseID: "case1", SessionID: "s1",
+			UserID: "user-7", Inferences: []models.Invocation{turn}, Status: service.InferenceStatusSuccess,
+		}},
+		EvaluateConfig: service.EvaluateConfig{EvalMetrics: []models.EvalMetric{{MetricName: models.MetricResponseMatchScore, Threshold: 0.7}}},
+	})
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(results) != 1 || results[0].FinalEvalStatus != models.EvalStatusFailed {
+		t.Fatalf("results = %+v, want one FAILED result", results)
+	}
+	if results[0].UserID == nil || *results[0].UserID != "user-7" {
+		t.Errorf("failed result UserID = %v, want user-7", results[0].UserID)
+	}
+}
+
+// TestSavedEvalResultIDHasAppSetTimestampShape pins the result ID adk-web
+// rebuilds from a deep link: ${app}_${evalSetId}_${timestamp}, with Go's
+// integer timestamp.
+func TestSavedEvalResultIDHasAppSetTimestampShape(t *testing.T) {
+	results := storage.NewLocalEvalSetResultsManager(t.TempDir())
+	svc := &service.LocalEvalService{Sets: twoTurnSet(t), Registry: metrics.DefaultRegistry, Results: results}
+	turn := models.Invocation{
+		UserContent:   genai.NewContentFromText("hi", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("ok", genai.RoleModel),
+	}
+	if _, err := svc.Evaluate(context.Background(), service.EvaluateRequest{
+		InferenceResults: []service.InferenceResult{{
+			AppName: "app", EvalSetID: "set1", EvalCaseID: "case1", SessionID: "s1",
+			UserID: "user-7", Inferences: []models.Invocation{turn, turn}, Status: service.InferenceStatusSuccess,
+		}},
+		EvaluateConfig: service.EvaluateConfig{EvalMetrics: []models.EvalMetric{{MetricName: models.MetricResponseMatchScore, Threshold: 0.7}}},
+	}); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	ids, err := results.ListEvalSetResults("app")
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("ListEvalSetResults = %v, %v; want one", ids, err)
+	}
+	if !regexp.MustCompile(`^app_set1_[0-9]+$`).MatchString(ids[0]) {
+		t.Errorf("result ID = %q, want app_set1_<integer seconds>", ids[0])
+	}
+	saved, err := results.GetEvalSetResult("app", ids[0])
+	if err != nil || saved == nil {
+		t.Fatalf("GetEvalSetResult: %v", err)
+	}
+	if want := "app_set1_" + strconv.FormatInt(int64(saved.CreationTimestamp), 10); ids[0] != want {
+		t.Errorf("result ID = %q, want %q (app, set and creationTimestamp)", ids[0], want)
 	}
 }
