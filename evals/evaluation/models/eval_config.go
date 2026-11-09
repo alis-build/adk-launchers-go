@@ -84,14 +84,21 @@ func thresholdFromCriterion(c jsonCriterion) (float64, error) {
 }
 
 // EffectiveThreshold returns the threshold a metric is graded with: the
-// criterion's threshold whenever a criterion is set, else m.Threshold. This is
-// adk-python's _get_metric_threshold rule.
+// criterion's threshold whenever a criterion sets one, else m.Threshold. This
+// is adk-python's _get_metric_threshold rule, except that a criterion without a
+// threshold falls back to m.Threshold instead of being rejected.
 func EffectiveThreshold(m EvalMetric) float64 {
 	if m.Criterion.value == nil {
 		return m.Threshold
 	}
 	t, err := thresholdFromCriterion(m.Criterion)
 	if err != nil {
+		return m.Threshold
+	}
+	// A criterion that sets no threshold decodes as 0, which would pass every
+	// score. adk-python rejects such a request; here the top-level threshold
+	// applies instead, as trajectory metrics always did.
+	if t == 0 {
 		return m.Threshold
 	}
 	return t

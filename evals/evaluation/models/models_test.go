@@ -366,3 +366,13 @@ func TestEffectiveThresholdPrefersCriterion(t *testing.T) {
 		})
 	}
 }
+
+// A criterion with no threshold (0) would grade every score as passing; the
+// top-level threshold applies instead. adk-python rejects such a request;
+// Go keeps the earlier trajectory behaviour.
+func TestEffectiveThresholdFallsBackWhenCriterionSetsNone(t *testing.T) {
+	m := models.EvalMetric{Threshold: 0.7, Criterion: models.CriterionField(models.BaseCriterion{})}
+	if got := models.EffectiveThreshold(m); got != 0.7 {
+		t.Errorf("EffectiveThreshold() = %v, want the top-level 0.7", got)
+	}
+}
