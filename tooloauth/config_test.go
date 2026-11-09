@@ -2,6 +2,7 @@ package tooloauth
 
 import (
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/tool/toolauth"
 )
@@ -28,6 +29,18 @@ func TestNewPlugin_rejectsInvalidConfig(t *testing.T) {
 				RefreshTokenTTL: -1,
 			},
 			wantErr: "tooloauth: RefreshTokenTTL must not be negative",
+		},
+		{
+			name: "TTL within the expiry skew",
+			cfg: Config{
+				Tools: map[string]Tool{"calendar_list": {
+					Provider: "Google Calendar", ClientID: "cid-7", ClientSecret: "secret-7",
+					Scheme: toolauth.Scheme{Type: toolauth.SchemeTypeOAuth2, Flows: &toolauth.OAuthFlows{AuthorizationCode: &toolauth.OAuthFlow{
+						AuthorizationURL: "https://accounts.example.com/auth", TokenURL: "https://oauth2.example.com/token"}}},
+				}},
+				RefreshTokenTTL: 10 * time.Second,
+			},
+			wantErr: "tooloauth: RefreshTokenTTL must be longer than 10s",
 		},
 		{
 			name: "no provider",

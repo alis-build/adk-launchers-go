@@ -3,7 +3,9 @@ package tooloauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -33,11 +35,6 @@ type resolver struct {
 	cfg   Config
 	store auth.CredentialStore
 	ttl   time.Duration
-	// refreshes runs one refresh per store key at a time. ADK runs a turn's
-	// tool calls in parallel, and a provider that rotates refresh tokens
-	// refuses the second of two refreshes with the same one, which would
-	// otherwise delete the token the first just stored.
-	refreshes singleflight.Group
 	// pending holds the sign-in requests of running invocations.
 	pending pendingSignIns
 }
@@ -70,7 +67,7 @@ func (r *resolver) credential(ctx context.Context, toolName, appName, userID str
 	if tok.usable(time.Now()) {
 		return tok, nil
 	}
-	v, err, _ := r.refreshes.Do(flightKey(key), func() (any, error) {
+	v, err, _ := refreshes.Do(storeID(r.store)+flightKey(key), func() (any, error) {
 		return r.refreshStored(ctx, t, key)
 	})
 	if err != nil {
@@ -142,6 +139,23 @@ func (r *resolver) lookup(ctx context.Context, key auth.CredentialKey) (*Token, 
 		return nil, nil
 	}
 	return tok, nil
+}
+
+// refreshes runs one refresh per store and key at a time, across the plugin
+// and every provider, which each hold their own resolver. ADK runs a turn's
+// tool calls in parallel, and a provider that rotates refresh tokens refuses
+// the second of two refreshes with the same one, which would otherwise
+// delete the token the first just stored.
+var refreshes singleflight.Group
+
+// storeID names store for refreshes: its address when it is a pointer, as
+// stores are, so two stores never share a flight; otherwise its type.
+func storeID(store auth.CredentialStore) string {
+	v := reflect.ValueOf(store)
+	if v.Kind() == reflect.Pointer {
+		return fmt.Sprintf("%T@%x|", store, v.Pointer())
+	}
+	return fmt.Sprintf("%T|", store)
 }
 
 // flightKey flattens key for refreshes, length-prefixing each field so no

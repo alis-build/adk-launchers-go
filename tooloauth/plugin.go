@@ -14,8 +14,8 @@ import (
 // configured tool the user's token: it serves a stored one, refreshing it
 // when expired; pauses a tool with no token for the user's sign-in; and
 // completes the sign-in when the user answers, without running the tool on
-// that answer. When each run starts it reads the run's session for the
-// sign-in requests it made. Add it through launcher.Config.PluginConfig. It
+// that answer. When a run answering a confirmation starts, it reads the
+// run's session for the sign-in requests it made. Add it through launcher.Config.PluginConfig. It
 // fails when cfg is invalid.
 func NewPlugin(cfg Config) (*plugin.Plugin, error) {
 	if err := cfg.validate(); err != nil {

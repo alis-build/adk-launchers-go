@@ -30,7 +30,8 @@ type Config struct {
 	Store auth.CredentialStore
 	// RefreshTokenTTL is how long a refreshable token is kept after it was
 	// stored or last refreshed, so a user who keeps using a tool stays signed
-	// in. Zero means DefaultRefreshTokenTTL; negative is rejected.
+	// in. Zero means DefaultRefreshTokenTTL; negative, or no longer than
+	// auth.ExpirySkew, is rejected.
 	RefreshTokenTTL time.Duration
 	// HTTPClient calls the token endpoint. Nil means http.DefaultClient.
 	HTTPClient *http.Client
@@ -66,6 +67,11 @@ func (c Config) validate() error {
 	}
 	if c.RefreshTokenTTL < 0 {
 		return errors.New("tooloauth: RefreshTokenTTL must not be negative")
+	}
+	// A store declines to keep anything within auth.ExpirySkew of expiry, so
+	// a TTL that short would store no token and loop every sign-in.
+	if c.RefreshTokenTTL > 0 && c.RefreshTokenTTL <= auth.ExpirySkew {
+		return fmt.Errorf("tooloauth: RefreshTokenTTL must be longer than %s", auth.ExpirySkew)
 	}
 	names := make([]string, 0, len(c.Tools))
 	for name := range c.Tools {

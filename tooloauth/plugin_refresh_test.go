@@ -429,3 +429,32 @@ func TestRefresh_refusedAfterAnotherServerRotatedKeepsTheirs(t *testing.T) {
 		t.Errorf("resource server saw %q, want one %q", got, "Bearer at-other-20")
 	}
 }
+
+// The plugin and a provider built from the same Config hold separate
+// resolvers but share one refresh per store and key.
+func TestRefresh_pluginAndProviderRefreshOnce(t *testing.T) {
+	re := newRotatingEndpoint(t, "rt-old-9")
+	cfg := refreshConfig(newRecordingStore(), &tokenEndpoint{Server: re.Server}, 72*time.Hour)
+	seed(t, cfg, "app-refresh", "user-7", &Token{AccessToken: "at-old-9", RefreshToken: "rt-old-9", Expiry: time.Now().Add(-time.Minute)}, time.Now().Add(24*time.Hour))
+	a, b := newResolver(cfg), newResolver(cfg)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, r := range []*resolver{a, b} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = r.credential(context.Background(), "calendar_list", "app-refresh", "user-7")
+		}()
+	}
+	wg.Wait()
+
+	if got := re.callCount(); got != 1 {
+		t.Errorf("token endpoint called %d times, want 1", got)
+	}
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("resolver %d: credential() error = %v", i, err)
+		}
+	}
+}

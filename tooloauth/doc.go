@@ -107,7 +107,15 @@
 //     AG-UI clients and REST clients can.
 //   - agui strips secrets from the interrupt only; message snapshots and
 //     history carry the request's arguments as stored, which the plugin has
-//     already stripped.
+//     already stripped. The client's reply is kept in the session as the
+//     user's confirmation response, so its auth response URI, with the
+//     spent single-use code and the state, appears in that thread's agui
+//     history and snapshots; ADK never puts it in the model's input.
+//   - A token the provider revokes is served until its stored entry
+//     expires: the provider does not refresh or drop a token a downstream
+//     API rejects. A token with neither an expiry nor a refresh token is
+//     kept for RefreshTokenTTL. Revoke one early by deleting it under
+//     [Config.CredentialKey].
 //   - A configured tool used inside an ADK agenttool sub-agent gets no
 //     plugin: ADK's inner runner has no plugins and uses the sub-agent's
 //     name as the app name. It never pauses, and its provider reports it is
