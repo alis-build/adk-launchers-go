@@ -1348,3 +1348,44 @@ func TestFinalResponseMatchV2ScoredSampleOutvotesUnknown(t *testing.T) {
 		t.Errorf("per-invocation = %+v, want score 1 from the scored sample", result.PerInvocationResults)
 	}
 }
+
+// Mirrors adk-python test_rubric_based_final_response_quality_v1.py: with no
+// invocation events, the agent comes from the app details.
+func TestRubricFinalResponsePromptUsesAppAgentWithoutEvents(t *testing.T) {
+	inv := models.Invocation{
+		UserContent:      genai.NewContentFromText("What is the capital of France?", genai.RoleUser),
+		FinalResponse:    genai.NewContentFromText("I can only help with cooking.", genai.RoleModel),
+		IntermediateData: models.InvocationEventsField(models.InvocationEvents{}),
+		AppDetails: &models.AppDetails{AgentDetails: map[string]models.AgentDetails{
+			"my_agent": {Name: "my_agent", Instructions: "Only answer questions about cooking. Decline all other requests."},
+		}},
+	}
+	p := formatRubricFinalResponsePrompt(inv, nil, []models.Rubric{rubric("1", "be helpful")})
+	for _, want := range []string{"Only answer questions about cooking. Decline all other requests.", "I can only help with cooking."} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+}
+
+func TestRubricFinalResponsePromptUsesAppAgentWithoutIntermediateData(t *testing.T) {
+	inv := models.Invocation{
+		UserContent:   genai.NewContentFromText("hi", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("hello", genai.RoleModel),
+		AppDetails: &models.AppDetails{AgentDetails: map[string]models.AgentDetails{
+			"my_agent": {Name: "my_agent", Instructions: "Agent instructions here."},
+		}},
+	}
+	if p := formatRubricFinalResponsePrompt(inv, nil, []models.Rubric{rubric("1", "be helpful")}); !strings.Contains(p, "Agent instructions here.") {
+		t.Error("prompt missing the app agent's instructions")
+	}
+}
+
+// Go-only rule: Go maps keep no insertion order, so the smallest name stands in
+// for adk-python's first-inserted agent.
+func TestDefaultAgentNamePicksSmallestOfSeveral(t *testing.T) {
+	app := &models.AppDetails{AgentDetails: map[string]models.AgentDetails{"zeta": {}, "alpha": {}}}
+	if got := app.DefaultAgentName(); got != "alpha" {
+		t.Errorf("DefaultAgentName() = %q, want alpha", got)
+	}
+}

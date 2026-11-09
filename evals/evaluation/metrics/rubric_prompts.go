@@ -413,9 +413,19 @@ func firstEventAuthor(inv models.Invocation) string {
 // the rubric text (not a golden reference) as the source of truth. The
 // argument is retained to satisfy the shared formatPrompt signature on
 // llmJudgeEvaluator.
+// promptAgentName is the agent whose instructions the judge sees: the first
+// invocation event's author, or else the app's default agent, so an agent that
+// answered without tools or events still has its instructions in the prompt.
+func promptAgentName(actual models.Invocation) string {
+	if name := firstEventAuthor(actual); name != "" {
+		return name
+	}
+	return actual.AppDetails.DefaultAgentName()
+}
+
 func formatRubricFinalResponsePrompt(actual models.Invocation, _ *models.Invocation, rubrics []models.Rubric) string {
 	repl := strings.NewReplacer(
-		"{developer_instructions}", renderDeveloperInstructions(actual.AppDetails, firstEventAuthor(actual)),
+		"{developer_instructions}", renderDeveloperInstructions(actual.AppDetails, promptAgentName(actual)),
 		"{tool_declarations}", renderToolDeclarationsJSON(actual.AppDetails),
 		"{user_input}", textFromContent(actual.UserContent),
 		"{response_steps}", renderToolCallsAndResponsesJSON(actual),

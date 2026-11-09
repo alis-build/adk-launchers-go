@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"sort"
 
 	"google.golang.org/genai"
 )
@@ -30,6 +31,22 @@ func (a *AppDetails) UnmarshalJSON(data []byte) error {
 	}
 	*a = AppDetails(v)
 	return nil
+}
+
+// DefaultAgentName returns the agent to read instructions from when an
+// invocation names none: the only agent, or the lexicographically smallest
+// name when there are several (Go maps keep no insertion order, which is what
+// adk-python uses); "" when there are none.
+func (a *AppDetails) DefaultAgentName() string {
+	if a == nil || len(a.AgentDetails) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(a.AgentDetails))
+	for name := range a.AgentDetails {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names[0]
 }
 
 // GetDeveloperInstructions returns instructions for the named agent.
