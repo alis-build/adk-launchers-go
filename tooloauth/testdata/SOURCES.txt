@@ -1,0 +1,24 @@
+Captured 2026-11-09 from adk-python 67b217d00 and adk-web 07a0702.
+
+adkpython_auth_request.json
+  adk-python's AuthHandler(cfg).generate_auth_request() for an oauth2
+  authorization code scheme (authorizationUrl
+  https://accounts.example.com/o/oauth2/auth, tokenUrl
+  https://oauth2.example.com/token, one scope) and client probe-client /
+  probe-secret / https://agent.example.com/oauth/callback, dumped with
+  model_dump(mode="json", by_alias=True, exclude_none=True). adk-python strips
+  the client secret before sending the request, so none appears. The state is
+  random per capture.
+
+adkweb_auth_response.json
+  The request above after adk-web's sendOAuthResponse transform
+  (src/app/components/chat/chat.component.ts, sendOAuthResponse): a deep copy
+  with exchangedAuthCredential.oauth2.authResponseUri and .redirectUri set.
+  authResponseUri is assembled by the probe in the shape an IdP redirect has
+  (RFC 6749 section 4.1.2: the redirect URI with state and code), using adk-web's
+  dev origin http://localhost:4200 as both the redirect and redirectUri.
+
+Command (the script is a throwaway kept outside the repo; it writes nothing
+into the adk-python checkout):
+
+  uv run --no-project --with /path/to/adk-python python -I capture_auth.py tooloauth/testdata

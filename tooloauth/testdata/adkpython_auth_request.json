@@ -1,0 +1,33 @@
+{
+  "authScheme": {
+    "flows": {
+      "authorizationCode": {
+        "authorizationUrl": "https://accounts.example.com/o/oauth2/auth",
+        "scopes": {
+          "https://www.example.com/auth/calendar.readonly": ""
+        },
+        "tokenUrl": "https://oauth2.example.com/token"
+      }
+    },
+    "type": "oauth2"
+  },
+  "credentialKey": "adk_oauth2_d54f228631d7cd77_oauth2_c4276d2242fc4583",
+  "exchangedAuthCredential": {
+    "authType": "oauth2",
+    "oauth2": {
+      "authUri": "https://accounts.example.com/o/oauth2/auth?response_type=code&client_id=probe-client&redirect_uri=https%3A%2F%2Fagent.example.com%2Foauth%2Fcallback&scope=https%3A%2F%2Fwww.example.com%2Fauth%2Fcalendar.readonly&state=VL6X4j4TZB0evPXdfx8i9n0ud4MWv9&access_type=offline&prompt=consent",
+      "clientId": "probe-client",
+      "redirectUri": "https://agent.example.com/oauth/callback",
+      "state": "VL6X4j4TZB0evPXdfx8i9n0ud4MWv9",
+      "tokenEndpointAuthMethod": "client_secret_basic"
+    }
+  },
+  "rawAuthCredential": {
+    "authType": "oauth2",
+    "oauth2": {
+      "clientId": "probe-client",
+      "redirectUri": "https://agent.example.com/oauth/callback",
+      "tokenEndpointAuthMethod": "client_secret_basic"
+    }
+  }
+}
