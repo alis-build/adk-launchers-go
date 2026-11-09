@@ -193,13 +193,47 @@ func newFinalResponseMatchV2Evaluator(metric models.EvalMetric, cfg *RegistryCon
 		client:          client,
 		formatPrompt:    formatFinalResponseMatchV2Prompt,
 		parseScore: func(response string, _ models.Invocation) (*float64, []models.RubricScore, error) {
-			score, err := parseValidInvalidJSON(response)
-			if err != nil {
-				return nil, nil, err
-			}
-			return &score, nil, nil
+			return parseCritique(response), nil, nil
 		},
+		// Majority of the scored samples decides, as in adk-python.
+		aggregatePerInvocation: simulatorSampleAggregate,
 	}
+}
+
+// adk-python's final_response_match_v2 label patterns, verbatim. The field
+// ends at a comma, newline or closing brace.
+var (
+	critiqueValidRe   = regexp.MustCompile(`"is_the_agent_response_valid":\s*\[*[\n\s]*"*([^"^\]^\s]*)"*[\n\s]*\]*\s*[,\n\}]`)
+	critiqueInvalidRe = regexp.MustCompile(`"is_the_agent_response_invalid":\s*\[*[\n\s]*"*([^"^\]^\s]*)"*[\n\s]*\]*\s*[,\n\}]`)
+)
+
+// parseCritique ports adk-python's final_response_match_v2._parse_critique:
+// it reads the is_the_agent_response_valid label, or failing that the
+// is_the_agent_response_invalid one, and returns 1 for a valid response, 0 for
+// an invalid one, and nil when the label is missing or unknown (the sample is
+// then unscored).
+func parseCritique(response string) *float64 {
+	one, zero := 1.0, 0.0
+	label := func(m []string) string { return strings.TrimRight(strings.TrimSpace(m[1]), ",}") }
+	if m := critiqueValidRe.FindStringSubmatch(response); m != nil {
+		switch label(m) {
+		case "invalid", "almost", "false", "partially_valid", "partially valid", "partially":
+			return &zero
+		case "valid", "true":
+			return &one
+		}
+		return nil
+	}
+	if m := critiqueInvalidRe.FindStringSubmatch(response); m != nil {
+		switch label(m) {
+		case "invalid", "almost", "true", "partially_valid", "partially valid", "partially":
+			return &zero
+		case "valid", "false":
+			return &one
+		}
+		return nil
+	}
+	return nil
 }
 
 // formatFinalResponseMatchV2Prompt builds the judge prompt for final-response

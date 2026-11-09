@@ -1287,3 +1287,64 @@ func TestRubricEvaluatorScoredSampleOutvotesUnscored(t *testing.T) {
 		t.Errorf("score = %v, status %d; want 1, PASSED", got.Score, got.EvalStatus)
 	}
 }
+
+// Table from adk-python test_final_response_match_v2.py: labels under the
+// is_the_agent_response_invalid field.
+func TestFinalResponseMatchV2AlternateLabels(t *testing.T) {
+	one, zero := 1.0, 0.0
+	for _, tc := range []struct {
+		label string
+		want  *float64
+	}{
+		{"unknown", nil}, {"true", &zero}, {"invalid", &zero}, {"false", &one},
+		{"valid", &one}, {"almost", &zero}, {"partially_valid", &zero}, {"partially", &zero},
+	} {
+		got := parseCritique(`{"is_the_agent_response_invalid": "` + tc.label + `"}`)
+		if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+			t.Errorf("label %q: score = %v, want %v", tc.label, got, tc.want)
+		}
+	}
+}
+
+func finalMatchV2Eval(t *testing.T, replies []string, samples int) EvaluationResult {
+	t.Helper()
+	reg := NewDefaultRegistry()
+	reg.SetConfig(RegistryConfig{JudgeClient: &fakeJudge{responses: replies}})
+	ev, err := reg.GetEvaluator(models.EvalMetric{
+		MetricName: models.MetricFinalResponseMatchV2,
+		Threshold:  0.5,
+		Criterion: models.CriterionField(models.LlmAsAJudgeCriterion{
+			BaseCriterion:     models.BaseCriterion{Threshold: 0.5},
+			JudgeModelOptions: models.JudgeModelOptions{NumSamples: samples},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("GetEvaluator: %v", err)
+	}
+	inv := models.Invocation{
+		UserContent:   genai.NewContentFromText("q", genai.RoleUser),
+		FinalResponse: genai.NewContentFromText("a", genai.RoleModel),
+	}
+	result, err := ev.EvaluateInvocations(context.Background(), []models.Invocation{inv}, []models.Invocation{inv}, nil)
+	if err != nil {
+		t.Fatalf("EvaluateInvocations: %v", err)
+	}
+	return result
+}
+
+func TestFinalResponseMatchV2UnknownLabelIsNotEvaluated(t *testing.T) {
+	result := finalMatchV2Eval(t, []string{`{"is_the_agent_response_valid": "unknown"}`}, 1)
+	if len(result.PerInvocationResults) != 1 || result.PerInvocationResults[0].EvalStatus != models.EvalStatusNotEvaluated {
+		t.Errorf("per-invocation = %+v, want one NOT_EVALUATED result", result.PerInvocationResults)
+	}
+	if result.OverallEvalStatus != models.EvalStatusNotEvaluated {
+		t.Errorf("overall status = %d, want %d", result.OverallEvalStatus, models.EvalStatusNotEvaluated)
+	}
+}
+
+func TestFinalResponseMatchV2ScoredSampleOutvotesUnknown(t *testing.T) {
+	result := finalMatchV2Eval(t, []string{`{"is_the_agent_response_valid": "unknown"}`, `{"is_the_agent_response_valid": "valid"}`}, 2)
+	if len(result.PerInvocationResults) != 1 || result.PerInvocationResults[0].Score == nil || *result.PerInvocationResults[0].Score != 1 {
+		t.Errorf("per-invocation = %+v, want score 1 from the scored sample", result.PerInvocationResults)
+	}
+}
