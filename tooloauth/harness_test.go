@@ -6,6 +6,7 @@ import (
 	"iter"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 
@@ -100,12 +101,19 @@ func (rs *resourceServer) authorizations() []string {
 // status code.
 func calendarTool(t *testing.T, cfg Config, rs *resourceServer) tool.Tool {
 	t.Helper()
+	return calendarToolWith(t, cfg, rs, false)
+}
+
+// calendarToolWith is calendarTool, asking the user's own approval before
+// every run when requireConfirmation is set.
+func calendarToolWith(t *testing.T, cfg Config, rs *resourceServer, requireConfirmation bool) tool.Tool {
+	t.Helper()
 	p, err := cfg.Provider("calendar_list")
 	if err != nil {
 		t.Fatalf("Provider() error = %v", err)
 	}
 	client := &http.Client{Transport: &auth.Transport{Provider: p}}
-	tl, err := functiontool.New(functiontool.Config{Name: "calendar_list", Description: "Lists calendar events."},
+	tl, err := functiontool.New(functiontool.Config{Name: "calendar_list", Description: "Lists calendar events.", RequireConfirmation: requireConfirmation},
 		func(ctx agent.Context, _ struct{}) (map[string]any, error) {
 			rs.mu.Lock()
 			rs.handlers++
@@ -130,8 +138,9 @@ func calendarTool(t *testing.T, cfg Config, rs *resourceServer) tool.Tool {
 // harness runs one llmagent, scripted to call toolName, with the tooloauth
 // plugin built from cfg.
 type harness struct {
-	t      *testing.T
-	runner *runner.Runner
+	t        *testing.T
+	runner   *runner.Runner
+	sessions session.Service
 }
 
 func newHarness(t *testing.T, appName, toolName string, cfg Config, tools ...tool.Tool) *harness {
@@ -142,6 +151,14 @@ func newHarness(t *testing.T, appName, toolName string, cfg Config, tools ...too
 // newParallelHarness is newHarness with the model calling toolName perTurn
 // times in each response.
 func newParallelHarness(t *testing.T, appName, toolName string, perTurn int, cfg Config, tools ...tool.Tool) *harness {
+	t.Helper()
+	return newHarnessOn(t, session.InMemoryService(), appName, toolName, perTurn, cfg, nil, tools...)
+}
+
+// newHarnessOn is newParallelHarness keeping sessions in sessions, so two
+// harnesses, say before and after a Config change, can share a session, and
+// running the plugins in before ahead of tooloauth.
+func newHarnessOn(t *testing.T, sessions session.Service, appName, toolName string, perTurn int, cfg Config, before []*plugin.Plugin, tools ...tool.Tool) *harness {
 	t.Helper()
 	p, err := NewPlugin(cfg)
 	if err != nil {
@@ -154,14 +171,14 @@ func newParallelHarness(t *testing.T, appName, toolName string, perTurn int, cfg
 	r, err := runner.New(runner.Config{
 		AppName:           appName,
 		Agent:             a,
-		SessionService:    session.InMemoryService(),
-		PluginConfig:      runner.PluginConfig{Plugins: []*plugin.Plugin{p}},
+		SessionService:    sessions,
+		PluginConfig:      runner.PluginConfig{Plugins: append(slices.Clone(before), p)},
 		AutoCreateSession: true,
 	})
 	if err != nil {
 		t.Fatalf("runner.New() error = %v", err)
 	}
-	return &harness{t: t, runner: r}
+	return &harness{t: t, runner: r, sessions: sessions}
 }
 
 // run sends content as userID in sessionID and returns the run's events,

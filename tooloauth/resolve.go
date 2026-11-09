@@ -3,6 +3,7 @@ package tooloauth
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,8 @@ type resolver struct {
 	// refuses the second of two refreshes with the same one, which would
 	// otherwise delete the token the first just stored.
 	refreshes singleflight.Group
+	// pending holds the sign-in requests of running invocations.
+	pending pendingSignIns
 }
 
 // newResolver returns a resolver for a copy of cfg, which must be valid, so a
@@ -78,10 +81,9 @@ func (r *resolver) credential(ctx context.Context, toolName, appName, userID str
 
 // refreshStored refreshes the token stored under key and stores the result.
 // It reads the entry again first, since a refresh that finished while this
-// one waited may already have replaced it. Only a refresh the endpoint
-// refuses with invalid_grant deletes the entry, since only that says the
-// refresh token is bad; an outage or a misconfigured client must not sign
-// users out. Even then the entry is kept when another server has meanwhile
+// one waited may already have replaced it. Only a refusal of the user's
+// grant (see grantRefused) deletes the entry, so the user is asked to sign
+// in again; an outage or a misconfigured client must not sign users out. Even then the entry is kept when another server has meanwhile
 // stored a different refresh token.
 func (r *resolver) refreshStored(ctx context.Context, t Tool, key auth.CredentialKey) (*Token, error) {
 	tok, err := r.lookup(ctx, key)
@@ -96,7 +98,7 @@ func (r *resolver) refreshStored(ctx context.Context, t Tool, key auth.Credentia
 		return nil, errMiss
 	}
 	fresh, err := r.refresh(ctx, t, tok)
-	if re, ok := errors.AsType[*oauth2.RetrieveError](err); ok && re.ErrorCode == "invalid_grant" {
+	if re, ok := errors.AsType[*oauth2.RetrieveError](err); ok && grantRefused(re) {
 		return r.dropRefused(ctx, key, tok.RefreshToken)
 	}
 	if err != nil {
@@ -222,4 +224,24 @@ func (r *resolver) tokenContext(ctx context.Context) context.Context {
 // allowing auth.ExpirySkew, the margin stores and producers share.
 func (t *Token) usable(now time.Time) bool {
 	return t.AccessToken != "" && (t.Expiry.IsZero() || t.Expiry.After(now.Add(auth.ExpirySkew)))
+}
+
+// grantRefused reports whether a token endpoint's refusal says the user's
+// grant itself cannot be used, so a new sign-in is the fix: the refresh
+// token is invalid, expired or revoked (invalid_grant), the provider no
+// longer accepts the scopes it was granted for (invalid_scope), or a 400
+// carries no error code this function recognises (some providers answer a
+// revoked token with a bare page). Codes that name the client's own setup
+// (invalid_client, unauthorized_client, unsupported_grant_type,
+// invalid_request) are not: a new sign-in would fail the same way. Nor is a
+// 401, which RFC 6749 section 5.2 reserves for the client failing to
+// authenticate, nor a 5xx, which is an outage.
+func grantRefused(re *oauth2.RetrieveError) bool {
+	switch re.ErrorCode {
+	case "invalid_grant", "invalid_scope":
+		return true
+	case "invalid_client", "unauthorized_client", "unsupported_grant_type", "invalid_request":
+		return false
+	}
+	return re.Response != nil && re.Response.StatusCode == http.StatusBadRequest
 }

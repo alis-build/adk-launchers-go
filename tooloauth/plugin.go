@@ -20,13 +20,16 @@ func NewPlugin(cfg Config) (*plugin.Plugin, error) {
 	r := newResolver(cfg)
 	return plugin.New(plugin.Config{
 		Name:               "tooloauth",
+		BeforeRunCallback:  r.beforeRun,
+		AfterRunCallback:   r.afterRun,
 		BeforeToolCallback: r.beforeTool,
 	})
 }
 
 // beforeTool runs before every tool call. Tools the Config does not name run
 // untouched, and so does a configured tool whose user has a usable token. A
-// tool with no token pauses for the user's consent; in a run marked by
+// tool with no token pauses for the user's consent, and the resumed call
+// completes the sign-in instead of running the tool; in a run marked by
 // WithNonInteractive it stops with "connect <Provider> in chat first"
 // instead. A store failure stops the call with an error the model sees,
 // which names the provider but not the user.
@@ -34,6 +37,17 @@ func (r *resolver) beforeTool(ctx agent.Context, t tool.Tool, _ map[string]any) 
 	cfgTool, ok := r.cfg.Tools[t.Name()]
 	if !ok {
 		return nil, nil
+	}
+	if conf := ctx.ToolConfirmation(); conf != nil {
+		if requested, ok := r.requestedAuthConfig(ctx); ok {
+			return r.completeSignIn(ctx, cfgTool, requested, conf)
+		}
+		// A sign-in response with no sign-in request on record must never
+		// pass as the tool's own approval, which any confirmed
+		// confirmation would.
+		if _, isSignIn := decodeAuthResponse(conf.Payload); isSignIn {
+			return nil, fmt.Errorf("%s sign-in failed: the sign-in request is out of date", cfgTool.Provider)
+		}
 	}
 	_, err := r.credential(ctx, t.Name(), ctx.AppName(), ctx.UserID())
 	switch {
