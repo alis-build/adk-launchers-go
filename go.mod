@@ -5,6 +5,7 @@ go 1.26.10
 require (
 	cloud.google.com/go/storage v1.70.0
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20261107181034-dbfbddb7b3b8
+	github.com/google/go-cmp v0.7.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
@@ -49,7 +50,6 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.9 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.11 // indirect
 	github.com/google/safehtml v0.1.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.25 // indirect
