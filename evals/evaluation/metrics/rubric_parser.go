@@ -4,6 +4,10 @@ import (
 	"regexp"
 	"strings"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+	"golang.org/x/text/unicode/norm"
+
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 )
 
@@ -21,10 +25,27 @@ var (
 	rubricVerdictRe   = regexp.MustCompile(`Verdict: (.*)`)
 )
 
-// normalizeText lowercases and trims whitespace to match Python's
-// rubric_based_evaluator._normalize_text used for rubric-text lookup.
+// smartChars maps typographic quotes and dashes to ASCII, as adk-python's
+// _SMART_CHARS does.
+var smartChars = strings.NewReplacer(
+	"\u2018", "'", "\u2019", "'",
+	"\u201c", `"`, "\u201d", `"`,
+	"\u2013", "-", "\u2014", "-",
+)
+
+var whitespaceRun = regexp.MustCompile(`\s+`)
+
+// decorationChars are trimmed from both ends of echoed rubric text: judges
+// wrap it in markdown and typographic decoration.
+const decorationChars = " *_`#>-\u2022\"'"
+
+// normalizeText ports adk-python's rubric_based_evaluator._normalize_text,
+// used for rubric-text lookup: NFKC, smart quotes and dashes to ASCII,
+// whitespace runs to one space, decoration trimmed from both ends, lowercased.
 func normalizeText(text string) string {
-	return strings.ToLower(strings.TrimSpace(text))
+	text = smartChars.Replace(norm.NFKC.String(text))
+	text = strings.Trim(whitespaceRun.ReplaceAllString(text, " "), decorationChars)
+	return cases.Lower(language.Und).String(text)
 }
 
 // stripVerdictPunct trims the wrapping characters (brackets, bullets,

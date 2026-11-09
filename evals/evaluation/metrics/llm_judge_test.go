@@ -1177,3 +1177,41 @@ func TestRubricPromptsTagRubricIDs(t *testing.T) {
 		t.Errorf("properties = %v, want id r1", props)
 	}
 }
+
+// The decorated variants are adk-python test_rubric_based_evaluator.py's.
+func TestParseRubricVerdictsMatchesDecoratedProperty(t *testing.T) {
+	for _, prop := range []string{
+		"• Is the response good?",
+		"- Is the response good?",
+		"* **Is the response good?**",
+		"**Is the response good?**",
+		"### Is the response good?",
+		"```Is the response good?```",
+		"> Is the response good?",
+		"“Is the response good?”",
+		"— Is the response good?",
+		"Is  the   response  good?",
+	} {
+		resp := "Property: " + prop + "\nRationale: It was good.\nVerdict: yes\nProperty: Is the response bad?\nRationale: It was not.\nVerdict: no\n"
+		mean, scores := parseRubricVerdicts(resp, goodBadRubrics())
+		var ids []string
+		for _, s := range scores {
+			ids = append(ids, s.RubricID)
+		}
+		if diff := cmp.Diff([]string{"1", "2"}, ids); diff != "" {
+			t.Errorf("property %q: rubric IDs (-want +got):\n%s", prop, diff)
+		}
+		if mean == nil || *mean != 0.5 {
+			t.Errorf("property %q: mean = %v, want 0.5", prop, mean)
+		}
+	}
+}
+
+func TestParseRubricVerdictsKeepsNonASCIIRubric(t *testing.T) {
+	rubrics := []models.Rubric{rubric("1", "La réponse utilise l'outil")}
+	resp := "Property: **La réponse utilise l’outil**\nRationale: ok\nVerdict: yes\n"
+	_, scores := parseRubricVerdicts(resp, rubrics)
+	if len(scores) != 1 || scores[0].RubricID != "1" {
+		t.Errorf("scores = %+v, want rubric 1", scores)
+	}
+}
