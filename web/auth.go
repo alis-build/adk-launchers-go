@@ -26,6 +26,11 @@ func IdentityAuthenticator() authn.Authenticator {
 		if err != nil {
 			return nil, fmt.Errorf("%w: no alis identity on the request", authn.ErrUnauthenticated)
 		}
+		// An identity without an ID would act as user "", which a strict
+		// authorizer lets through for any request naming that user.
+		if id.ID == "" {
+			return nil, fmt.Errorf("%w: alis identity has no ID", authn.ErrUnauthenticated)
+		}
 		return &authn.Caller{
 			UserID: id.ID,
 			Claims: map[string]any{"email": id.Email, "type": string(id.Type)},
@@ -37,9 +42,10 @@ func IdentityAuthenticator() authn.Authenticator {
 // hooks the embedder left nil: callers are authenticated from the forwarded
 // identity, and authz.NewStrict lets a caller act only as their own user.
 //
-// A value the embedder set is never replaced, so an embedder that wants the
-// REST API open sets Config.Authorizer to authz.NewNoop() in code. There is no
-// flag for it, so an operator cannot open it by accident.
+// A value the embedder set is never replaced, and there is no flag, so an
+// operator cannot loosen it by accident. In code, Config.Authorizer =
+// authz.NewNoop() lets any signed-in caller act as any user; a fully open API
+// also needs Config.Authenticator = authn.NewNoop().
 //
 // It must run before the sublaunchers are set up: ADK's api sublauncher hands
 // both hooks to adkrest.NewServer while it builds its routes.

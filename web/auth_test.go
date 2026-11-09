@@ -34,6 +34,16 @@ func TestIdentityAuthenticator(t *testing.T) {
 		}
 	})
 
+	t.Run("identity without an ID is unauthenticated", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://localhost/api/list-apps", nil)
+		req = req.WithContext((&iam.Identity{Email: "a@x.com", Type: iam.User}).Context(req.Context()))
+
+		_, err := IdentityAuthenticator().Authenticate(req)
+		if !errors.Is(err, authn.ErrUnauthenticated) {
+			t.Errorf("Authenticate() error = %v, want one wrapping authn.ErrUnauthenticated", err)
+		}
+	})
+
 	t.Run("no identity is unauthenticated", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "http://localhost/api/list-apps", nil)
 
