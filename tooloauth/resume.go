@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -180,27 +181,45 @@ type authResponse struct {
 // completeSignIn handles the resumed call of a sign-in pause: it checks the
 // response's state against the one the plugin sent, exchanges the code,
 // stores the token and answers with connectedResult instead of running the
-// tool.
+// tool. The checks run in a fixed order, so the state is verified before the
+// code is ever sent, and no failure writes to the store. Failure texts name
+// the provider only: never the provider's own error description, the
+// endpoint's response, or the state.
 func (r *resolver) completeSignIn(ctx agent.Context, t Tool, requested *toolauth.Config, conf *toolconfirmation.ToolConfirmation) (map[string]any, error) {
-	failed := fmt.Errorf("%s sign-in failed: no auth response", t.Provider)
+	failed := func(reason string) error {
+		return fmt.Errorf("%s sign-in failed: %s", t.Provider, reason)
+	}
 	if !conf.Confirmed {
-		return nil, failed
+		return nil, fmt.Errorf("%s sign-in was declined", t.Provider)
 	}
 	o, ok := decodeAuthResponse(conf.Payload)
 	if !ok {
-		return nil, failed
+		return nil, failed("no auth response")
 	}
 	u, err := url.Parse(o.AuthResponseURI)
 	if err != nil {
-		return nil, failed
+		return nil, failed("no auth response")
 	}
 	q := u.Query()
-	if subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(requested.ExchangedAuthCredential.OAuth2.State)) != 1 {
-		return nil, failed
+	if q.Has("error") {
+		if slices.Contains(q["error"], "access_denied") {
+			return nil, fmt.Errorf("%s sign-in was declined", t.Provider)
+		}
+		return nil, failed("the provider returned an error")
+	}
+	// Exactly one state: url.Values.Get would read only the first of several.
+	if len(q["state"]) != 1 || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(requested.ExchangedAuthCredential.OAuth2.State)) != 1 {
+		return nil, failed("state mismatch")
 	}
 	code := q.Get("code")
 	if code == "" {
-		return nil, failed
+		return nil, failed("no authorization code")
+	}
+	key := auth.CredentialKey{AppName: ctx.AppName(), UserID: ctx.UserID(), Key: t.slot()}
+	// A Config changed between pause and resume would file a token granted
+	// for the old scopes or client under the new key.
+	if subtle.ConstantTimeCompare([]byte(requested.CredentialKey), []byte(key.Key)) != 1 {
+		return nil, failed("the sign-in request is out of date")
 	}
 	// The exchange repeats the redirect URI the authorization used (RFC 6749
 	// section 4.1.3); ADK Web rewrites it to its own origin and reports it.
@@ -210,12 +229,12 @@ func (r *resolver) completeSignIn(ctx agent.Context, t Tool, requested *toolauth
 	}
 	ot, err := r.oauth2Config(t, redirect).Exchange(r.tokenContext(ctx), code)
 	if err != nil {
-		return nil, failed
+		// Not wrapped: a RetrieveError's text carries the endpoint's body.
+		return nil, failed("token exchange refused")
 	}
 	tok := &Token{AccessToken: ot.AccessToken, TokenType: ot.TokenType, RefreshToken: ot.RefreshToken, Expiry: ot.Expiry}
-	key := auth.CredentialKey{AppName: ctx.AppName(), UserID: ctx.UserID(), Key: t.slot()}
 	if err := r.save(ctx, key, tok, time.Now()); err != nil {
-		return nil, failed
+		return nil, unavailable(t)
 	}
 	return map[string]any{"result": fmt.Sprintf(connectedResult, t.Provider)}, nil
 }
