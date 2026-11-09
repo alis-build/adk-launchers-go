@@ -313,8 +313,10 @@
 // A tool confirmation whose payload is an OAuth auth config with an
 // authorization URI, as go.alis.build/adk/launchers/tooloauth sends when a
 // tool needs the user's sign-in, becomes an interrupt with reason
-// "auth_required". Its metadata.adk.authConfig holds the config with every
-// secret stripped (the client secret never reaches the client), and its
+// "auth_required". Its metadata.adk.authConfig holds the config with the
+// client secret and other configured secrets stripped (toolauth's
+// WithoutSecrets; it does not remove tokens, which a sign-in request never
+// holds), and its
 // responseSchema requires exchangedAuthCredential. The client opens
 // authConfig.exchangedAuthCredential.oauth2.authUri, catches the provider's
 // redirect, and resumes with the config filled in:
@@ -621,8 +623,8 @@
 // # Limitations
 //
 // AG-UI interrupt emit and resume cover ADK tool confirmations (reason
-// "tool_call") and workflow input requests (reasons "input_required" and
-// "confirmation"). The latter come only from workflow agents; a plain llmagent
+// "tool_call"), OAuth sign-in confirmations (reason "auth_required") and
+// workflow input requests (reasons "input_required" and "confirmation"). The latter come only from workflow agents; a plain llmagent
 // cannot produce them. The launcher never emits adk_request_input itself, so a
 // host wanting non-tool interrupts has to emit them from a workflow node.
 // Resume without matching pending session state is rejected. Resume idempotency
