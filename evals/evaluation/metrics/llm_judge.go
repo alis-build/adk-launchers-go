@@ -27,8 +27,25 @@ type llmJudgeEvaluator struct {
 	requireExpected        bool
 	client                 JudgeClient
 	formatPrompt           func(actual models.Invocation, expected *models.Invocation) string
-	parseScore             func(response string, actual models.Invocation) (float64, []models.RubricScore, error)
+	parseScore             func(response string, actual models.Invocation) (*float64, []models.RubricScore, error)
 	aggregatePerInvocation func([]PerInvocationResult) PerInvocationResult
+}
+
+// judgeSample builds one judge sample. A nil score is a reply the judge gave
+// that could not be used: the sample does not vote and is NOT_EVALUATED, as
+// in adk-python.
+func judgeSample(actual models.Invocation, expected *models.Invocation, score *float64, rubrics []models.RubricScore, threshold float64) PerInvocationResult {
+	r := PerInvocationResult{
+		ActualInvocation:   actual,
+		ExpectedInvocation: expected,
+		Score:              score,
+		EvalStatus:         models.EvalStatusNotEvaluated,
+		RubricScores:       rubrics,
+	}
+	if score != nil {
+		r.EvalStatus = statusForScore(*score, threshold)
+	}
+	return r
 }
 
 // EvaluateInvocations runs the LLM judge for each actual invocation and
@@ -79,14 +96,7 @@ func (e *llmJudgeEvaluator) EvaluateInvocations(
 			if err != nil {
 				return EvaluationResult{}, err
 			}
-			s := score
-			sampleResults = append(sampleResults, PerInvocationResult{
-				ActualInvocation:   actual[i],
-				ExpectedInvocation: exp,
-				Score:              &s,
-				EvalStatus:         statusForScore(score, e.metric.Threshold),
-				RubricScores:       rubrics,
-			})
+			sampleResults = append(sampleResults, judgeSample(actual[i], exp, score, rubrics, e.metric.Threshold))
 		}
 
 		// When NumSamples > 1, aggregatePerInvocation (when set) collapses
@@ -182,9 +192,12 @@ func newFinalResponseMatchV2Evaluator(metric models.EvalMetric, cfg *RegistryCon
 		requireExpected: true,
 		client:          client,
 		formatPrompt:    formatFinalResponseMatchV2Prompt,
-		parseScore: func(response string, _ models.Invocation) (float64, []models.RubricScore, error) {
+		parseScore: func(response string, _ models.Invocation) (*float64, []models.RubricScore, error) {
 			score, err := parseValidInvalidJSON(response)
-			return score, nil, err
+			if err != nil {
+				return nil, nil, err
+			}
+			return &score, nil, nil
 		},
 	}
 }
@@ -224,9 +237,12 @@ func newHallucinationsEvaluator(metric models.EvalMetric, cfg *RegistryConfig) E
 				textFromContent(actual.FinalResponse),
 			)
 		},
-		parseScore: func(response string, _ models.Invocation) (float64, []models.RubricScore, error) {
+		parseScore: func(response string, _ models.Invocation) (*float64, []models.RubricScore, error) {
 			score, err := parseValidInvalidJSON(response)
-			return score, nil, err
+			if err != nil {
+				return nil, nil, err
+			}
+			return &score, nil, nil
 		},
 	}
 }
@@ -281,7 +297,7 @@ func newRubricBasedEvaluator(metric models.EvalMetric, kind rubricKind, cfg *Reg
 			}
 			return ""
 		},
-		parseScore: func(resp string, actual models.Invocation) (float64, []models.RubricScore, error) {
+		parseScore: func(resp string, actual models.Invocation) (*float64, []models.RubricScore, error) {
 			eff, err := effectiveRubrics(critRubrics, actual.Rubrics)
 			if err != nil {
 				eff = critRubrics
@@ -372,14 +388,7 @@ func (e *multiTurnRubricEvaluator) EvaluateInvocations(
 		if err != nil {
 			return EvaluationResult{}, err
 		}
-		s := score
-		sampleResults = append(sampleResults, PerInvocationResult{
-			ActualInvocation:   last,
-			ExpectedInvocation: lastExp,
-			Score:              &s,
-			EvalStatus:         statusForScore(score, e.metric.Threshold),
-			RubricScores:       rubrics,
-		})
+		sampleResults = append(sampleResults, judgeSample(last, lastExp, score, rubrics, e.metric.Threshold))
 	}
 	lastResult := sampleResults[0]
 	if len(sampleResults) > 1 {

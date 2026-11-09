@@ -123,7 +123,7 @@ Verdict: no
 	if err != nil {
 		t.Fatalf("parseRubricVerdicts: %v", err)
 	}
-	if math.Abs(mean-0.5) > 1e-9 {
+	if mean == nil || math.Abs(*mean-0.5) > 1e-9 {
 		t.Fatalf("mean = %v, want 0.5", mean)
 	}
 	if len(scores) != 2 {
@@ -204,7 +204,7 @@ Verdict: no
 	if err != nil {
 		t.Fatalf("parseRubricVerdicts: %v", err)
 	}
-	if mean != 1.0 {
+	if mean == nil || *mean != 1.0 {
 		t.Fatalf("mean = %v, want 1.0", mean)
 	}
 	if len(scores) != 1 || scores[0].RubricID != "r1" {
@@ -519,7 +519,7 @@ Verdict: [[yes]]
 	if err != nil {
 		t.Fatalf("parseRubricVerdicts: %v", err)
 	}
-	if mean != 1.0 || len(scores) != 1 || scores[0].Score == nil || *scores[0].Score != 1.0 {
+	if mean == nil || *mean != 1.0 || len(scores) != 1 || scores[0].Score == nil || *scores[0].Score != 1.0 {
 		t.Fatalf("mean = %v, scores = %+v", mean, scores)
 	}
 }

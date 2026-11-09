@@ -38,13 +38,13 @@ func stripVerdictPunct(v string) string {
 // text_property. Returns (mean, scores, error) where mean is the arithmetic
 // mean of scored rubrics and error is set only when no verdicts could be
 // parsed at all.
-func parseRubricVerdicts(response string, rubrics []models.Rubric) (float64, []models.RubricScore, error) {
+func parseRubricVerdicts(response string, rubrics []models.Rubric) (*float64, []models.RubricScore, error) {
 	props := rubricPropertyRe.FindAllStringSubmatch(response, -1)
 	rats := rubricRationaleRe.FindAllStringSubmatch(response, -1)
 	verds := rubricVerdictRe.FindAllStringSubmatch(response, -1)
 
 	if len(props) == 0 || len(verds) == 0 {
-		return 0, nil, fmt.Errorf("judge response contained no Property/Verdict blocks")
+		return nil, nil, fmt.Errorf("judge response contained no Property/Verdict blocks")
 	}
 
 	byText := make(map[string]models.Rubric, len(rubrics))
@@ -92,7 +92,8 @@ func parseRubricVerdicts(response string, rubrics []models.Rubric) (float64, []m
 		}
 	}
 	if counted == 0 {
-		return 0, scores, fmt.Errorf("no rubric verdicts parsed (yes/no) from judge response")
+		return nil, scores, fmt.Errorf("no rubric verdicts parsed (yes/no) from judge response")
 	}
-	return total / float64(counted), scores, nil
+	mean := total / float64(counted)
+	return &mean, scores, nil
 }
