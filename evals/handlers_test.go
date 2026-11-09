@@ -275,15 +275,47 @@ func TestAddSessionDefaultsToCaller(t *testing.T) {
 	}
 }
 
-func TestMetricsInfo(t *testing.T) {
+// TestMetricsInfoMatchesAdkPython compares every metric Go registers with
+// adk-python's captured metrics-info entry (testdata/adkpy/metrics_info.json),
+// field for field.
+func TestMetricsInfoMatchesAdkPython(t *testing.T) {
 	l, _ := newHandlerTestLauncher(t)
-	rec := callHandler(t, l.metricsInfoHandler(), http.MethodGet, "/dev/apps/my_app/metrics-info", nil, map[string]string{"app_name": "my_app"})
-	var resp ListMetricsInfoResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	rec, err := callHandlerAs(t, l.metricsInfoHandler(), http.MethodGet, "/dev/apps/my_app/metrics-info", "user1", nil, map[string]string{"app_name": "my_app"})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("metrics-info: status = %d, err = %v", rec.Code, err)
 	}
-	if len(resp.MetricsInfo) < 10 {
-		t.Fatalf("expected prebuilt metrics, got %d", len(resp.MetricsInfo))
+	byName := func(t *testing.T, raw []byte, where string) map[string]any {
+		t.Helper()
+		var resp struct {
+			MetricsInfo []map[string]any `json:"metricsInfo"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			t.Fatalf("decode %s: %v", where, err)
+		}
+		out := make(map[string]any, len(resp.MetricsInfo))
+		for _, m := range resp.MetricsInfo {
+			out[m["metricName"].(string)] = m
+		}
+		return out
+	}
+	captured, err := os.ReadFile(filepath.Join("testdata", "adkpy", "metrics_info.json"))
+	if err != nil {
+		t.Fatalf("read capture: %v", err)
+	}
+	want := byName(t, captured, "capture")
+	got := byName(t, rec.Body.Bytes(), "Go response")
+	if len(got) < 13 {
+		t.Fatalf("Go registers %d metrics, want at least 13", len(got))
+	}
+	for name, g := range got {
+		w, ok := want[name]
+		if !ok {
+			t.Errorf("metric %q is not in adk-python's metrics-info", name)
+			continue
+		}
+		if diff := cmp.Diff(w, g); diff != "" {
+			t.Errorf("metric %q differs from adk-python (-adk-python +go):\n%s", name, diff)
+		}
 	}
 }
 

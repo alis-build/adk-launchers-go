@@ -84,7 +84,7 @@ func (r *Registry) SetConfig(cfg RegistryConfig) {
 // interval builds a MetricValueInfo with closed [min, max] bounds.
 func interval(min, max float64) models.MetricValueInfo {
 	return models.MetricValueInfo{
-		Interval: models.MetricValueInterval{MinValue: min, MaxValue: max},
+		Interval: &models.MetricValueInterval{MinValue: min, MaxValue: max},
 	}
 }
 

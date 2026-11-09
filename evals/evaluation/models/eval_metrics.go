@@ -164,20 +164,24 @@ func (c jsonCriterion) MarshalJSON() ([]byte, error) {
 type MetricValueInterval struct {
 	MinValue  float64 `json:"minValue"`
 	MaxValue  float64 `json:"maxValue"`
-	OpenAtMin bool    `json:"openAtMin,omitempty"`
-	OpenAtMax bool    `json:"openAtMax,omitempty"`
+	OpenAtMin bool    `json:"openAtMin"`
+	OpenAtMax bool    `json:"openAtMax"`
 }
 
-// MetricValueInfo describes metric value semantics.
+// MetricValueInfo describes metric value semantics. Interval is absent for
+// metrics whose values have no fixed range.
 type MetricValueInfo struct {
-	Interval MetricValueInterval `json:"interval"`
+	Interval *MetricValueInterval `json:"interval,omitempty"`
 }
 
 // MetricInfo describes a registered metric for metrics-info endpoint.
 type MetricInfo struct {
 	MetricName      string          `json:"metricName"`
 	Description     string          `json:"description,omitempty"`
-	MetricValueInfo MetricValueInfo `json:"metricValueInfo,omitempty"`
+	MetricValueInfo MetricValueInfo `json:"metricValueInfo"`
+	// RequiresThreshold tells a client (adk-web) to ask for a pass threshold;
+	// metrics that only report a value set it false.
+	RequiresThreshold bool `json:"requiresThreshold"`
 }
 
 // EvalMetricResultDetails holds optional rubric scores.
