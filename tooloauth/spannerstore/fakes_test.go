@@ -8,10 +8,12 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/spanner"
 	"cloud.google.com/go/spanner/spannertest"
 	"cloud.google.com/go/spanner/spansql"
+	"go.alis.build/adk/launchers/tooloauth"
 )
 
 // startSpanner starts the Spanner client library's in-memory fake with DDL
@@ -88,3 +90,9 @@ func (f *fakeKMS) unwrapCount() int {
 	defer f.mu.Unlock()
 	return f.unwraps
 }
+
+// tokenFor returns a token with access token access.
+func tokenFor(access string) *tooloauth.Token { return &tooloauth.Token{AccessToken: access} }
+
+// farFuture is an expiry well clear of auth.ExpirySkew.
+func farFuture() time.Time { return time.Now().Add(time.Hour) }
