@@ -55,8 +55,10 @@ func WithJSONRPCOptions(opts ...schedjsonrpc.JSONRPCHandlerOption) Option {
 }
 
 // WithSynchronousExecution waits for the ADK run to finish before returning HTTP 200.
-// Agent failures are returned as 500 so Cloud Tasks may retry. Cron persist failures
-// (UpdateCron) are logged and return 200 to prevent duplicate agent execution.
+// Agent failures are returned as 500 so Cloud Tasks may retry, except a run that
+// exhausted ADK's per-invocation model-call budget (agent.ErrLLMCallsLimitExceeded),
+// which would fail the same way on retry and is acknowledged with 200. Cron persist
+// failures (UpdateCron) are logged and return 200 to prevent duplicate agent execution.
 // Default is async (extension behavior).
 func WithSynchronousExecution(sync bool) Option {
 	return func(l *schedulerLauncher) {

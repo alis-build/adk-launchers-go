@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"go.alis.build/adk/launchers/internal/adkrun"
 	pb "go.alis.build/common/alis/agui/scheduler"
 	"go.alis.build/iam/v3"
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -505,6 +507,49 @@ func TestCronHandler_sync_smoke(t *testing.T) {
 	}
 	if resp.Status != "OK" {
 		t.Fatalf("response = %#v", resp)
+	}
+}
+
+// TestCronHandler_sync_budgetExhaustedIsNotRetried covers ADK's per-invocation
+// model-call cap: a run that hits it would hit it again on every Cloud Tasks
+// retry, re-spending the whole budget each time, so it is acknowledged with 200
+// while other agent failures keep the retryable 500.
+func TestCronHandler_sync_budgetExhaustedIsNotRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		runErr   error
+		wantCode int
+	}{
+		{name: "budget exhausted", runErr: fmt.Errorf("llm agent: %w", agent.ErrLLMCallsLimitExceeded), wantCode: http.StatusOK},
+		{name: "other agent failure", runErr: errors.New("model unavailable"), wantCode: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeScheduler{
+				cron: &pb.Cron{
+					Name:   "crons/budget",
+					Owner:  "users/alice",
+					Prompt: "hello",
+					Type:   pb.Cron_TYPE_CRON,
+				},
+			}
+			cfg := testCronConfig()
+			cfg.syncExecution = true
+
+			rec := callCronHandler(t, svc, &fakeRunner{runErr: tc.runErr}, cfg, "budget")
+			if rec.Code != tc.wantCode {
+				t.Errorf("status = %d, want %d (body %s)", rec.Code, tc.wantCode, rec.Body)
+			}
+			var resp cronResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if resp.Status != "FAILED" {
+				t.Errorf("response status = %q, want FAILED", resp.Status)
+			}
+			if svc.update == nil || svc.update.GetCron().GetLastFailureTime() == nil {
+				t.Error("the failure was not recorded on the cron")
+			}
+		})
 	}
 }
 

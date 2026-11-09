@@ -14,6 +14,7 @@ import (
 	"go.alis.build/alog"
 	pb "go.alis.build/common/alis/agui/scheduler"
 	"go.alis.build/iam/v3"
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -71,6 +72,13 @@ func cronHandler(
 
 		if cfg.syncExecution {
 			if err := executeCron(detachedCtx, svc, rt, cfg, cron, ownerID); err != nil {
+				// A run that spent its model-call budget will spend it again
+				// on every Cloud Tasks retry and fail the same way, so it is
+				// acknowledged. The failure is already on the cron.
+				if errors.Is(err, agent.ErrLLMCallsLimitExceeded) {
+					alog.Errorf(detachedCtx, "scheduler: cron %s: %v (not retried)", cron.GetName(), err)
+					return writeCronResponse(w, http.StatusOK, cronResponse{Status: "FAILED", Error: err.Error()})
+				}
 				return writeCronFailed(w, err.Error())
 			}
 			return writeCronOK(w)
@@ -381,16 +389,20 @@ func incomingContext(r *http.Request) context.Context {
 
 // writeCronOK writes a 200 JSON response acknowledging the cron invocation.
 func writeCronOK(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(cronResponse{Status: "OK"})
-	return nil
+	return writeCronResponse(w, http.StatusOK, cronResponse{Status: "OK"})
 }
 
 // writeCronFailed writes a 500 JSON response; Cloud Tasks may retry depending on queue config.
 func writeCronFailed(w http.ResponseWriter, msg string) error {
+	return writeCronResponse(w, http.StatusInternalServerError, cronResponse{Status: "FAILED", Error: msg})
+}
+
+// writeCronResponse writes resp as JSON with code. Cloud Tasks retries on the
+// status code alone, so a 200 with Status FAILED records a failure that must
+// not be retried.
+func writeCronResponse(w http.ResponseWriter, code int, resp cronResponse) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(cronResponse{Status: "FAILED", Error: msg})
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(resp)
 	return nil
 }
