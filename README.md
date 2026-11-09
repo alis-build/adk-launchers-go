@@ -14,6 +14,7 @@ Use this repository when you need extra capabilities beyond the core ADK launche
 | [`scheduler`](./scheduler)             | `scheduler` | [AG-UI scheduler](https://pkg.go.dev/go.alis.build/agui/scheduler) cron JSON-RPC and Cloud Tasks callback (in-process ADK runner)                                                                   |
 | [`console`](./console)                 | `console`   | Embedded Vue operator console SPA, runtime config, and `/auth/me` (register **last** in `web.NewLauncher`)                                                                                          |
 | [`evals`](./evals)                     | `evals`     | Dev evaluation HTTP API (eval sets, run eval, metrics-info) with full adk-python evaluation engine parity                                                                                           |
+| [`tooloauth`](./tooloauth)             | —           | Runner plugin giving tools the end user's OAuth token: sign-in mid-run, refresh, and token storage ([`tooloauth/spannerstore`](./tooloauth/spannerstore) for Spanner + Cloud KMS)                   |
 
 ## Quick start
 
@@ -264,6 +265,10 @@ agui.NewLauncher("my-agent",
 #### Local Vite dev proxies (console only)
 
 When running `cd console/app && pnpm dev`, Vite proxies console-related paths to `AGENT_HOST` (default `http://localhost:8080`): `/agui`, `/auth`, `/alis.agui.history.v1.ThreadService`, `/alis.agui.scheduler.v1.SchedulerService`, `/assets/config/runtime-config.json`. Eval routes (`/api/dev/...`) are served by the [`evals`](./evals) sublauncher on the agent host and are not part of the console Vite proxy; adk-web calls them directly.
+
+## Tool OAuth (tooloauth)
+
+[`tooloauth`](./tooloauth) is a runner plugin, not a sublauncher: add `tooloauth.NewPlugin(cfg)` to `launcher.Config.PluginConfig`. Tools named in its config get the end user's OAuth token through `cfg.Provider(name)` and ADK's `auth.Transport`. With no token the call pauses for sign-in; AG-UI clients see an `auth_required` interrupt, open its authorization URI and resume with the provider's redirect URL. Scheduled and eval runs never pause; they get `connect <Provider> in chat first`. Keep tokens in [`tooloauth/spannerstore`](./tooloauth/spannerstore) (Spanner + Cloud KMS) or your own `auth.CredentialStore`. See [`tooloauth/doc.go`](tooloauth/doc.go) for setup, the resume flow and limits.
 
 ## Testing
 

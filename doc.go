@@ -21,6 +21,10 @@
 //     (keyword: console; register last in web.NewLauncher).
 //   - [evals] — Dev evaluation HTTP API and adk-python evaluation engine parity
 //     (eval sets, run eval, metrics-info; keyword: evals).
+//   - [tooloauth] — OAuth sign-in for agent tools: a runner plugin, not a
+//     sublauncher, that gives configured tools the end user's token, pausing
+//     for sign-in when there is none; tooloauth/spannerstore keeps tokens in
+//     Spanner under Cloud KMS encryption.
 //
 // Shared implementation helpers live under internal/launcherutils and are not part of
 // the public import path.
