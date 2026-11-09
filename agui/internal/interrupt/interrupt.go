@@ -185,8 +185,11 @@ func DecodeRecords(raw any) ([]Record, error) {
 // pending by interrupt id. Dispatch follows [Record.CallName] rather than the
 // reason: a host classifier may return any custom reason string, which says
 // nothing about which ADK call is waiting, so keying on reason would resume
-// into the wrong call. An entry with no pending record falls back to a tool
-// confirmation, which is what a record predating CallName always was.
+// into the wrong call. Within tool confirmations the reason does pick the
+// response shape: an auth_required record is answered with the client's
+// filled auth config, a reason only this launcher sets. An entry with no
+// pending record falls back to a tool confirmation, which is what a record
+// predating CallName always was.
 func EntriesToResumeContent(entries []types.ResumeEntry, pending []Record) (*genai.Content, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("resume entries must not be empty")
@@ -213,7 +216,7 @@ func EntriesToResumeContent(entries []types.ResumeEntry, pending []Record) (*gen
 		if callName == workflow.WorkflowInputFunctionCallName {
 			response, err = inputResponseFromResumeEntry(entry)
 		} else {
-			response, err = confirmationResponseFromResumeEntry(entry)
+			response, err = confirmationResponseFromResumeEntry(entry, rec)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("resume[%d]: %w", i, err)
@@ -256,7 +259,16 @@ func inputResponseFromResumeEntry(entry types.ResumeEntry) (map[string]any, erro
 	}
 }
 
-func confirmationResponseFromResumeEntry(entry types.ResumeEntry) (map[string]any, error) {
+// confirmationResponseFromResumeEntry builds the ADK tool confirmation for a
+// resume entry. An auth_required record answers with the client's filled
+// auth config as the payload, confirmed when resolved; every other record
+// reads payload.approved. Dispatching on the reason is safe here, unlike for
+// input requests: this launcher sets a tool confirmation's reason itself,
+// never a host classifier.
+func confirmationResponseFromResumeEntry(entry types.ResumeEntry, rec Record) (map[string]any, error) {
+	if rec.Reason == ReasonAuthRequired {
+		return authResponseFromResumeEntry(entry)
+	}
 	switch entry.Status {
 	case types.ResumeStatusCancelled:
 		return map[string]any{"confirmed": false}, nil
@@ -288,6 +300,24 @@ func confirmationResponseFromResumeEntry(entry types.ResumeEntry) (map[string]an
 		}
 		return response, nil
 
+	default:
+		return nil, fmt.Errorf("unsupported resume status %q", entry.Status)
+	}
+}
+
+// authResponseFromResumeEntry answers a sign-in interrupt: resolved passes the
+// filled auth config through as the confirmation payload, cancelled declines.
+// The payload needs no "approved": the sign-in itself is the answer.
+func authResponseFromResumeEntry(entry types.ResumeEntry) (map[string]any, error) {
+	switch entry.Status {
+	case types.ResumeStatusCancelled:
+		return map[string]any{"confirmed": false}, nil
+	case types.ResumeStatusResolved:
+		payload, err := ResumePayloadMap(entry.Payload)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"confirmed": true, "payload": payload}, nil
 	default:
 		return nil, fmt.Errorf("unsupported resume status %q", entry.Status)
 	}
