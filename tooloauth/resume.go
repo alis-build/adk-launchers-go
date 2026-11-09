@@ -70,8 +70,12 @@ type pendingSignIns struct {
 
 // beforeRun records the sign-in requests in the run's session, so a resumed
 // call can be checked against the request the plugin sent, and prunes
-// records no run has started under for pendingTTL.
+// records unused for pendingTTL. Only a run answering a confirmation can
+// resume a call, so other runs record nothing.
 func (r *resolver) beforeRun(ctx agent.InvocationContext) (*genai.Content, error) {
+	if !answersConfirmation(ctx.UserContent()) {
+		return nil, nil
+	}
 	reqs := signInRequests(ctx.Session())
 	now := time.Now()
 	r.pending.mu.Lock()
@@ -107,8 +111,23 @@ func (r *resolver) lookupSignIn(ctx agent.Context) (signInRequest, bool) {
 	if run == nil {
 		return signInRequest{}, false
 	}
+	run.seen = time.Now()
 	req, ok := run.requests[signInKey{author: ctx.AgentName(), callID: ctx.FunctionCallID()}]
 	return req, ok
+}
+
+// answersConfirmation reports whether content, a run's new user message,
+// answers a confirmation request: only such a run can resume a paused call.
+func answersConfirmation(content *genai.Content) bool {
+	if content == nil {
+		return false
+	}
+	for _, p := range content.Parts {
+		if p != nil && p.FunctionResponse != nil && p.FunctionResponse.Name == toolconfirmation.FunctionCallName {
+			return true
+		}
+	}
+	return false
 }
 
 // claimSignIn marks the current call's sign-in request as being exchanged,
@@ -163,11 +182,15 @@ func signInRequests(sess session.Session) map[signInKey]signInRequest {
 					continue
 				}
 				key := signInKey{author: ev.Author, callID: orig.ID}
-				if prev, seen := out[key]; seen && prev.config.ExchangedAuthCredential.OAuth2.State != cfg.ExchangedAuthCredential.OAuth2.State {
-					out[key] = signInRequest{config: cfg, conflicting: true}
+				prev, seen := out[key]
+				if !seen {
+					out[key] = signInRequest{config: cfg}
 					continue
 				}
-				out[key] = signInRequest{config: cfg}
+				// A repeat keeps what is already known about the call; one
+				// with another state makes it conflicting for good.
+				prev.conflicting = prev.conflicting || prev.config.ExchangedAuthCredential.OAuth2.State != cfg.ExchangedAuthCredential.OAuth2.State
+				out[key] = prev
 			}
 		}
 	}
