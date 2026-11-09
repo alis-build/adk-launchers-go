@@ -2,12 +2,14 @@ package metrics
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"google.golang.org/genai"
 )
@@ -1070,5 +1072,108 @@ func TestMultiTurnDialogueLeavesOutThoughtParts(t *testing.T) {
 		"AGENT (banking_agent) TURN 1: Your balance is $100."
 	if got := assembleDialogueHistory([]models.Invocation{inv}); got != want {
 		t.Errorf("dialogue =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// Rubrics and replies from adk-python test_rubric_based_evaluator.py.
+func goodBadRubrics() []models.Rubric {
+	return []models.Rubric{rubric("1", "Is the response good?"), rubric("2", "Is the response bad?")}
+}
+
+func idScores(scores []models.RubricScore) [][2]any {
+	out := make([][2]any, 0, len(scores))
+	for _, s := range scores {
+		var v any
+		if s.Score != nil {
+			v = *s.Score
+		}
+		out = append(out, [2]any{s.RubricID, v})
+	}
+	return out
+}
+
+func TestParseRubricVerdictsMatchesByEchoedID(t *testing.T) {
+	resp := `
+    ID: 1
+    Property: Is the reply excellent?
+    Rationale: It was good.
+    Verdict: yes
+
+    ID: 2
+    Property: Is the reply awful?
+    Rationale: It was not.
+    Verdict: no
+    `
+	_, scores := parseRubricVerdicts(resp, goodBadRubrics())
+	want := [][2]any{{"1", 1.0}, {"2", 0.0}}
+	if diff := cmp.Diff(want, idScores(scores)); diff != "" {
+		t.Errorf("scores (-want +got):\n%s", diff)
+	}
+}
+
+func TestParseRubricVerdictsOmittedFirstIDDoesNotShift(t *testing.T) {
+	resp := `
+    Property: Is the reply excellent?
+    Rationale: It was good.
+    Verdict: yes
+
+    ID: 2
+    Property: Is the reply awful?
+    Rationale: It was not bad.
+    Verdict: no
+
+    ID: 1
+    Property: Is the response good?
+    Rationale: It was good.
+    Verdict: yes
+    `
+	_, scores := parseRubricVerdicts(resp, goodBadRubrics())
+	want := [][2]any{{"2", 0.0}, {"1", 1.0}}
+	if diff := cmp.Diff(want, idScores(scores)); diff != "" {
+		t.Errorf("scores (-want +got):\n%s", diff)
+	}
+}
+
+// Regression guard: matching falls back to text when no ID is echoed.
+func TestParseRubricVerdictsFallsBackToTextWithoutID(t *testing.T) {
+	resp := `
+    Property: Is the response good?
+    Rationale: It was good.
+    Verdict: yes
+    Property: Is the response bad?
+    Rationale: It was not.
+    Verdict: no
+    `
+	_, scores := parseRubricVerdicts(resp, goodBadRubrics())
+	want := [][2]any{{"1", 1.0}, {"2", 0.0}}
+	if diff := cmp.Diff(want, idScores(scores)); diff != "" {
+		t.Errorf("scores (-want +got):\n%s", diff)
+	}
+}
+
+// Regression guard: an "ID: " inside a line (here "UUID: ") is not an echoed ID.
+func TestParseRubricVerdictsIgnoresMidLineID(t *testing.T) {
+	resp := `
+      Property: Is the response good?
+      Rationale: The session UUID: abc-123 was fine.
+      Verdict: yes
+      `
+	_, scores := parseRubricVerdicts(resp, goodBadRubrics())
+	if diff := cmp.Diff([][2]any{{"1", 1.0}}, idScores(scores)); diff != "" {
+		t.Errorf("scores (-want +got):\n%s", diff)
+	}
+}
+
+func TestRubricPromptsTagRubricIDs(t *testing.T) {
+	rubrics := []models.Rubric{rubric("r1", "be helpful")}
+	if got := renderRubricsList(rubrics); !strings.Contains(got, "*  [id: r1] be helpful") {
+		t.Errorf("rubric list = %q, want the [id: r1] tag", got)
+	}
+	var props []map[string]any
+	if err := json.Unmarshal([]byte(renderRubricsPropertiesJSON(rubrics)), &props); err != nil {
+		t.Fatalf("properties JSON: %v", err)
+	}
+	if len(props) != 1 || props[0]["id"] != "r1" {
+		t.Errorf("properties = %v, want id r1", props)
 	}
 }

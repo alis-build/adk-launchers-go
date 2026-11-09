@@ -55,7 +55,8 @@ For each property follow these internal steps:
 6. Output the final verdict in the required output format.
 
 # Output Format (repeat this format for every property, starting with a new line):
-Property: [Repeat the property, word for word, without making any changes. Keep everything including punctuation and capitalization as-is.]
+ID: [Copy the id shown in the "[id: ...]" tag for this property, verbatim. Omit this line only if no tag is shown.]
+Property: [Repeat the property text that follows the "[id: ...]" tag, word for word, without making any changes and without the tag. Keep everything including punctuation and capitalization as-is.]
 Evidence: [List all trusted evidence from tool calls or the user prompt that is relevant to the property (referencing the Step Index). Alternatively, if either no trusted evidence is required, or no trusted evidence exists (e.g., flawed process, missing tool call, tool error), explain why.]
 Rationale: [Explain your reasoning, detailing how the evidence (or lack thereof) supports or contradicts the final answer, or why the property is not applicable.]
 Verdict: [yes|no]
@@ -108,12 +109,13 @@ const rubricPromptToolUseV1 = `# Mission
 "no": The agent's response did not fulfill the property.
 
 # For each property started with a new line, follow these steps:
-STEP 1: Repeat the property, word for word, without making any changes. Keep everything including punctuation and capitalization as-is.
+STEP 1: Repeat the property text (excluding the "[id: ...]" tag), word for word, without making any changes. Keep everything including punctuation and capitalization as-is.
 STEP 2: Determine the steps needed to **exactly**, **precisely** and **completely** determine whether the agent's response fulfilled the property.
 STEP 3: Follow the steps outlined in STEP 2, thinking out loud.
 STEP 4: Review the thoughts and the original property.
 STEP 5: Output the final verdict.
-Property: [[Repeat the property in STEP 1 again.]]
+ID: [[Copy the id shown in the "[id: ...]" tag for this property, verbatim. Omit this line only if no tag is shown.]]
+Property: [[Repeat the property in STEP 1 again, without the "[id: ...]" tag.]]
 Rationale: [[Explain your reasoning for the verdict.]]
 Verdict: [[yes|no]]
 
@@ -123,6 +125,7 @@ STEP 2: ...
 STEP 3: ...
 STEP 4: ...
 STEP 5: ...
+ID: ...
 Property: ...
 Rationale: ...
 Verdict: ...
@@ -176,6 +179,7 @@ STEP 2: Determine the steps needed to check if all the assistant responses in th
 STEP 3: Follow the steps outlined in STEP 2, thinking out loud. As you think, refer to specific assistant responses and count their turn numbers within the <conversation_history>.
 STEP 4: Review the thoughts and the original property.
 STEP 5: Output the final verdict.
+ID: [[Copy the "id" field of this property from the properties list, verbatim. Omit this line only if the property has no "id" field.]]
 Property: [[Repeat the property in STEP 1 again.]]
 Rationale: [[Explain your reasoning for the verdict.]]
 Verdict: [[yes|no]]
@@ -186,6 +190,7 @@ STEP 2: ...
 STEP 3: ...
 STEP 4: ...
 STEP 5: ...
+ID: ...
 Property: ...
 Rationale: ...
 Verdict: ...
@@ -231,7 +236,7 @@ func effectiveRubrics(criterion []models.Rubric, invRubrics []models.Rubric) ([]
 	return out, nil
 }
 
-// renderRubricsList emits the "*  <text_property>" bullet list Python builds
+// renderRubricsList emits the "*  [id: <id>] <text_property>" bullet list Python builds
 // when populating {rubrics} in the final-response and tool-use templates.
 func renderRubricsList(rubrics []models.Rubric) string {
 	var b strings.Builder
@@ -239,16 +244,17 @@ func renderRubricsList(rubrics []models.Rubric) string {
 		if r.RubricContent.TextProperty == nil {
 			continue
 		}
-		fmt.Fprintf(&b, "*  %s\n", *r.RubricContent.TextProperty)
+		fmt.Fprintf(&b, "*  [id: %s] %s\n", r.RubricID, *r.RubricContent.TextProperty)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// renderRubricsPropertiesJSON emits the JSON list of {property, type} entries
+// renderRubricsPropertiesJSON emits the JSON list of {id, property, type} entries
 // used by the multi-turn-trajectory template (matches Python at
 // rubric_based_multi_turn_trajectory_evaluator.py:349-357).
 func renderRubricsPropertiesJSON(rubrics []models.Rubric) string {
 	type entry struct {
+		ID       string `json:"id"`
 		Property string `json:"property"`
 		Type     string `json:"type,omitempty"`
 	}
@@ -258,7 +264,7 @@ func renderRubricsPropertiesJSON(rubrics []models.Rubric) string {
 		if r.RubricContent.TextProperty != nil {
 			text = *r.RubricContent.TextProperty
 		}
-		e := entry{Property: text}
+		e := entry{ID: r.RubricID, Property: text}
 		if r.Type != nil {
 			e.Type = *r.Type
 		}

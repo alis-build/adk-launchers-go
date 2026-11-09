@@ -15,6 +15,7 @@ import (
 // adk-python's Rationale and Verdict patterns use a look-behind, which RE2
 // lacks; capture group 1 takes its place. As there, neither is line-anchored.
 var (
+	rubricIDRe        = regexp.MustCompile(`(?m)^\s*ID: (.*)$`)
 	rubricPropertyRe  = regexp.MustCompile(`(?m)^\s*Property: (.*)$`)
 	rubricRationaleRe = regexp.MustCompile(`Rationale: (.*)`)
 	rubricVerdictRe   = regexp.MustCompile(`Verdict: (.*)`)
@@ -44,7 +45,8 @@ func stripVerdictPunct(v string) string {
 // partial parse, which could silently drop a failed rubric and inflate the
 // score, so it scores nothing, as in adk-python.
 func parseRubricVerdicts(response string, rubrics []models.Rubric) (*float64, []models.RubricScore) {
-	props := rubricPropertyRe.FindAllStringSubmatch(response, -1)
+	props := rubricPropertyRe.FindAllStringSubmatchIndex(response, -1)
+	ids := rubricIDRe.FindAllStringSubmatchIndex(response, -1)
 	rats := rubricRationaleRe.FindAllStringSubmatch(response, -1)
 	verds := rubricVerdictRe.FindAllStringSubmatch(response, -1)
 
@@ -52,8 +54,10 @@ func parseRubricVerdicts(response string, rubrics []models.Rubric) (*float64, []
 		return nil, nil
 	}
 
+	byID := make(map[string]models.Rubric, len(rubrics))
 	byText := make(map[string]models.Rubric, len(rubrics))
 	for _, r := range rubrics {
+		byID[r.RubricID] = r
 		if r.RubricContent.TextProperty != nil {
 			byText[normalizeText(*r.RubricContent.TextProperty)] = r
 		}
@@ -62,9 +66,24 @@ func parseRubricVerdicts(response string, rubrics []models.Rubric) (*float64, []
 	var scores []models.RubricScore
 	var total float64
 	var counted int
-	for i := range props {
-		text := normalizeText(props[i][1])
-		r, ok := byText[text]
+	for i, prop := range props {
+		// The echoed ID is the last ID line between the previous Property
+		// and this one, so an omitted ID cannot shift a later ID onto an
+		// earlier property. A rubric is matched by ID first, then by text.
+		previousStart := -1
+		if i > 0 {
+			previousStart = props[i-1][0]
+		}
+		var echoedID string
+		for _, id := range ids {
+			if id[0] > previousStart && id[0] < prop[0] {
+				echoedID = strings.TrimSpace(response[id[2]:id[3]])
+			}
+		}
+		r, ok := byID[echoedID]
+		if echoedID == "" || !ok {
+			r, ok = byText[normalizeText(response[prop[2]:prop[3]])]
+		}
 		if !ok {
 			// Python logs a warning and skips unknown properties.
 			continue
