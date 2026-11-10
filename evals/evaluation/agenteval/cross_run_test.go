@@ -117,3 +117,65 @@ func TestRunStatusLeavesCrashedRunUndecided(t *testing.T) {
 		})
 	}
 }
+
+// runWithMetrics is a passed or failed run scored by metrics a and b
+// (threshold 0.7), as adk-python's _runs_where_each_metric_fails_once builds.
+func runWithMetrics(a, b float64) models.EvalCaseResult {
+	status := func(s float64) models.EvalStatus {
+		if s >= 0.7 {
+			return p
+		}
+		return f
+	}
+	final := p
+	if status(a) == f || status(b) == f {
+		final = f
+	}
+	return models.EvalCaseResult{FinalEvalStatus: final, OverallEvalMetricResults: []models.EvalMetricResult{
+		{MetricName: "a", Threshold: 0.7, Score: &a, EvalStatus: status(a)},
+		{MetricName: "b", Threshold: 0.7, Score: &b, EvalStatus: status(b)},
+	}}
+}
+
+func eachMetricFailsOnce() []models.EvalCaseResult {
+	return []models.EvalCaseResult{runWithMetrics(1, 1), runWithMetrics(1, 0), runWithMetrics(0, 1), runWithMetrics(1, 1)}
+}
+
+func intPtr(v int) *int { return &v }
+
+func floatPtr(v float64) *float64 { return &v }
+
+// Mirrors adk-python test_eval_case_result_multi_run_aggregator.py:1776.
+func TestCrossRunResultsOnlyReportWithoutThreshold(t *testing.T) {
+	got := CrossRunResults(eachMetricFailsOnce(), []models.CrossRunCriterion{
+		{Method: models.CrossRunPassHatK, K: intPtr(2)},
+		{Method: models.CrossRunPassAtK, K: intPtr(2)},
+	})
+	if len(got) != 2 {
+		t.Fatalf("results = %+v, want 2", got)
+	}
+	if got[0].Name != "pass^2" || !near(got[0].Value, 1.0/6) || got[0].EvalStatus != models.EvalStatusInformational || got[0].Threshold != nil {
+		t.Errorf("pass^2 = %+v, want 1/6 informational without threshold", got[0])
+	}
+	if got[1].Name != "pass@2" || !near(got[1].Value, 5.0/6) || got[1].EvalStatus != models.EvalStatusInformational {
+		t.Errorf("pass@2 = %+v, want 5/6 informational", got[1])
+	}
+}
+
+// Mirrors adk-python test_eval_case_result_multi_run_aggregator.py:1805.
+func TestCrossRunResultFailsBelowThreshold(t *testing.T) {
+	got := CrossRunResults(eachMetricFailsOnce(), []models.CrossRunCriterion{{Method: models.CrossRunPassHatK, K: intPtr(2), Threshold: floatPtr(0.5)}})
+	if len(got) != 1 || got[0].EvalStatus != models.EvalStatusFailed {
+		t.Errorf("results = %+v, want pass^2 FAILED", got)
+	}
+}
+
+// Mirrors adk-python test_eval_case_result_multi_run_aggregator.py:1823.
+func TestCrossRunLeavesOutCrashedRun(t *testing.T) {
+	one := 1.0
+	ok := models.EvalCaseResult{FinalEvalStatus: p, OverallEvalMetricResults: []models.EvalMetricResult{{MetricName: "a", Threshold: 0.7, Score: &one, EvalStatus: p}}}
+	got := CrossRunResults([]models.EvalCaseResult{ok, ok, {FinalEvalStatus: f}}, []models.CrossRunCriterion{{Method: models.CrossRunPassHatK, K: intPtr(2)}})
+	if len(got) != 1 || !near(got[0].Value, 1.0) || got[0].Note != "2 of 3 runs passed, 1 crashed" {
+		t.Errorf("results = %+v, want pass^2 1.0 noting 2 of 3 runs passed, 1 crashed", got)
+	}
+}

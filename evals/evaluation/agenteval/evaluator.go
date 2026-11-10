@@ -10,7 +10,12 @@ import (
 
 const defaultNumRuns = 2
 
-// EvaluateEvalSet runs inference and evaluation numRuns times and aggregates mean metric scores per case.
+// EvaluateEvalSet runs each case several times, evaluates every run, and
+// aggregates per case: mean metric scores, and the verdict of each
+// cross-run criterion in cfg.MultiRunConfig. The number of runs is numRuns
+// when positive, else cfg.MultiRunConfig.NumRuns, else 2, as adk eval's
+// --num_runs overrides the config. A pass@k or pass^k criterion looking at
+// more runs than that is rejected before any inference.
 func EvaluateEvalSet(
 	ctx context.Context,
 	svc *service.LocalEvalService,
@@ -22,24 +27,32 @@ func EvaluateEvalSet(
 	if svc == nil || evalSet == nil {
 		return nil, fmt.Errorf("service and eval set are required")
 	}
-	if numRuns <= 0 {
+	var criteria []models.CrossRunCriterion
+	if cfg.MultiRunConfig != nil {
+		criteria = cfg.MultiRunConfig.CrossRunCriteria
+	}
+	switch {
+	case numRuns > 0:
+	case cfg.MultiRunConfig != nil && cfg.MultiRunConfig.NumRuns != nil:
+		numRuns = *cfg.MultiRunConfig.NumRuns
+	default:
 		numRuns = defaultNumRuns
+	}
+	if err := checkKAgainstRuns(criteria, numRuns); err != nil {
+		return nil, err
 	}
 	metricList, err := models.GetEvalMetricsFromConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	var inferences []service.InferenceResult
-	for range numRuns {
-		batch, err := svc.PerformInference(ctx, service.InferenceRequest{
-			AppName:   appName,
-			EvalSetID: evalSet.EvalSetID,
-		})
-		if err != nil {
-			return nil, err
-		}
-		inferences = append(inferences, batch...)
+	inferences, err := svc.PerformInference(ctx, service.InferenceRequest{
+		AppName:         appName,
+		EvalSetID:       evalSet.EvalSetID,
+		InferenceConfig: service.InferenceConfig{NumRuns: numRuns},
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	results, err := svc.Evaluate(ctx, service.EvaluateRequest{
@@ -52,7 +65,26 @@ func EvaluateEvalSet(
 	if err != nil {
 		return nil, err
 	}
-	return aggregateByMean(evalSet.EvalSetID, results), nil
+	aggregated := aggregateByMean(evalSet.EvalSetID, results)
+	if len(criteria) > 0 {
+		runsByCase := make(map[string][]models.EvalCaseResult)
+		for _, r := range results {
+			runsByCase[r.EvalID] = append(runsByCase[r.EvalID], r)
+		}
+		for i := range aggregated {
+			agg := &aggregated[i]
+			agg.CrossRunResults = CrossRunResults(runsByCase[agg.EvalID], criteria)
+			// A failed criterion fails the case; otherwise the status stays
+			// as the mean left it, so a crash's FAILED is kept.
+			for _, r := range agg.CrossRunResults {
+				if r.EvalStatus == models.EvalStatusFailed {
+					agg.FinalEvalStatus = models.EvalStatusFailed
+					break
+				}
+			}
+		}
+	}
+	return aggregated, nil
 }
 
 // aggregateByMean groups repeated run results by eval case and averages metric scores.

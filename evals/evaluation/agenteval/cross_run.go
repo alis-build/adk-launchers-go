@@ -2,6 +2,7 @@ package agenteval
 
 import (
 	"fmt"
+	"slices"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 )
@@ -113,4 +114,104 @@ func choose(a, k int) float64 {
 		r = r * float64(a-k+i) / float64(i)
 	}
 	return r
+}
+
+// CrossRunResults judges one case's runs against each criterion, as
+// adk-python's _judge_cross_run_criteria does. A criterion without a
+// threshold only reports (INFORMATIONAL); one whose value cannot be computed
+// is NOT_EVALUATED; otherwise it PASSED when the value reaches the threshold.
+// Each result notes how many runs passed.
+func CrossRunResults(runs []models.EvalCaseResult, criteria []models.CrossRunCriterion) []models.CrossRunResult {
+	if len(criteria) == 0 {
+		return nil
+	}
+	statuses := make([]models.EvalStatus, len(runs))
+	crashedRuns := 0
+	for i, run := range runs {
+		statuses[i] = RunStatus(run)
+		if crashed(run) {
+			crashedRuns++
+		}
+	}
+	out := make([]models.CrossRunResult, 0, len(criteria))
+	for _, c := range criteria {
+		var value *float64
+		switch c.Method {
+		case models.CrossRunPassRate:
+			value = PassRate(statuses)
+		case models.CrossRunPassAtK:
+			value, _ = PassAtK(statuses, *c.K)
+		case models.CrossRunPassHatK:
+			value, _ = PassHatK(statuses, *c.K)
+		}
+		res := models.CrossRunResult{
+			Name:      c.DisplayName(),
+			Value:     value,
+			Threshold: c.Threshold,
+			Note:      passCountNote(statuses, value, crashedRuns),
+		}
+		switch {
+		case c.Threshold == nil:
+			res.EvalStatus = models.EvalStatusInformational
+		case value == nil:
+			res.EvalStatus = models.EvalStatusNotEvaluated
+		case *value >= *c.Threshold:
+			res.EvalStatus = models.EvalStatusPassed
+		default:
+			res.EvalStatus = models.EvalStatusFailed
+		}
+		out = append(out, res)
+	}
+	return out
+}
+
+// passCountNote says how many runs passed behind a cross-run value, as
+// adk-python's _pass_count_note: "2 of 3 runs passed", with ", 1 not
+// evaluated" and ", 1 crashed" when non-zero. Without a value it says how
+// many runs passed or failed instead, since there were too few to give one.
+func passCountNote(statuses []models.EvalStatus, value *float64, crashedRuns int) string {
+	passed := countOf(statuses, models.EvalStatusPassed)
+	decided := passed + countOf(statuses, models.EvalStatusFailed)
+	crashedClause := ""
+	if crashedRuns > 0 {
+		crashedClause = fmt.Sprintf(", %d crashed", crashedRuns)
+	}
+	if value == nil {
+		return fmt.Sprintf("%d of %d runs passed or failed", decided, len(statuses)) + crashedClause
+	}
+	note := fmt.Sprintf("%d of %d runs passed", passed, len(statuses))
+	if notEvaluated := len(statuses) - decided - crashedRuns; notEvaluated > 0 {
+		note += fmt.Sprintf(", %d not evaluated", notEvaluated)
+	}
+	return note + crashedClause
+}
+
+// countOf counts the statuses equal to s.
+func countOf(statuses []models.EvalStatus, s models.EvalStatus) int {
+	n := 0
+	for _, st := range statuses {
+		if st == s {
+			n++
+		}
+	}
+	return n
+}
+
+// checkKAgainstRuns rejects a pass@k or pass^k criterion that looks at more
+// runs than each case gets, before any inference, as adk-python's
+// check_pass_k_criteria_against_num_runs does. It also rejects one with no
+// k, which a config built in Go rather than decoded can carry.
+func checkKAgainstRuns(criteria []models.CrossRunCriterion, runs int) error {
+	for i, c := range criteria {
+		if !slices.Contains([]string{models.CrossRunPassAtK, models.CrossRunPassHatK}, c.Method) {
+			continue
+		}
+		if c.K == nil {
+			return fmt.Errorf("multi_run_config.cross_run_criteria[%d]: %q needs k, the number of runs it looks at together", i, c.Method)
+		}
+		if *c.K > runs {
+			return fmt.Errorf("multi_run_config.cross_run_criteria[%d]: k=%d is more than the %d run(s) of each eval case. Lower k, or raise num_runs.", i, *c.K, runs)
+		}
+	}
+	return nil
 }

@@ -220,6 +220,21 @@ type EvalCaseResult struct {
 	UserID                        *string                         `json:"userId,omitempty"`
 	// RepetitionIndex is which of the case's runs this result is, from 0.
 	RepetitionIndex *int `json:"repetitionIndex,omitempty"`
+	// CrossRunResults judges the case across its repeated runs, one result
+	// per multi_run_config cross-run criterion. It is kept apart from the
+	// metric results, as adk-python keeps cross_run_results.
+	CrossRunResults []CrossRunResult `json:"crossRunResults,omitempty"`
+}
+
+// CrossRunResult is one cross-run criterion's verdict on a case (adk-python
+// MethodResult): the criterion's display name, its value over the runs, its
+// threshold if any, and how many runs passed.
+type CrossRunResult struct {
+	Name       string     `json:"name"`
+	Value      *float64   `json:"value,omitempty"`
+	Threshold  *float64   `json:"threshold,omitempty"`
+	EvalStatus EvalStatus `json:"evalStatus"`
+	Note       string     `json:"note,omitempty"`
 }
 
 // EvalSetResult is set-level evaluation output persisted to history.

@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"math"
+	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"go.alis.build/adk/launchers/evals/evaluation/agenteval"
@@ -175,5 +179,168 @@ func TestEvaluateEvalSetReportsUnscoredMetricAsNotEvaluated(t *testing.T) {
 	}
 	if results[0].FinalEvalStatus == models.EvalStatusFailed {
 		t.Error("case FAILED, want not failed for an unscored metric")
+	}
+}
+
+// Mirrors adk-python test_eval_case_result_multi_run_aggregator.py:1940.
+func TestEvaluateEvalSetRejectsKAboveNumRuns(t *testing.T) {
+	var runs atomic.Int32
+	svc, set := newEvalServiceWithAgent(t, metrics.NewDefaultRegistry(), func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		runs.Add(1)
+		return answerOK(ctx)
+	})
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"criteria":{"response_match_score":0.5},"multi_run_config":{"cross_run_criteria":[{"method":"pass_rate","threshold":0.5},{"method":"pass_at_k","k":4}]}}`))
+	if err != nil {
+		t.Fatalf("UnmarshalEvalConfig: %v", err)
+	}
+
+	_, err = agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 2)
+
+	if err == nil || !strings.HasPrefix(err.Error(), "multi_run_config.cross_run_criteria[1]: k=4 is more than the 2 run") {
+		t.Errorf("error = %v, want the k-above-runs error for criterion 1", err)
+	}
+	if got := runs.Load(); got != 0 {
+		t.Errorf("agent ran %d times, want 0", got)
+	}
+}
+
+// Acceptance 1: multi_run_config.num_runs runs each case that many times,
+// and every run's result is saved with its index.
+func TestEvaluateEvalSetUsesConfigNumRuns(t *testing.T) {
+	var runs atomic.Int32
+	svc, set := newEvalServiceWithAgent(t, metrics.NewDefaultRegistry(), func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		runs.Add(1)
+		return answerOK(ctx)
+	})
+	svc.Results = storage.NewLocalEvalSetResultsManager(t.TempDir())
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"criteria":{"response_match_score":0.5},"multi_run_config":{"num_runs":3}}`))
+	if err != nil {
+		t.Fatalf("UnmarshalEvalConfig: %v", err)
+	}
+
+	if _, err := agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 0); err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+
+	if got := runs.Load(); got != 3 {
+		t.Errorf("agent ran %d times, want 3", got)
+	}
+	ids, err := svc.Results.ListEvalSetResults("app")
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("saved results = %v, %v; want one", ids, err)
+	}
+	saved, err := svc.Results.GetEvalSetResult("app", ids[0])
+	if err != nil {
+		t.Fatalf("GetEvalSetResult: %v", err)
+	}
+	var reps []int
+	for _, c := range saved.EvalCaseResults {
+		if c.RepetitionIndex != nil {
+			reps = append(reps, *c.RepetitionIndex)
+		}
+	}
+	slices.Sort(reps)
+	if !slices.Equal(reps, []int{0, 1, 2}) {
+		t.Errorf("saved repetition indexes = %v, want [0 1 2]", reps)
+	}
+}
+
+// Only the criterion can fail this case: the mean (2/3) passes the metric.
+func TestEvaluateEvalSetFailsCaseOnFailedCrossRunCriterion(t *testing.T) {
+	var calls atomic.Int32
+	svc, set := newEvalServiceWithAgent(t, metrics.NewDefaultRegistry(), func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		text := "ok"
+		if calls.Add(1) == 3 {
+			text = "no"
+		}
+		return func(yield func(*session.Event, error) bool) {
+			ev := session.NewEvent(ctx, ctx.InvocationID())
+			ev.Author = "app"
+			ev.Content = genai.NewContentFromText(text, genai.RoleModel)
+			yield(ev, nil)
+		}
+	})
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"criteria":{"response_match_score":0.5},"multi_run_config":{"cross_run_criteria":[{"method":"pass_rate","threshold":0.9}]}}`))
+	if err != nil {
+		t.Fatalf("UnmarshalEvalConfig: %v", err)
+	}
+
+	results, err := agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 3)
+	if err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("results = %+v, want one case", results)
+	}
+	c := results[0]
+	if c.FinalEvalStatus != models.EvalStatusFailed {
+		t.Errorf("case status = %d, want FAILED", c.FinalEvalStatus)
+	}
+	if len(c.CrossRunResults) != 1 || c.CrossRunResults[0].Name != "pass_rate" || c.CrossRunResults[0].EvalStatus != models.EvalStatusFailed ||
+		c.CrossRunResults[0].Value == nil || math.Abs(*c.CrossRunResults[0].Value-2.0/3) > 1e-9 {
+		t.Errorf("cross-run results = %+v, want pass_rate 2/3 FAILED", c.CrossRunResults)
+	}
+	for _, m := range c.OverallEvalMetricResults {
+		if m.MetricName == "pass_rate" {
+			t.Error("pass_rate appears among the metric results, want it only in crossRunResults")
+		}
+	}
+}
+
+func TestEvaluateEvalSetKeepsCrashFailureWithReportOnlyCriterion(t *testing.T) {
+	svc, set := newEvalServiceWithAgent(t, metrics.NewDefaultRegistry(), func(agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) { yield(nil, errors.New("agent crashed")) }
+	})
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"criteria":{"response_match_score":0.5},"multi_run_config":{"cross_run_criteria":[{"method":"pass_hat_k","k":2}]}}`))
+	if err != nil {
+		t.Fatalf("UnmarshalEvalConfig: %v", err)
+	}
+
+	results, err := agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 2)
+	if err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+
+	if len(results) != 1 || results[0].FinalEvalStatus != models.EvalStatusFailed {
+		t.Fatalf("results = %+v, want the case FAILED", results)
+	}
+	if cr := results[0].CrossRunResults; len(cr) != 1 || cr[0].EvalStatus != models.EvalStatusInformational || cr[0].Value != nil {
+		t.Errorf("cross-run results = %+v, want one informational with no value", cr)
+	}
+}
+
+// The numRuns argument wins over multi_run_config.num_runs, as adk eval's
+// --num_runs does.
+func TestEvaluateEvalSetArgumentBeatsConfigNumRuns(t *testing.T) {
+	var runs atomic.Int32
+	svc, set := newEvalServiceWithAgent(t, metrics.NewDefaultRegistry(), func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		runs.Add(1)
+		return answerOK(ctx)
+	})
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"criteria":{"response_match_score":0.5},"multi_run_config":{"num_runs":3}}`))
+	if err != nil {
+		t.Fatalf("UnmarshalEvalConfig: %v", err)
+	}
+
+	if _, err := agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 2); err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+
+	if got := runs.Load(); got != 2 {
+		t.Errorf("agent ran %d times, want 2", got)
+	}
+}
+
+// A pass@k criterion built in Go without k is rejected before inference,
+// not dereferenced after it.
+func TestEvaluateEvalSetRejectsPassKWithoutK(t *testing.T) {
+	svc, set := newEvalService(t, metrics.NewDefaultRegistry())
+	cfg := models.EvalConfig{MultiRunConfig: &models.MultiRunConfig{CrossRunCriteria: []models.CrossRunCriterion{{Method: models.CrossRunPassHatK}}}}
+
+	_, err := agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 2)
+
+	if err == nil || !strings.Contains(err.Error(), "needs k") {
+		t.Errorf("error = %v, want the needs-k error", err)
 	}
 }
