@@ -3,13 +3,16 @@ package generator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"go.alis.build/adk/launchers/evals/evaluation/simulation"
 	"go.alis.build/adk/launchers/internal/adkrun"
 	"go.alis.build/adk/launchers/tooloauth"
+	"google.golang.org/adk/v2/plugin"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
@@ -34,6 +37,17 @@ type Generator struct {
 	// tokens. Off by default: inference runs as the caller, so an eval of an
 	// OAuth tool would otherwise act on their real account.
 	UseStoredOAuthTokens bool
+	// Now is the clock turn durations are measured with; nil uses
+	// time.Now. Tests inject a manual clock.
+	Now func() time.Time
+}
+
+// clock returns g.Now, or time.Now when it is unset.
+func (g *Generator) clock() func() time.Time {
+	if g.Now != nil {
+		return g.Now
+	}
+	return time.Now
 }
 
 // NewEvalSessionID returns a new eval-scoped session id.
@@ -87,9 +101,22 @@ func (g *Generator) generateInferencesStandard(ctx context.Context, opts Inferen
 		}
 	}
 
+	now := g.clock()
+	timer, err := newTurnTimer(now)
+	if err != nil {
+		return nil, err
+	}
+
 	userID, appName, state := sessionBootstrap(opts.SessionInput, g.Runtime.AppName())
 	sessionID := evalSessionID(opts)
-	pluginConfig := g.Runtime.MergeExtraPlugins(interceptor.Plugin())
+	// The timer runs before every other plugin, the app's included, so none
+	// can end ADK's plugin chain before it closes an interval.
+	base := g.Runtime.MergeExtraPlugins(interceptor.Plugin())
+	pluginConfig := runner.PluginConfig{
+		Plugins:      append([]*plugin.Plugin{timer.plugin}, base.Plugins...),
+		CloseTimeout: base.CloseTimeout,
+	}
+	turnSeconds := map[string]float64{}
 
 	var events []*session.Event
 	for {
@@ -101,6 +128,9 @@ func (g *Generator) generateInferencesStandard(ctx context.Context, opts Inferen
 			break
 		}
 
+		// Timed around the agent's turn only, so the simulator's time stays
+		// out, as in adk-python.
+		start := now()
 		turnEvents, err := g.runSingleUserTurn(ctx, runTurnParams{
 			userID:       userID,
 			appName:      appName,
@@ -112,12 +142,33 @@ func (g *Generator) generateInferencesStandard(ctx context.Context, opts Inferen
 		if err != nil {
 			return nil, err
 		}
+		if len(turnEvents) > 0 {
+			turnSeconds[turnEvents[0].InvocationID] = now().Sub(start).Seconds()
+		}
 		state = nil
 		events = append(events, turnEvents...)
 	}
 
 	appDetails := GetAppDetailsByInvocationID(events, interceptor)
-	return ConvertEventsToEvalInvocations(events, appDetails), nil
+	invocations := ConvertEventsToEvalInvocations(events, appDetails)
+	for i := range invocations {
+		inv := &invocations[i]
+		total, ok := turnSeconds[inv.InvocationID]
+		if !ok {
+			continue
+		}
+		busy := timer.busy(inv.InvocationID)
+		d, m, t := round3(total), round3(busy.modelSeconds()), round3(busy.toolSeconds())
+		inv.Duration, inv.ModelDuration, inv.ToolDuration = &d, &m, &t
+	}
+	return invocations, nil
+}
+
+// round3 rounds to 3 decimal places as adk-python's round(x, 3) does, by
+// the exact stored value.
+func round3(x float64) float64 {
+	v, _ := strconv.ParseFloat(strconv.FormatFloat(x, 'f', 3, 64), 64)
+	return v
 }
 
 // runTurnParams holds inputs for a single user turn during eval inference.
