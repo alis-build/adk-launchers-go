@@ -1,0 +1,100 @@
+name: Changelog and release
+
+# Pushing a vX.Y.Z tag rebuilds CHANGELOG.md from every tag and commit message
+# (cliff.toml), commits it to the default branch, and publishes the tag's
+# section as its GitHub Release. An annotated tag's message heads that section:
+# write the release summary and any breaking changes there.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+# Two tags pushed together would otherwise race to commit the same file.
+concurrency:
+  group: changelog
+  cancel-in-progress: false
+
+env:
+  # Pinned so a release's changelog does not change shape because an upstream
+  # release did.
+  GIT_CLIFF: git-cliff@2.14.2
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      TAG: ${{ github.ref_name }}
+
+    steps:
+      # Check out the default branch, not the tag: the changelog commit is
+      # pushed there, and one built on the tag only fast-forwards while the tag
+      # is still the branch tip. git-cliff reads tags and history, which
+      # fetch-depth 0 provides from any starting point.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      # A tag cut from somewhere else would produce a changelog silently
+      # missing its commits. Say so instead of publishing that.
+      - name: Verify the tag is on the default branch
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" HEAD; then
+            echo "::error::Tag $TAG ($GITHUB_SHA) is not an ancestor of $DEFAULT_BRANCH; its commits would be missing from the changelog."
+            exit 1
+          fi
+
+      - name: Generate changelog
+        run: npx --yes "$GIT_CLIFF" -o CHANGELOG.md
+
+      # A tag that adds no new entries leaves the file untouched, which is a
+      # no-op rather than a failure.
+      - name: Commit and push changelog
+        run: |
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "CHANGELOG.md unchanged for $TAG; nothing to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "chore(changelog): $TAG"
+
+          # Someone can still land on the default branch during this run.
+          # CHANGELOG.md is generated output, so rebasing the one commit
+          # settles that without a human.
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:$DEFAULT_BRANCH"; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); rebasing onto the latest $DEFAULT_BRANCH."
+            git pull --rebase origin "$DEFAULT_BRANCH"
+          done
+
+          echo "::error::Could not push CHANGELOG.md to $DEFAULT_BRANCH after 3 attempts."
+          exit 1
+
+      # The notes are this tag's section alone, without its heading (the
+      # release title already names the version). Re-running the job updates
+      # the release instead of failing on it.
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          range="$TAG"
+          if prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$TAG^" 2>/dev/null); then
+            range="$prev..$TAG"
+          fi
+          npx --yes "$GIT_CLIFF" "$range" --strip all | sed '1{/^## /d;}' > "$RUNNER_TEMP/notes.md"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
+          fi

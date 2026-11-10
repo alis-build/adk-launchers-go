@@ -1,0 +1,75 @@
+# Changelog generation with git-cliff (https://git-cliff.org). Each vX.Y.Z tag
+# is one release; .github/workflows/changelog.yml rebuilds CHANGELOG.md from
+# the tags and commit messages when one is pushed. To preview it locally:
+#
+#     npx --yes git-cliff@2.14.2 -o CHANGELOG.md
+#
+# An annotated tag's message is the release summary and is printed first; it
+# is where breaking changes are called out. Each commit body is that change's
+# note and is printed in full under its subject, which carries its scope (the
+# package). Anything not in Conventional Commits form (merges included) is
+# skipped, as are tests, CI and the changelog's own commits.
+
+[changelog]
+postprocessors = [
+    { pattern = '\$REPO', replace = "https://github.com/alis-build/adk-launchers-go" },
+    { pattern = '\n{3,}', replace = "\n\n" },
+]
+
+header = """
+# Changelog
+
+What changed in each release of go.alis.build/adk/launchers. This file is
+generated from release tags and commit messages; do not edit it by hand.\n
+"""
+
+# Commits after the latest tag are left out: a release is what a tag shipped.
+body = """
+{% if version %}\
+    {% if previous.version %}\
+        ## [{{ version | trim_start_matches(pat="v") }}]($REPO/compare/{{ previous.version }}...{{ version }}) ({{ timestamp | date(format="%Y-%m-%d") }})
+    {% else %}\
+        ## {{ version | trim_start_matches(pat="v") }} ({{ timestamp | date(format="%Y-%m-%d") }})
+    {% endif %}\
+    {% if message %}
+{# The tag subject is just the version, which the heading already names. #}\
+{% for part in message | trim | trim_start_matches(pat=version) | trim | split(pat="`") %}{% if loop.index is odd %}{{ part | replace(from="<", to="&lt;") }}{% else %}`{{ part }}`{% endif %}{% endfor %}
+    {% endif %}\
+    {% for group, commits in commits | group_by(attribute="group") %}
+        ### {{ group | striptags | trim }}
+        {% for commit in commits %}
+            #### {% if commit.breaking %}[breaking] {% endif %}{% if commit.scope %}{{ commit.scope }}: {% endif %}{{ commit.message | upper_first }} ([{{ commit.id | truncate(length=7, end="") }}]($REPO/commit/{{ commit.id }}))
+            {% if commit.body %}
+{# Odd parts sit outside `code`: escape < there so GitHub does not drop a
+   bare <placeholder> as an unknown HTML tag. #}\
+{% for part in commit.body | trim | split(pat="`") %}{% if loop.index is odd %}{{ part | replace(from="<", to="&lt;") }}{% else %}`{{ part }}`{% endif %}{% endfor %}
+            {% endif %}
+        {% endfor %}
+    {% endfor %}
+{% endif %}\n
+"""
+
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+protect_breaking_commits = true
+filter_commits = true
+topo_order = false
+sort_commits = "oldest"
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+# The <!-- n --> prefixes order the groups; the template strips them.
+commit_parsers = [
+    { message = "^chore\\(changelog\\)", skip = true },
+    { message = "^feat", group = "<!-- 0 -->Features" },
+    { message = "^fix", group = "<!-- 1 -->Fixes" },
+    { message = "^perf", group = "<!-- 2 -->Performance" },
+    { message = "^refactor", group = "<!-- 3 -->Refactoring" },
+    { message = "^style", group = "<!-- 4 -->Style" },
+    { message = "^docs", group = "<!-- 5 -->Documentation" },
+    { message = "^chore", group = "<!-- 6 -->Other" },
+    { message = "^(test|ci|build)", skip = true },
+]
