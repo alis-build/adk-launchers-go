@@ -3,7 +3,10 @@ package generator
 import (
 	"bytes"
 	"context"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"go.alis.build/adk/launchers/evals/evaluation/simulation"
@@ -168,3 +171,58 @@ func (h *historyRecorder) GetNextUserMessage(_ context.Context, events []*sessio
 }
 
 var _ agent.LiveSession = (*fakeLiveSession)(nil)
+
+// With a native-audio model the final event is audio only, so the reply is
+// graded from its transcript.
+func TestLiveGradesTranscriptOfAudioOnlyReply(t *testing.T) {
+	rt, sess := newFakeLiveRuntime(t)
+	sess.audioOnlyFinal = true
+	inv, err := (&Generator{Runtime: rt}).GenerateInferences(context.Background(), InferenceOptions{
+		UserSimulator:      simulation.NewStaticUserSimulator([]models.Invocation{{UserContent: genai.NewContentFromText("Hello", genai.RoleUser)}}),
+		UseLive:            true,
+		LiveTimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatalf("GenerateInferences: %v", err)
+	}
+	if len(inv) != 1 || inv[0].FinalResponse == nil || inv[0].FinalResponse.Parts[0].Text != "transcribed reply" {
+		t.Errorf("final response = %+v, want the transcript", inv)
+	}
+}
+
+// A turn that times out while the model keeps streaming must not strand the
+// reader: the live stream ends once inference returns.
+func TestLiveTimeoutReleasesTheStream(t *testing.T) {
+	rt, sess := newFakeLiveRuntime(t)
+	sess.flood = -1 // keeps streaming after the timeout, past the event buffer
+	sess.finished = make(chan struct{})
+	_, err := (&Generator{Runtime: rt}).GenerateInferences(context.Background(), InferenceOptions{
+		UserSimulator:      simulation.NewStaticUserSimulator([]models.Invocation{{UserContent: genai.NewContentFromText("Hello", genai.RoleUser)}}),
+		UseLive:            true,
+		LiveTimeoutSeconds: 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("error = %v, want a timeout", err)
+	}
+	select {
+	case <-sess.finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the live event stream was still running 5 s after inference returned")
+	}
+}
+
+// A cancelled run says so rather than reporting a timeout.
+func TestLiveCancelledTurnIsNotATimeout(t *testing.T) {
+	rt, sess := newFakeLiveRuntime(t)
+	sess.flood = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	_, err := (&Generator{Runtime: rt}).GenerateInferences(ctx, InferenceOptions{
+		UserSimulator:      simulation.NewStaticUserSimulator([]models.Invocation{{UserContent: genai.NewContentFromText("Hello", genai.RoleUser)}}),
+		UseLive:            true,
+		LiveTimeoutSeconds: 30,
+	})
+	if err == nil || strings.Contains(err.Error(), "timed out") || !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled, not a timeout", err)
+	}
+}

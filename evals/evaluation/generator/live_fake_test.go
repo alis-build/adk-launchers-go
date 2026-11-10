@@ -5,6 +5,7 @@ import (
 	"iter"
 	"sync"
 	"testing"
+	"time"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"go.alis.build/adk/launchers/evals/evaluation/simulation"
@@ -31,6 +32,14 @@ type fakeLiveSession struct {
 	requests  []agent.LiveRequest
 	turns     chan struct{}
 	closeOnce sync.Once
+	// audioOnlyFinal makes the final event carry only audio, as a native
+	// audio model's does, so the reply's text is only in the transcript.
+	audioOnlyFinal bool
+	// flood, when set, makes each turn stream that many partial transcript
+	// events (forever if negative) and never complete.
+	flood int
+	// finished is closed when the event stream returns, if set.
+	finished chan struct{}
 }
 
 func (s *fakeLiveSession) Send(req agent.LiveRequest) error {
@@ -57,7 +66,23 @@ func (s *fakeLiveSession) recorded() []agent.LiveRequest {
 
 func (a *fakeLiveAgent) RunLive(ctx agent.InvocationContext) (agent.LiveSession, iter.Seq2[*session.Event, error], error) {
 	events := func(yield func(*session.Event, error) bool) {
+		if a.sess.finished != nil {
+			defer close(a.sess.finished)
+		}
 		for range a.sess.turns {
+			for i := 0; a.sess.flood < 0 || i < a.sess.flood; i++ {
+				time.Sleep(time.Millisecond)
+				ev := session.NewEvent(ctx, ctx.InvocationID())
+				ev.Author = "reply-agent"
+				ev.OutputTranscription = &genai.Transcription{Text: "still talking"}
+				ev.Partial = true
+				if !yield(ev, nil) {
+					return
+				}
+			}
+			if a.sess.flood > 0 {
+				continue
+			}
 			transcript := session.NewEvent(ctx, ctx.InvocationID())
 			transcript.Author = "reply-agent"
 			transcript.OutputTranscription = &genai.Transcription{Text: "transcribed reply"}
@@ -67,6 +92,9 @@ func (a *fakeLiveAgent) RunLive(ctx agent.InvocationContext) (agent.LiveSession,
 			final := session.NewEvent(ctx, ctx.InvocationID())
 			final.Author = "reply-agent"
 			final.Content = genai.NewContentFromText("reply", genai.RoleModel)
+			if a.sess.audioOnlyFinal {
+				final.Content = &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{InlineData: &genai.Blob{Data: []byte("PCM"), MIMEType: "audio/pcm;rate=24000"}}}}
+			}
 			final.TurnComplete = true
 			if !yield(final, nil) {
 				return

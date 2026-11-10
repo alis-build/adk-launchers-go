@@ -2,6 +2,7 @@ package generator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -59,13 +60,25 @@ func (g *Generator) generateInferencesLive(ctx context.Context, opts InferenceOp
 	// Without it a failed summary aborts eval inference for a turn the agent
 	// answered.
 	liveEvents := adkrun.WithoutCompactionErrors(ctx, fmt.Sprintf("eval session %q", sessionID), eventIter)
+	// done stops the reader when this function returns, for example after a
+	// turn times out while the model is still streaming: without it the
+	// reader blocks on a full eventCh forever and holds the live stream open.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
 		for ev, err := range liveEvents {
 			if err != nil {
-				errCh <- err
+				select {
+				case errCh <- err:
+				case <-done:
+				}
 				return
 			}
-			eventCh <- ev
+			select {
+			case eventCh <- ev:
+			case <-done:
+				return
+			}
 		}
 		close(eventCh)
 	}()
@@ -198,7 +211,10 @@ func collectLiveTurn(ctx context.Context, invocationID string, eventCh <-chan *s
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("generator: timed out waiting for live turn completion")
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, fmt.Errorf("generator: timed out waiting for live turn completion")
+			}
+			return nil, fmt.Errorf("generator: live turn: %w", ctx.Err())
 		case err := <-errCh:
 			if err != nil {
 				return nil, err
