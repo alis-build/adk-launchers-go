@@ -12,6 +12,8 @@ import (
 type TrajectoryEvaluator struct {
 	threshold float64
 	matchType models.ToolTrajectoryMatchType
+	// ignoreArgs compares tool names only.
+	ignoreArgs bool
 }
 
 // newTrajectoryEvaluator builds a tool_trajectory_avg_score evaluator from metric config.
@@ -24,6 +26,7 @@ func newTrajectoryEvaluator(metric models.EvalMetric) (Evaluator, error) {
 	// criterion supplies only the match type here.
 	if c, ok := metric.Criterion.AsToolTrajectory(); ok {
 		ev.matchType = c.MatchType
+		ev.ignoreArgs = c.IgnoreArgs
 	}
 	return ev, nil
 }
@@ -77,31 +80,44 @@ func (e *TrajectoryEvaluator) scorePair(actual, expected models.Invocation) floa
 	if err != nil {
 		return 0
 	}
-	if trajectoryMatch(actualCalls, expectedCalls, e.matchType) {
+	if trajectoryMatch(actualCalls, expectedCalls, e.matchType, e.ignoreArgs) {
 		return 1
 	}
 	return 0
 }
 
 // trajectoryMatch delegates to the match-type-specific comparison function.
-func trajectoryMatch(actual, expected []*genai.FunctionCall, match models.ToolTrajectoryMatchType) bool {
+// With ignoreArgs, calls compare by tool name only.
+func trajectoryMatch(actual, expected []*genai.FunctionCall, match models.ToolTrajectoryMatchType, ignoreArgs bool) bool {
+	equal := functionCallEqual
+	if ignoreArgs {
+		equal = functionNameEqual
+	}
 	switch match {
 	case models.ToolTrajectoryMatchInOrder:
-		return toolCallsInOrder(actual, expected)
+		return toolCallsInOrder(actual, expected, equal)
 	case models.ToolTrajectoryMatchAnyOrder:
-		return toolCallsAnyOrder(actual, expected)
+		return toolCallsAnyOrder(actual, expected, equal)
 	default:
-		return toolCallsExact(actual, expected)
+		return toolCallsExact(actual, expected, equal)
 	}
 }
 
+// functionNameEqual compares tool names only.
+func functionNameEqual(a, b *genai.FunctionCall) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Name == b.Name
+}
+
 // toolCallsExact requires identical tool name and args at each index.
-func toolCallsExact(actual, expected []*genai.FunctionCall) bool {
+func toolCallsExact(actual, expected []*genai.FunctionCall, equal func(a, b *genai.FunctionCall) bool) bool {
 	if len(actual) != len(expected) {
 		return false
 	}
 	for i := range actual {
-		if !functionCallEqual(actual[i], expected[i]) {
+		if !equal(actual[i], expected[i]) {
 			return false
 		}
 	}
@@ -110,7 +126,7 @@ func toolCallsExact(actual, expected []*genai.FunctionCall) bool {
 
 // toolCallsInOrder requires expected calls to appear as an ordered subsequence
 // within actual (extra calls between matches are allowed).
-func toolCallsInOrder(actual, expected []*genai.FunctionCall) bool {
+func toolCallsInOrder(actual, expected []*genai.FunctionCall, equal func(a, b *genai.FunctionCall) bool) bool {
 	if len(expected) == 0 {
 		return true
 	}
@@ -119,7 +135,7 @@ func toolCallsInOrder(actual, expected []*genai.FunctionCall) bool {
 	}
 	j := 0
 	for _, a := range actual {
-		if j < len(expected) && functionCallEqual(a, expected[j]) {
+		if j < len(expected) && equal(a, expected[j]) {
 			j++
 		}
 	}
@@ -128,7 +144,7 @@ func toolCallsInOrder(actual, expected []*genai.FunctionCall) bool {
 
 // toolCallsAnyOrder requires each expected call to match some remaining actual
 // call regardless of order.
-func toolCallsAnyOrder(actual, expected []*genai.FunctionCall) bool {
+func toolCallsAnyOrder(actual, expected []*genai.FunctionCall, equal func(a, b *genai.FunctionCall) bool) bool {
 	if len(expected) == 0 {
 		return true
 	}
@@ -139,7 +155,7 @@ func toolCallsAnyOrder(actual, expected []*genai.FunctionCall) bool {
 	for _, exp := range expected {
 		found := -1
 		for i, act := range remaining {
-			if functionCallEqual(act, exp) {
+			if equal(act, exp) {
 				found = i
 				break
 			}

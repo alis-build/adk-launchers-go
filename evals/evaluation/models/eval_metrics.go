@@ -86,6 +86,8 @@ const (
 type ToolTrajectoryCriterion struct {
 	BaseCriterion
 	MatchType ToolTrajectoryMatchType `json:"matchType,omitempty"`
+	// IgnoreArgs compares tool names only, not their arguments.
+	IgnoreArgs bool `json:"ignoreArgs,omitempty"`
 }
 
 // EvalMetric describes a metric to run with threshold and criterion payload.
@@ -131,7 +133,11 @@ func (c *jsonCriterion) UnmarshalJSON(data []byte) error {
 		c.value = h
 		return nil
 	}
-	if _, ok := raw["matchType"]; ok {
+	_, hasMatch := raw["matchType"]
+	_, hasMatchSnake := raw["match_type"]
+	_, hasIgnore := raw["ignoreArgs"]
+	_, hasIgnoreSnake := raw["ignore_args"]
+	if hasMatch || hasMatchSnake || hasIgnore || hasIgnoreSnake {
 		var t ToolTrajectoryCriterion
 		if err := json.Unmarshal(data, &t); err != nil {
 			return err

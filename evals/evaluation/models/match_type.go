@@ -23,7 +23,7 @@ func ParseToolTrajectoryMatchType(raw string) (ToolTrajectoryMatchType, error) {
 	}
 }
 
-// UnmarshalJSON accepts string or numeric matchType values.
+// UnmarshalJSON accepts string or numeric matchType (or match_type) values.
 func (c *ToolTrajectoryCriterion) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -32,10 +32,23 @@ func (c *ToolTrajectoryCriterion) UnmarshalJSON(data []byte) error {
 	if v, ok := raw["threshold"]; ok {
 		_ = json.Unmarshal(v, &c.Threshold)
 	}
+	for _, k := range []string{"ignoreArgs", "ignore_args"} {
+		if v, ok := raw[k]; ok {
+			if err := json.Unmarshal(v, &c.IgnoreArgs); err != nil {
+				return fmt.Errorf("%s: %w", k, err)
+			}
+		}
+	}
 	if v, ok := raw["includeIntermediateResponsesInFinal"]; ok {
 		_ = json.Unmarshal(v, &c.IncludeIntermediateResponsesInFinal)
 	}
-	if v, ok := raw["matchType"]; ok {
+	// adk-python also accepts the field name (populate_by_name); the alias
+	// wins when both appear, as in pydantic.
+	v, ok := raw["matchType"]
+	if !ok {
+		v, ok = raw["match_type"]
+	}
+	if ok {
 		var asString string
 		if err := json.Unmarshal(v, &asString); err == nil {
 			mt, err := ParseToolTrajectoryMatchType(asString)
