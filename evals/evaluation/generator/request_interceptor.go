@@ -40,17 +40,21 @@ func NewRequestInterceptor() (*RequestInterceptor, error) {
 		AfterModelCallback: func(ctx agent.Context, llmResponse *model.LLMResponse, _ error) (*model.LLMResponse, error) {
 			val, err := ctx.State().Get(llmRequestIDKey)
 			if err != nil || val == nil {
-				return llmResponse, nil
+				return nil, nil
 			}
 			requestID, ok := val.(string)
 			if !ok || requestID == "" {
-				return llmResponse, nil
+				return nil, nil
 			}
 			if llmResponse.CustomMetadata == nil {
 				llmResponse.CustomMetadata = map[string]any{}
 			}
+			// Tagged in place, and nothing returned: ADK stops at the first
+			// callback that returns a response, so returning it would skip
+			// the agent's own after-model callbacks during evals, testing a
+			// different agent than production (adk-python returns None).
 			llmResponse.CustomMetadata[llmRequestIDKey] = requestID
-			return llmResponse, nil
+			return nil, nil
 		},
 	})
 	if err != nil {
