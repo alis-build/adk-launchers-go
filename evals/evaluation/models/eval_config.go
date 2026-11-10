@@ -22,6 +22,8 @@ type EvalConfig struct {
 	Criteria            map[string]jsonCriterion      `json:"criteria,omitempty"`
 	CustomMetrics       map[string]CustomMetricConfig `json:"customMetrics,omitempty"`
 	UserSimulatorConfig json.RawMessage               `json:"userSimulatorConfig,omitempty"`
+	// MultiRunConfig repeats each case and judges it across the runs.
+	MultiRunConfig *MultiRunConfig `json:"multiRunConfig,omitempty"`
 }
 
 // DefaultEvalConfig matches Python _DEFAULT_EVAL_CONFIG.
@@ -110,6 +112,8 @@ func UnmarshalEvalConfig(data []byte) (EvalConfig, error) {
 		Criteria            map[string]json.RawMessage    `json:"criteria"`
 		CustomMetrics       map[string]CustomMetricConfig `json:"customMetrics"`
 		UserSimulatorConfig json.RawMessage               `json:"userSimulatorConfig"`
+		MultiRunCamel       json.RawMessage               `json:"multiRunConfig"`
+		MultiRunSnake       json.RawMessage               `json:"multi_run_config"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return EvalConfig{}, err
@@ -117,6 +121,18 @@ func UnmarshalEvalConfig(data []byte) (EvalConfig, error) {
 	cfg := EvalConfig{
 		CustomMetrics:       raw.CustomMetrics,
 		UserSimulatorConfig: raw.UserSimulatorConfig,
+	}
+	// snake_case wins when both appear, as the run request's keys do.
+	if mr := raw.MultiRunSnake; len(mr) > 0 && string(mr) != "null" {
+		cfg.MultiRunConfig = &MultiRunConfig{}
+		if err := json.Unmarshal(mr, cfg.MultiRunConfig); err != nil {
+			return EvalConfig{}, err
+		}
+	} else if mr := raw.MultiRunCamel; len(mr) > 0 && string(mr) != "null" {
+		cfg.MultiRunConfig = &MultiRunConfig{}
+		if err := json.Unmarshal(mr, cfg.MultiRunConfig); err != nil {
+			return EvalConfig{}, err
+		}
 	}
 	if len(raw.Criteria) > 0 {
 		cfg.Criteria = make(map[string]jsonCriterion, len(raw.Criteria))
