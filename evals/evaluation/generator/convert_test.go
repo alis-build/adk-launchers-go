@@ -174,3 +174,99 @@ func TestConvertRecordsUsageAndModelVersion(t *testing.T) {
 		t.Errorf("final response = %+v, want done", inv[0].FinalResponse)
 	}
 }
+
+func modelEvent(t *testing.T, author, text, version, inv string) *session.Event {
+	ev := buildEvent(t, author, []*genai.Part{{Text: text}}, inv)
+	ev.ModelVersion = version
+	return ev
+}
+
+func usageReport(t *testing.T, author, version, inv string, prompt int32) *session.Event {
+	ev := session.NewEvent(t.Context(), inv)
+	ev.Author = author
+	ev.ModelVersion = version
+	ev.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: prompt}
+	return ev
+}
+
+func prompts(evs []models.InvocationEvent) []int32 {
+	var out []int32
+	for _, e := range evs {
+		if e.UsageMetadata == nil {
+			out = append(out, -1)
+			continue
+		}
+		out = append(out, e.UsageMetadata.PromptTokenCount)
+	}
+	return out
+}
+
+// Mirrors adk-python test_evaluation_generator.py:2402.
+func TestStandaloneUsageKeptWithoutModelEvent(t *testing.T) {
+	ev := session.NewEvent(t.Context(), "inv1")
+	ev.Author = "agent"
+	ev.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 10, CandidatesTokenCount: 5}
+	got := invocationEvents(t, generator.ConvertEventsToEvalInvocations([]*session.Event{buildEvent(t, "user", []*genai.Part{{Text: "hi"}}, "inv1"), ev}, nil)[0])
+	if len(got) != 1 || got[0].UsageMetadata == nil || got[0].UsageMetadata.PromptTokenCount != 10 {
+		t.Errorf("events = %+v, want the usage report kept", got)
+	}
+}
+
+// Mirrors adk-python test_evaluation_generator.py:2431.
+func TestStandaloneUsageKeepsSeparateCalls(t *testing.T) {
+	for _, usageFirst := range []bool{true, false} {
+		name := map[bool]string{true: "usage first", false: "usage after"}[usageFirst]
+		t.Run(name, func(t *testing.T) {
+			var events []*session.Event
+			for _, inv := range []string{"inv1", "inv2"} {
+				events = append(events, buildEvent(t, "user", []*genai.Part{{Text: "hi"}}, inv))
+				for _, p := range []int32{15, 28} {
+					m, u := modelEvent(t, "agent", "response", "gemini-test", inv), usageReport(t, "agent", "", inv, p)
+					if usageFirst {
+						events = append(events, u, m)
+					} else {
+						events = append(events, m, u)
+					}
+				}
+			}
+			for _, inv := range generator.ConvertEventsToEvalInvocations(events, nil) {
+				if got := prompts(invocationEvents(t, inv)); len(got) != 2 || got[0] != 15 || got[1] != 28 {
+					t.Errorf("%s prompts = %v, want [15 28]", inv.InvocationID, got)
+				}
+			}
+		})
+	}
+}
+
+// Mirrors adk-python test_evaluation_generator.py:2477.
+func TestStandaloneUsageNotMergedIntoDifferentModel(t *testing.T) {
+	for name, report := range map[string][2]string{"other author": {"other", ""}, "other model": {"agent", "gemini-other"}} {
+		t.Run(name, func(t *testing.T) {
+			events := []*session.Event{
+				buildEvent(t, "user", []*genai.Part{{Text: "hi"}}, "inv1"),
+				modelEvent(t, "agent", "response", "gemini-test", "inv1"),
+				usageReport(t, report[0], report[1], "inv1", 15),
+			}
+			got := invocationEvents(t, generator.ConvertEventsToEvalInvocations(events, nil)[0])
+			if p := prompts(got); len(p) != 2 || p[0] != -1 || p[1] != 15 {
+				t.Errorf("prompts = %v, want the model event without usage and the report apart", p)
+			}
+		})
+	}
+}
+
+// Mirrors adk-python test_evaluation_generator.py:2609.
+func TestUsageBatchedAfterContent(t *testing.T) {
+	events := []*session.Event{
+		buildEvent(t, "user", []*genai.Part{{Text: "hi"}}, "inv1"),
+		modelEvent(t, "agent", "one", "gemini-test", "inv1"),
+		modelEvent(t, "agent", "two", "gemini-test", "inv1"),
+		usageReport(t, "agent", "", "inv1", 15),
+		usageReport(t, "agent", "", "inv1", 28),
+	}
+	got := invocationEvents(t, generator.ConvertEventsToEvalInvocations(events, nil)[0])
+	p := prompts(got)
+	if len(p) != 2 || p[0]+p[1] != 43 || p[0] < 0 || p[1] < 0 {
+		t.Errorf("prompts = %v, want two events summing to 43", p)
+	}
+}

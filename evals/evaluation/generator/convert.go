@@ -84,16 +84,24 @@ func convertInvocationEvents(invocationID string, events []*session.Event, appDe
 				finalResponse = event.Content
 				finalEvent = event
 			}
-			if event.GroundingMetadata != nil || eventHasRelevantPart(event) {
+			if event.GroundingMetadata != nil || event.UsageMetadata != nil || eventHasRelevantPart(event) {
 				eventsToAdd = append(eventsToAdd, event)
 			}
-		} else if event.GroundingMetadata != nil {
+		} else if event.GroundingMetadata != nil || event.UsageMetadata != nil {
 			eventsToAdd = append(eventsToAdd, event)
 		}
 	}
 
+	mergedUsage, mergedReports := mergeUsageReports(eventsToAdd)
 	invEvents := make([]models.InvocationEvent, 0, len(eventsToAdd))
-	for _, e := range eventsToAdd {
+	for i, e := range eventsToAdd {
+		if mergedReports[i] {
+			continue
+		}
+		usage := e.UsageMetadata
+		if u, ok := mergedUsage[i]; ok {
+			usage = u
+		}
 		content := e.Content
 		// The final response is kept, as in adk-python, so its model call's
 		// usage and grounding are not lost, but without its text: that is
@@ -106,7 +114,7 @@ func convertInvocationEvents(invocationID string, events []*session.Event, appDe
 			Author:            e.Author,
 			Content:           content,
 			GroundingMetadata: e.GroundingMetadata,
-			UsageMetadata:     e.UsageMetadata,
+			UsageMetadata:     usage,
 			ModelVersion:      e.ModelVersion,
 		})
 	}
@@ -155,4 +163,47 @@ func eventHasFunctionCall(event *session.Event) bool {
 		}
 	}
 	return false
+}
+
+// mergeUsageReports pairs each standalone usage report (an event with usage
+// but no content and no grounding, as a live connection sends) with the model
+// event it belongs to, so its tokens count without the report counting as a
+// second model call (adk-python 8cd3b12c8). Nothing in a report names its
+// call, so the nearest unclaimed compatible event wins, earlier ones first:
+// same author, no usage of its own, a model version, and the report's model
+// version when it has one. It returns the usage to put on each claimed
+// event and the reports merged away; an unmatched report stays an event.
+// ADK Go events carry no live-session ID, so adk-python's same-connection
+// rule is not applied.
+func mergeUsageReports(events []*session.Event) (map[int]*genai.GenerateContentResponseUsageMetadata, map[int]bool) {
+	merged := map[int]*genai.GenerateContentResponseUsageMetadata{}
+	reports := map[int]bool{}
+	compatible := func(report, c *session.Event, ci int) bool {
+		if _, claimed := merged[ci]; claimed {
+			return false
+		}
+		return c.UsageMetadata == nil && c.ModelVersion != "" && c.Author == report.Author &&
+			(report.ModelVersion == "" || c.ModelVersion == report.ModelVersion)
+	}
+	for i, e := range events {
+		if (e.Content != nil && len(e.Content.Parts) > 0) || e.GroundingMetadata != nil || e.UsageMetadata == nil {
+			continue
+		}
+		target := -1
+		for ci := i - 1; ci >= 0 && target < 0; ci-- {
+			if compatible(e, events[ci], ci) {
+				target = ci
+			}
+		}
+		for ci := i + 1; ci < len(events) && target < 0; ci++ {
+			if compatible(e, events[ci], ci) {
+				target = ci
+			}
+		}
+		if target >= 0 {
+			merged[target] = e.UsageMetadata
+			reports[i] = true
+		}
+	}
+	return merged, reports
 }
