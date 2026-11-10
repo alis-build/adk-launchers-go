@@ -17,8 +17,8 @@
 //
 //   - tool_call_count_v1 — tool calls per invocation.
 //   - inference_call_count_v1 — model calls per invocation.
-//   - token_usage_v1 — prompt, completion and total tokens, with the
-//     per-model breakdown in [models.TokenUsageDetails].
+//   - token_usage_v1 — prompt, completion and total tokens, broken down by
+//     token type in [models.TokenUsageDetails].
 //   - invocation_duration_v1 — seconds per invocation, split into model and
 //     tool time in [models.DurationDetails]. Live inference records no
 //     durations, so for live runs this metric reports no value.
@@ -86,10 +86,12 @@
 // Metrics that call an LLM judge return [models.EvalStatusNotEvaluated] when
 // [RegistryConfig.JudgeClient] is nil, matching the adk-python fallback.
 //
-// A metric makes at most [models.JudgeModelOptions.ParallelismLimit] judge
-// calls at once, across its invocations and samples: one at a time when
-// unset, so eval cost and rate-limit pressure stay as they were unless a
-// criterion raises it. A limit below 1 is rejected when the evaluator is
+// Scoring one case, a metric makes at most
+// [models.JudgeModelOptions.ParallelismLimit] judge calls at once, across its
+// invocations and samples: one at a time when unset. Cases are scored
+// concurrently too (the run's parallelism, 4 by default), so a run can make up
+// to parallelism × ParallelismLimit calls at once, and the
+// [RegistryConfig.JudgeClient] must be safe for concurrent use. A limit below 1 is rejected when the evaluator is
 // built. For the per-invocation judge metrics a failed judge call leaves only
 // its own invocation NOT_EVALUATED (logged), not the whole metric.
 package metrics
