@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
+	"sync"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 )
@@ -67,38 +69,85 @@ func (e *llmJudgeEvaluator) EvaluateInvocations(
 	}
 
 	opts := judgeOptions(e.metric)
-	var per []PerInvocationResult
+	// NumSamples controls judge variance; default to a single sample.
+	samples := max(opts.NumSamples, 1)
 
-	// Score each actual invocation independently; expected is paired by index.
+	// Pair each actual invocation with its expected one by index; metrics
+	// that need golden data skip turns past the end of it.
+	type pair struct {
+		idx    int
+		exp    *models.Invocation
+		prompt string
+	}
+	var pairs []pair
 	for i := range actual {
 		var exp *models.Invocation
 		if i < len(expected) {
 			exp = &expected[i]
 		} else if e.requireExpected {
-			// Golden conversation ended before actual; skip unmatched turns.
 			continue
 		}
+		pairs = append(pairs, pair{idx: i, exp: exp, prompt: e.formatPrompt(actual[i], exp)})
+	}
 
-		// NumSamples controls judge variance; default to a single sample.
-		// Samples run sequentially to respect LLM rate limits and keep eval cost predictable.
-		samples := opts.NumSamples
-		if samples <= 0 {
-			samples = 1
-		}
-
-		var sampleResults []PerInvocationResult
-		for range samples {
-			resp, err := e.client.GenerateJudgeResponse(ctx, e.formatPrompt(actual[i], exp), opts)
-			if err != nil {
-				return EvaluationResult{}, err
+	// Every (invocation, sample) judge call runs concurrently, at most
+	// ParallelismLimit at once, as in adk-python.
+	type outcome struct {
+		res PerInvocationResult
+		err error
+	}
+	outcomes := make([][]outcome, len(pairs))
+	sem := make(chan struct{}, parallelismLimit(opts))
+	var wg sync.WaitGroup
+launch:
+	for pi, p := range pairs {
+		outcomes[pi] = make([]outcome, samples)
+		for si := range samples {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				break launch
 			}
-			score, rubrics, err := e.parseScore(resp, actual[i])
-			if err != nil {
-				return EvaluationResult{}, err
-			}
-			sampleResults = append(sampleResults, judgeSample(actual[i], exp, score, rubrics, e.metric.Threshold))
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				resp, err := e.client.GenerateJudgeResponse(ctx, p.prompt, opts)
+				if err != nil {
+					outcomes[pi][si] = outcome{err: err}
+					return
+				}
+				score, rubrics, err := e.parseScore(resp, actual[p.idx])
+				if err != nil {
+					outcomes[pi][si] = outcome{err: err}
+					return
+				}
+				outcomes[pi][si] = outcome{res: judgeSample(actual[p.idx], p.exp, score, rubrics, e.metric.Threshold)}
+			}()
 		}
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return EvaluationResult{}, err
+	}
 
+	per := make([]PerInvocationResult, 0, len(pairs))
+	for pi, p := range pairs {
+		// A failed judge call leaves only its own invocation unscored.
+		var failed error
+		sampleResults := make([]PerInvocationResult, 0, samples)
+		for _, o := range outcomes[pi] {
+			if o.err != nil {
+				failed = o.err
+				break
+			}
+			sampleResults = append(sampleResults, o.res)
+		}
+		if failed != nil {
+			log.Printf("evals: %s: judge sample failed for invocation %d: %v", e.metric.MetricName, p.idx, failed)
+			per = append(per, PerInvocationResult{ActualInvocation: actual[p.idx], ExpectedInvocation: p.exp, EvalStatus: models.EvalStatusNotEvaluated})
+			continue
+		}
 		// When NumSamples > 1, aggregatePerInvocation (when set) collapses
 		// multiple judge runs into one per-invocation result.
 		result := sampleResults[0]
@@ -124,6 +173,24 @@ func (e *llmJudgeEvaluator) EvaluateInvocations(
 		PerInvocationResults: per,
 		OverallRubricScores:  aggregatePerInvocationRubrics(per),
 	}, nil
+}
+
+// parallelismLimit is how many judge calls may run at once: 1 unless the
+// options raise it.
+func parallelismLimit(opts models.JudgeModelOptions) int {
+	if opts.ParallelismLimit == nil {
+		return 1
+	}
+	return max(*opts.ParallelismLimit, 1)
+}
+
+// checkJudgeOptions rejects a parallelismLimit below 1, as adk-python's
+// JudgeModelOptions (ge=1) does.
+func checkJudgeOptions(metric models.EvalMetric) error {
+	if l := judgeOptions(metric).ParallelismLimit; l != nil && *l < 1 {
+		return fmt.Errorf("judgeModelOptions.parallelismLimit must be at least 1, got %d", *l)
+	}
+	return nil
 }
 
 // judgeOptions extracts JudgeModelOptions from the metric criterion payload.

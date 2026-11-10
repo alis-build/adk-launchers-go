@@ -34,6 +34,9 @@ type JudgeModelOptions struct {
 	JudgeModel       string                       `json:"judgeModel,omitempty"`
 	JudgeModelConfig *genai.GenerateContentConfig `json:"judgeModelConfig,omitempty"`
 	NumSamples       int                          `json:"numSamples,omitempty"`
+	// ParallelismLimit caps how many judge calls one metric makes at once;
+	// nil means 1, and below 1 is rejected.
+	ParallelismLimit *int `json:"parallelismLimit,omitempty"`
 }
 
 // BaseCriterion is the base threshold criterion for a metric.

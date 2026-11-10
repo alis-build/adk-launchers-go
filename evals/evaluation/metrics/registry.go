@@ -125,21 +125,39 @@ func registerAllPrebuiltMetrics(r *Registry) {
 		return newVertexMultiTurnEvaluator(m, vertexMetricMultiTurnToolUseQuality, cfg), nil
 	})
 	r.RegisterEvaluator(finalResponseMatchV2MetricInfo(), func(m models.EvalMetric, cfg *RegistryConfig) (Evaluator, error) {
+		if err := checkJudgeOptions(m); err != nil {
+			return nil, err
+		}
 		return newFinalResponseMatchV2Evaluator(m, cfg), nil
 	})
 	r.RegisterEvaluator(rubricFinalResponseMetricInfo(), func(m models.EvalMetric, cfg *RegistryConfig) (Evaluator, error) {
+		if err := checkJudgeOptions(m); err != nil {
+			return nil, err
+		}
 		return newRubricBasedEvaluator(m, rubricKindFinalResponse, cfg), nil
 	})
 	r.RegisterEvaluator(hallucinationsMetricInfo(), func(m models.EvalMetric, cfg *RegistryConfig) (Evaluator, error) {
+		if err := checkJudgeOptions(m); err != nil {
+			return nil, err
+		}
 		return newHallucinationsEvaluator(m, cfg), nil
 	})
 	r.RegisterEvaluator(rubricToolUseMetricInfo(), func(m models.EvalMetric, cfg *RegistryConfig) (Evaluator, error) {
+		if err := checkJudgeOptions(m); err != nil {
+			return nil, err
+		}
 		return newRubricBasedEvaluator(m, rubricKindToolUse, cfg), nil
 	})
 	r.RegisterEvaluator(perTurnSimulatorMetricInfo(), func(m models.EvalMetric, cfg *RegistryConfig) (Evaluator, error) {
+		if err := checkJudgeOptions(m); err != nil {
+			return nil, err
+		}
 		return newPerTurnSimulatorEvaluator(m, cfg), nil
 	})
 	r.RegisterEvaluator(rubricMultiTurnMetricInfo(), func(m models.EvalMetric, cfg *RegistryConfig) (Evaluator, error) {
+		if err := checkJudgeOptions(m); err != nil {
+			return nil, err
+		}
 		return newRubricBasedEvaluator(m, rubricKindMultiTurnTrajectory, cfg), nil
 	})
 	r.RegisterEvaluator(toolCallCountMetricInfo(), efficiencyFactory(efficiencyFunc(toolCallCount)))
