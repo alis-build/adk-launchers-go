@@ -377,3 +377,72 @@ func TestEvaluateEvalSetDropsPerRunDetailsFromAverages(t *testing.T) {
 		t.Errorf("averaged details = %+v, want empty", m.Details)
 	}
 }
+
+// evaluateGated starts EvaluateEvalSet over svc and set with the eval config
+// cfgJSON in the background and returns a channel that yields its error.
+func evaluateGated(t *testing.T, svc *service.LocalEvalService, set *models.EvalSet, cfgJSON string) <-chan error {
+	t.Helper()
+	cfg, err := models.UnmarshalEvalConfig([]byte(cfgJSON))
+	if err != nil {
+		t.Fatalf("UnmarshalEvalConfig: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 1)
+		done <- err
+	}()
+	return done
+}
+
+// Positive control for the next test: by default all three cases run at
+// once.
+func TestEvaluateEvalSetRunsCasesInParallelByDefault(t *testing.T) {
+	g := newGate()
+	svc, set := threeCaseService(t, g, metrics.NewDefaultRegistry())
+	done := evaluateGated(t, svc, set, `{"criteria":{"response_match_score":0.5}}`)
+	for range 3 {
+		g.waitArrived(t)
+	}
+	close(g.release)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+}
+
+// Mirrors adk-python test_agent_evaluator.py
+// test_evaluate_eval_set_reads_parallelism_from_eval_config.
+func TestEvaluateEvalSetHonoursConfigParallelism(t *testing.T) {
+	g := newGate()
+	svc, set := threeCaseService(t, g, metrics.NewDefaultRegistry())
+	done := evaluateGated(t, svc, set, `{"criteria":{"response_match_score":0.5},"parallelism":1}`)
+	g.runOneAtATime(t, 3)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+}
+
+// Positive control for the next test: by default all three cases are scored
+// at once.
+func TestEvaluateEvalSetScoresCasesInParallelByDefault(t *testing.T) {
+	g := newGate()
+	svc, set := threeCaseService(t, nil, gatedRegistry(g))
+	done := evaluateGated(t, svc, set, `{"criteria":{"gated":0.5}}`)
+	for range 3 {
+		g.waitArrived(t)
+	}
+	close(g.release)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+}
+
+// Config parallelism 1 also scores the cases one at a time.
+func TestEvaluateEvalSetScoresWithConfigParallelism(t *testing.T) {
+	g := newGate()
+	svc, set := threeCaseService(t, nil, gatedRegistry(g))
+	done := evaluateGated(t, svc, set, `{"criteria":{"gated":0.5},"parallelism":1}`)
+	g.runOneAtATime(t, 3)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+}

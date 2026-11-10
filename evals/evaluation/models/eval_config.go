@@ -24,6 +24,9 @@ type EvalConfig struct {
 	UserSimulatorConfig json.RawMessage               `json:"userSimulatorConfig,omitempty"`
 	// MultiRunConfig repeats each case and judges it across the runs.
 	MultiRunConfig *MultiRunConfig `json:"multiRunConfig,omitempty"`
+	// Parallelism caps how many cases run and are scored at once; nil
+	// leaves the service default.
+	Parallelism *int `json:"parallelism,omitempty"`
 }
 
 // DefaultEvalConfig matches Python _DEFAULT_EVAL_CONFIG.
@@ -114,6 +117,7 @@ func UnmarshalEvalConfig(data []byte) (EvalConfig, error) {
 		UserSimulatorConfig json.RawMessage               `json:"userSimulatorConfig"`
 		MultiRunCamel       json.RawMessage               `json:"multiRunConfig"`
 		MultiRunSnake       json.RawMessage               `json:"multi_run_config"`
+		Parallelism         *int                          `json:"parallelism"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return EvalConfig{}, err
@@ -121,6 +125,10 @@ func UnmarshalEvalConfig(data []byte) (EvalConfig, error) {
 	cfg := EvalConfig{
 		CustomMetrics:       raw.CustomMetrics,
 		UserSimulatorConfig: raw.UserSimulatorConfig,
+		Parallelism:         raw.Parallelism,
+	}
+	if cfg.Parallelism != nil && *cfg.Parallelism < 1 {
+		return EvalConfig{}, fmt.Errorf("parallelism must be at least 1, got %d", *cfg.Parallelism)
 	}
 	// snake_case wins when both appear, as the run request's keys do.
 	if mr := raw.MultiRunSnake; len(mr) > 0 && string(mr) != "null" {

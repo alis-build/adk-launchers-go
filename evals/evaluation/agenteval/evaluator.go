@@ -47,10 +47,15 @@ func EvaluateEvalSet(
 	}
 	metricList = models.AppendDefaultEfficiencyMetrics(metricList)
 
+	// Unset leaves 0, so the service's default applies.
+	parallelism := 0
+	if cfg.Parallelism != nil {
+		parallelism = *cfg.Parallelism
+	}
 	inferences, err := svc.PerformInference(ctx, service.InferenceRequest{
 		AppName:         appName,
 		EvalSetID:       evalSet.EvalSetID,
-		InferenceConfig: service.InferenceConfig{NumRuns: numRuns},
+		InferenceConfig: service.InferenceConfig{NumRuns: numRuns, Parallelism: parallelism},
 	})
 	if err != nil {
 		return nil, err
@@ -60,7 +65,7 @@ func EvaluateEvalSet(
 		InferenceResults: inferences,
 		EvaluateConfig: service.EvaluateConfig{
 			EvalMetrics: metricList,
-			Parallelism: 4,
+			Parallelism: parallelism,
 		},
 	})
 	if err != nil {

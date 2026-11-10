@@ -439,3 +439,20 @@ func TestAppendDefaultEfficiencyMetricsDoesNotMutate(t *testing.T) {
 		t.Errorf("input length = %d, want 1", len(in))
 	}
 }
+
+// Mirrors the three adk-python test_eval_config.py tests of e9e8f6156.
+func TestUnmarshalEvalConfigParallelism(t *testing.T) {
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"parallelism":8}`))
+	if err != nil || cfg.Parallelism == nil || *cfg.Parallelism != 8 {
+		t.Errorf("parallelism 8 = %v, %v", cfg.Parallelism, err)
+	}
+	cfg, err = models.UnmarshalEvalConfig([]byte(`{}`))
+	if err != nil || cfg.Parallelism != nil {
+		t.Errorf("no parallelism = %v, %v; want nil", cfg.Parallelism, err)
+	}
+	for _, n := range []string{"0", "-1"} {
+		if _, err := models.UnmarshalEvalConfig([]byte(`{"parallelism":` + n + `}`)); err == nil || !strings.Contains(err.Error(), "parallelism") {
+			t.Errorf("parallelism %s error = %v, want one naming parallelism", n, err)
+		}
+	}
+}
