@@ -234,7 +234,7 @@ All routes are under `/api/dev/apps/{appName}/...` by default (match webui `-api
 
 A run body that sets `live_model_config` or `user_simulator_config` is answered 400 until live and simulator runs are supported.
 
-Runs execute as the caller, so an agent that reads `user:` state or the memory service can score differently for different people. Seed what the agent needs in the case's session state, or compare results only within one caller's runs.
+Runs execute as the caller, so an agent that reads `user:` state or the memory service can score differently for different people. Seed what the agent needs in the case's session state, or compare results only within one caller's runs. For the same reason, eval runs use no stored [`tooloauth`](./tooloauth) token unless the embedder passes `evals.WithStoredOAuthTokens()`: otherwise an eval of a tool that writes would act on the caller's real account.
 
 See [`evals/doc.go`](evals/doc.go) for routes, request and response shapes, and storage options.
 

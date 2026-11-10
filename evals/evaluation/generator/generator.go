@@ -30,6 +30,10 @@ type InferenceOptions struct {
 // Generator runs agents through the user simulator loop for eval inference.
 type Generator struct {
 	Runtime *adkrun.Runtime
+	// UseStoredOAuthTokens lets tools use the caller's stored tooloauth
+	// tokens. Off by default: inference runs as the caller, so an eval of an
+	// OAuth tool would otherwise act on their real account.
+	UseStoredOAuthTokens bool
 }
 
 // NewEvalSessionID returns a new eval-scoped session id.
@@ -53,7 +57,8 @@ func evalSessionID(opts InferenceOptions) string {
 
 // GenerateInferences runs the agent against the user simulator and returns
 // invocations. The run is marked non-interactive: nobody can answer a
-// tooloauth sign-in pause during an eval, so such tools fail instead.
+// tooloauth sign-in pause during an eval, so such tools fail instead. Unless
+// UseStoredOAuthTokens is set, it is also marked to use no stored token.
 func (g *Generator) GenerateInferences(ctx context.Context, opts InferenceOptions) ([]models.Invocation, error) {
 	ctx = tooloauth.WithNonInteractive(ctx)
 	if g == nil || g.Runtime == nil {
@@ -61,6 +66,9 @@ func (g *Generator) GenerateInferences(ctx context.Context, opts InferenceOption
 	}
 	if opts.UserSimulator == nil {
 		return nil, fmt.Errorf("generator: user simulator is required")
+	}
+	if !g.UseStoredOAuthTokens {
+		ctx = tooloauth.WithoutStoredTokens(ctx)
 	}
 	if opts.UseLive {
 		return g.generateInferencesLive(ctx, opts)

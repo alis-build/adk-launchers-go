@@ -37,6 +37,9 @@ func (c Config) Provider(toolName string) (auth.CredentialProvider, error) {
 		if !ok || id.UserID == "" {
 			return nil, errors.New("tooloauth: no ADK invocation identity on the context")
 		}
+		if StoredTokensDisabled(ctx) {
+			return nil, fmt.Errorf("tooloauth: %s is not available in this run", t.Provider)
+		}
 		tok, err := r.credential(ctx, toolName, id.AppName, id.UserID)
 		switch {
 		case errors.Is(err, errMiss):

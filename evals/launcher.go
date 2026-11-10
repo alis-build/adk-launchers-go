@@ -83,6 +83,17 @@ func WithUserSimulatorProvider(p simulation.UserSimulatorProvider) Option {
 	}
 }
 
+// WithStoredOAuthTokens lets eval runs use the caller's stored tooloauth
+// tokens. Runs execute as the caller, so with this option an eval of an OAuth
+// tool acts on their real account, writes included; use it with a test
+// account. Without it, configured tools fail with "<Provider> is not
+// available in this run".
+func WithStoredOAuthTokens() Option {
+	return func(l *evalsLauncher) {
+		l.useStoredOAuthTokens = true
+	}
+}
+
 // WithPathPrefix sets the HTTP path prefix before /dev/apps/... (default "/api").
 // Match the webui -api_server_address and api sublauncher -path_prefix.
 func WithPathPrefix(prefix string) Option {
@@ -104,6 +115,8 @@ type evalsLauncher struct {
 	resultsManager storage.EvalSetResultsManager
 	registry       *metrics.Registry
 	simProvider    simulation.UserSimulatorProvider
+	// useStoredOAuthTokens is set by WithStoredOAuthTokens.
+	useStoredOAuthTokens bool
 
 	launcherCfg *adklauncher.Config
 	runtimeMu   sync.Mutex
@@ -373,7 +386,7 @@ func (l *evalsLauncher) localEvalService(appName string) (*service.LocalEvalServ
 		return nil, err
 	}
 	return &service.LocalEvalService{
-		Generator:   &generator.Generator{Runtime: rt},
+		Generator:   &generator.Generator{Runtime: rt, UseStoredOAuthTokens: l.useStoredOAuthTokens},
 		Sets:        l.setsManager,
 		Results:     l.resultsManager,
 		Registry:    l.registry,

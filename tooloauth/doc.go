@@ -94,7 +94,15 @@
 // pause. Mark its context with [WithNonInteractive]; a configured tool with
 // no token then fails with "connect <Provider> in chat first". The scheduler
 // and evals launchers in this module mark their runs. A headless run that
-// carries a sign-in reply still completes the sign-in.
+// carries a sign-in reply still completes the sign-in, unless it is also
+// marked WithoutStoredTokens.
+//
+// A run that must not use anyone's stored token at all is marked with
+// [WithoutStoredTokens]; every configured tool then fails with "<Provider>
+// is not available in this run". Eval runs execute as the caller, so the
+// evals launcher marks them this way unless the embedder opts in with
+// evals.WithStoredOAuthTokens: an eval of a tool that writes would otherwise
+// act on the caller's real account.
 //
 // # Limitations
 //

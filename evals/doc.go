@@ -29,6 +29,12 @@
 // user state and memory, seeding what they need in the case's session state,
 // or compare results only within one caller's runs.
 //
+// For the same reason eval runs use no stored OAuth token by default: a tool
+// configured in go.alis.build/adk/launchers/tooloauth fails with "<Provider>
+// is not available in this run", even for a caller who has connected it, so
+// an eval of a tool that writes never acts on their real account.
+// [WithStoredOAuthTokens] turns that off; use it with a test account.
+//
 // # Usage
 //
 // Register with the web launcher and enable the keyword at runtime:
@@ -82,6 +88,8 @@
 //   - [WithEvalSetsManager] / [WithEvalSetResultsManager] — custom storage backends.
 //   - [WithMetricRegistry] — metric evaluators (default [metrics.DefaultRegistry]).
 //   - [WithUserSimulatorProvider] — LLM-backed or static user simulators during inference.
+//   - [WithStoredOAuthTokens] — let eval runs use the caller's stored tooloauth
+//     tokens (off by default; see Identity).
 //   - [WithPathPrefix] — URL prefix before /dev/apps/... (default "/api").
 //
 // CLI flags (after the "evals" keyword on the web command line):

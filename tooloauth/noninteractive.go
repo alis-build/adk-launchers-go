@@ -18,3 +18,21 @@ func IsNonInteractive(ctx context.Context) bool {
 	marked, _ := ctx.Value(nonInteractiveKey{}).(bool)
 	return marked
 }
+
+// noStoredTokensKey marks a context whose run must not use stored tokens.
+type noStoredTokensKey struct{}
+
+// WithoutStoredTokens returns ctx marked as a run that must not use anyone's
+// stored token, such as an eval run executing as a real user: an eval of a
+// tool that writes would otherwise act on that user's account. Pass it to
+// the runner: every configured tool then fails with "<Provider> is not
+// available in this run", connected or not.
+func WithoutStoredTokens(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noStoredTokensKey{}, true)
+}
+
+// StoredTokensDisabled reports whether ctx was marked by WithoutStoredTokens.
+func StoredTokensDisabled(ctx context.Context) bool {
+	marked, _ := ctx.Value(noStoredTokensKey{}).(bool)
+	return marked
+}

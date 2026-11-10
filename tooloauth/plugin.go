@@ -30,7 +30,9 @@ func NewPlugin(cfg Config) (*plugin.Plugin, error) {
 }
 
 // beforeTool runs before every tool call. Tools the Config does not name run
-// untouched, and so does a configured tool whose user has a usable token. A
+// untouched. In a run marked WithoutStoredTokens every configured tool stops
+// with "<Provider> is not available in this run", before any lookup or
+// sign-in. Otherwise a configured tool whose user has a usable token runs. A
 // tool with no token pauses for the user's consent, and the resumed call
 // completes the sign-in instead of running the tool; in a run marked by
 // WithNonInteractive it stops with "connect <Provider> in chat first"
@@ -40,6 +42,9 @@ func (r *resolver) beforeTool(ctx agent.Context, t tool.Tool, _ map[string]any) 
 	cfgTool, ok := r.cfg.Tools[t.Name()]
 	if !ok {
 		return nil, nil
+	}
+	if StoredTokensDisabled(ctx) {
+		return nil, notAvailable(cfgTool)
 	}
 	if conf := ctx.ToolConfirmation(); conf != nil {
 		if req, ok := r.lookupSignIn(ctx); ok {
@@ -86,6 +91,12 @@ func (r *resolver) pauseForConsent(ctx agent.Context, name string, t Tool) (map[
 		return nil, unavailable(t)
 	}
 	return nil, fmt.Errorf("tool %q: %w", name, tool.ErrConfirmationRequired)
+}
+
+// notAvailable is the error the model sees for a configured tool in a run
+// marked WithoutStoredTokens.
+func notAvailable(t Tool) error {
+	return fmt.Errorf("%s is not available in this run", t.Provider)
 }
 
 // unavailable is the error the model sees when t's sign-in cannot be checked

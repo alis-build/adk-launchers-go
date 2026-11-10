@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -230,5 +231,63 @@ func TestProvider_rejectsInvalidConfig(t *testing.T) {
 	_, err := Config{}.Provider("calendar_list")
 	if err == nil || err.Error() != "tooloauth: Config.Tools is empty" {
 		t.Errorf("Provider() error = %v, want %q", err, "tooloauth: Config.Tools is empty")
+	}
+}
+
+// countingStore counts every call into the store it wraps.
+type countingStore struct {
+	auth.CredentialStore
+	calls atomic.Int32
+}
+
+func (s *countingStore) Get(ctx context.Context, key auth.CredentialKey) (auth.Credential, bool, error) {
+	s.calls.Add(1)
+	return s.CredentialStore.Get(ctx, key)
+}
+
+func (s *countingStore) Set(ctx context.Context, key auth.CredentialKey, cred auth.Credential, expiresAt time.Time) error {
+	s.calls.Add(1)
+	return s.CredentialStore.Set(ctx, key, cred, expiresAt)
+}
+
+func (s *countingStore) Delete(ctx context.Context, key auth.CredentialKey) error {
+	s.calls.Add(1)
+	return s.CredentialStore.Delete(ctx, key)
+}
+
+// The provider refuses in a run marked WithoutStoredTokens, without reading
+// the store: it is the only guard for a tool the plugin does not intercept,
+// such as one inside an agenttool sub-agent, whose runner has no plugins.
+func TestProvider_storedTokensDisabled_noLookup(t *testing.T) {
+	inner := auth.NewInMemoryCredentialStore()
+	cfg := calendarConfig(inner)
+	seed(t, cfg, "app-hit", "user-7", &Token{AccessToken: "at-real-account", Expiry: time.Now().Add(time.Hour)}, time.Now().Add(24*time.Hour))
+	store := &countingStore{CredentialStore: inner}
+	cfg.Store = store
+	p, err := cfg.Provider("calendar_list")
+	if err != nil {
+		t.Fatalf("Provider() error = %v", err)
+	}
+	var cred auth.Credential
+	var credErr error
+	probe, err := functiontool.New(functiontool.Config{Name: "probe", Description: "Probes."},
+		func(ctx agent.Context, _ struct{}) (map[string]any, error) {
+			cred, credErr = p.Credential(ctx)
+			return map[string]any{}, nil
+		})
+	if err != nil {
+		t.Fatalf("functiontool.New() error = %v", err)
+	}
+
+	newHarness(t, "app-hit", "probe", cfg, probe).run(WithoutStoredTokens(WithNonInteractive(t.Context())), "user-7", "s-1", genai.NewContentFromText("probe", genai.RoleUser))
+
+	if cred != nil || credErr == nil || credErr.Error() != "tooloauth: Google Calendar is not available in this run" {
+		t.Errorf("Credential() = %v, %v; want the not-available error", cred, credErr)
+	}
+	if errors.Is(credErr, ErrNotConnected) {
+		t.Error("Credential() error is ErrNotConnected, want a distinct refusal")
+	}
+	if got := store.calls.Load(); got != 0 {
+		t.Errorf("store called %d times, want 0", got)
 	}
 }
