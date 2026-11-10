@@ -218,6 +218,8 @@ type EvalCaseResult struct {
 	SessionID                     string                          `json:"sessionId"`
 	SessionDetails                json.RawMessage                 `json:"sessionDetails,omitempty"`
 	UserID                        *string                         `json:"userId,omitempty"`
+	// RepetitionIndex is which of the case's runs this result is, from 0.
+	RepetitionIndex *int `json:"repetitionIndex,omitempty"`
 }
 
 // EvalSetResult is set-level evaluation output persisted to history.

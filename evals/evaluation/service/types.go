@@ -14,7 +14,9 @@ const (
 
 // InferenceConfig controls inference execution.
 type InferenceConfig struct {
-	Parallelism        int  `json:"parallelism,omitempty"`
+	Parallelism int `json:"parallelism,omitempty"`
+	// NumRuns is how many times each case runs; 0 or less means once.
+	NumRuns            int  `json:"numRuns,omitempty"`
 	UseLive            bool `json:"useLive,omitempty"`
 	LiveTimeoutSeconds int  `json:"liveTimeoutSeconds,omitempty"`
 }
@@ -44,6 +46,8 @@ type InferenceResult struct {
 	Inferences   []models.Invocation `json:"inferences,omitempty"`
 	Status       InferenceStatus     `json:"status"`
 	ErrorMessage string              `json:"errorMessage,omitempty"`
+	// RepetitionIndex is which of the case's runs this is, from 0.
+	RepetitionIndex *int `json:"repetitionIndex,omitempty"`
 }
 
 // EvaluateConfig selects metrics and parallelism for scoring.

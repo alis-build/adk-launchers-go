@@ -43,6 +43,13 @@ func (s *LocalEvalService) PerformInference(ctx context.Context, req InferenceRe
 		return nil, fmt.Errorf("eval set %q not found for app %q", req.EvalSetID, req.AppName)
 	}
 	cases := filterEvalCases(evalSet.EvalCases, req.EvalCaseIDs)
+	// Each case runs NumRuns times through the same worker pool, so
+	// Parallelism bounds the repeats too. Results are case-major: case 0's
+	// runs 0..n-1, then case 1's, so callers can index them.
+	runs := req.InferenceConfig.NumRuns
+	if runs <= 0 {
+		runs = 1
+	}
 	parallelism := req.InferenceConfig.Parallelism
 	if parallelism <= 0 {
 		parallelism = 4
@@ -50,10 +57,12 @@ func (s *LocalEvalService) PerformInference(ctx context.Context, req InferenceRe
 
 	type item struct {
 		idx int
+		rep int
 		c   models.EvalCase
 	}
+	jobs := len(cases) * runs
 	work := make(chan item)
-	out := make([]InferenceResult, len(cases))
+	out := make([]InferenceResult, jobs)
 	var wg sync.WaitGroup
 	var firstErr error
 	var errMu sync.Mutex
@@ -76,15 +85,12 @@ func (s *LocalEvalService) PerformInference(ctx context.Context, req InferenceRe
 			}
 		}()
 		for job := range work {
-			res := s.runInference(ctx, req.AppName, req.EvalSetID, req.UserID, job.c, req.InferenceConfig, req.SessionState)
+			res := s.runInference(ctx, req.AppName, req.EvalSetID, req.UserID, job.c, job.rep, req.InferenceConfig, req.SessionState)
 			out[job.idx] = res
 		}
 	}
 
-	nWorkers := parallelism
-	if nWorkers > len(cases) {
-		nWorkers = len(cases)
-	}
+	nWorkers := min(parallelism, jobs)
 	if nWorkers == 0 {
 		return nil, nil
 	}
@@ -97,8 +103,8 @@ func (s *LocalEvalService) PerformInference(ctx context.Context, req InferenceRe
 		wg.Wait()
 		close(workersDone)
 	}()
-	sendErr := sendJobs(ctx, work, workersDone, len(cases), func(i int) item {
-		return item{idx: i, c: cases[i]}
+	sendErr := sendJobs(ctx, work, workersDone, jobs, func(i int) item {
+		return item{idx: i, rep: i % runs, c: cases[i/runs]}
 	})
 	close(work)
 	<-workersDone
@@ -145,7 +151,7 @@ func runSessionInput(input *models.SessionInput, userID string) *models.SessionI
 // The session always runs on the runtime's app, and as userID when it is set,
 // whatever the stored case names: a case is shared data, and must not choose
 // which agent runs or whose sessions a run writes to.
-func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID, userID string, evalCase models.EvalCase, cfg InferenceConfig, runSessionState map[string]any) InferenceResult {
+func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID, userID string, evalCase models.EvalCase, rep int, cfg InferenceConfig, runSessionState map[string]any) InferenceResult {
 	sessionID := generator.NewEvalSessionID()
 	if s.NewSessionID != nil {
 		sessionID = s.NewSessionID()
@@ -156,7 +162,9 @@ func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID,
 		EvalSetID:  evalSetID,
 		EvalCaseID: evalCase.EvalID,
 		SessionID:  sessionID,
-		UserID:     evalCaseUserID(&models.EvalCase{SessionInput: input}),
+		// Every run is labelled, a single one with 0, as adk-python does.
+		RepetitionIndex: &rep,
+		UserID:          evalCaseUserID(&models.EvalCase{SessionInput: input}),
 	}
 	sim, err := s.SimProvider.Provide(evalCase)
 	if err != nil {
@@ -235,6 +243,7 @@ func (s *LocalEvalService) Evaluate(ctx context.Context, req EvaluateRequest) ([
 					EvalID:          job.inf.EvalCaseID,
 					FinalEvalStatus: models.EvalStatusFailed,
 					SessionID:       job.inf.SessionID,
+					RepetitionIndex: job.inf.RepetitionIndex,
 				}
 				// A failed case still names its user and session, as in
 				// adk-python, so a client can open the session it failed in.
@@ -311,6 +320,7 @@ func (s *LocalEvalService) evaluateSingle(ctx context.Context, inf InferenceResu
 			EvalID:          inf.EvalCaseID,
 			FinalEvalStatus: models.EvalStatusFailed,
 			SessionID:       inf.SessionID,
+			RepetitionIndex: inf.RepetitionIndex,
 		}
 		s.attachSessionMetadata(ctx, inf, evalCase, &result)
 		return result, nil
@@ -355,6 +365,7 @@ func (s *LocalEvalService) evaluateSingle(ctx context.Context, inf InferenceResu
 		OverallEvalMetricResults:      overall,
 		EvalMetricResultPerInvocation: perInvocation,
 		SessionID:                     inf.SessionID,
+		RepetitionIndex:               inf.RepetitionIndex,
 	}
 	s.attachSessionMetadata(ctx, inf, evalCase, &result)
 	return result, nil
