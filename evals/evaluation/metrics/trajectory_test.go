@@ -136,3 +136,12 @@ func TestSnakeCaseMatchTypeCriterion(t *testing.T) {
 		}
 	}
 }
+
+// When both spellings appear the camelCase alias wins, as in pydantic.
+func TestIgnoreArgsAliasWinsOverFieldName(t *testing.T) {
+	got := score(trajectoryScores(t, `{"threshold":0.5,"ignoreArgs":false,"ignore_args":true}`,
+		[2][]*genai.FunctionCall{{fc("t1", map[string]any{"a": 1})}, {fc("t1", map[string]any{"z": 999})}}))
+	if got != 0 {
+		t.Errorf("score = %v, want 0 (arguments compared)", got)
+	}
+}

@@ -1093,7 +1093,8 @@ func TestRunEvalReportsEfficiencyMetricsUnrequested(t *testing.T) {
 }
 
 // runGated starts a run of set1 with body in the background and returns a
-// channel that yields the handler's result.
+// channel that yields the handler's error, or one if the response does not
+// hold a result for each of the three cases.
 func runGated(t *testing.T, l *evalsLauncher, body string) <-chan error {
 	t.Helper()
 	// Checked here because callHandlerAs fails the test on a body it cannot
@@ -1107,6 +1108,12 @@ func runGated(t *testing.T, l *evalsLauncher, body string) <-chan error {
 			json.RawMessage(body), map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
 		if err == nil && rec.Code != http.StatusOK {
 			err = fmt.Errorf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		if err == nil {
+			var resp RunEvalResponse
+			if err = json.Unmarshal(rec.Body.Bytes(), &resp); err == nil && len(resp.RunEvalResults) != 3 {
+				err = fmt.Errorf("got %d results, want 3", len(resp.RunEvalResults))
+			}
 		}
 		done <- err
 	}()

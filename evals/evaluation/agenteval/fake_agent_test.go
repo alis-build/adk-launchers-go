@@ -3,7 +3,6 @@ package agenteval_test
 import (
 	"context"
 	"iter"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,12 +14,10 @@ import (
 	"google.golang.org/genai"
 )
 
-// gate blocks each caller of enter until released, counting how many are
-// inside at once.
+// gate blocks each caller of enter until released.
 type gate struct {
-	inFlight, maxInFlight atomic.Int32
-	arrived               chan struct{}
-	release               chan struct{}
+	arrived chan struct{}
+	release chan struct{}
 }
 
 func newGate() *gate {
@@ -28,16 +25,8 @@ func newGate() *gate {
 }
 
 func (g *gate) enter() {
-	n := g.inFlight.Add(1)
-	for {
-		m := g.maxInFlight.Load()
-		if n <= m || g.maxInFlight.CompareAndSwap(m, n) {
-			break
-		}
-	}
 	g.arrived <- struct{}{}
 	<-g.release
-	g.inFlight.Add(-1)
 }
 
 // waitArrived waits for one caller to enter, failing after 5 s.

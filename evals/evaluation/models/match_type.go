@@ -32,7 +32,9 @@ func (c *ToolTrajectoryCriterion) UnmarshalJSON(data []byte) error {
 	if v, ok := raw["threshold"]; ok {
 		_ = json.Unmarshal(v, &c.Threshold)
 	}
-	for _, k := range []string{"ignoreArgs", "ignore_args"} {
+	// The camelCase alias is read last so it wins when both appear, as in
+	// pydantic.
+	for _, k := range []string{"ignore_args", "ignoreArgs"} {
 		if v, ok := raw[k]; ok {
 			if err := json.Unmarshal(v, &c.IgnoreArgs); err != nil {
 				return fmt.Errorf("%s: %w", k, err)
