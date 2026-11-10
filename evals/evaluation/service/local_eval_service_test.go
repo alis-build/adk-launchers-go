@@ -5,6 +5,7 @@ import (
 	"iter"
 	"regexp"
 	"strconv"
+	"sync"
 	"testing"
 
 	"go.alis.build/adk/launchers/evals/evaluation/generator"
@@ -518,5 +519,199 @@ func TestSavedEvalResultIDHasAppSetTimestampShape(t *testing.T) {
 	}
 	if want := "app_set1_" + strconv.FormatInt(int64(saved.CreationTimestamp), 10); ids[0] != want {
 		t.Errorf("result ID = %q, want %q (app, set and creationTimestamp)", ids[0], want)
+	}
+}
+
+// recordingSessions records the user of every session call it passes on.
+type recordingSessions struct {
+	session.Service
+	mu    sync.Mutex
+	users []string
+}
+
+func (r *recordingSessions) record(user string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.users = append(r.users, user)
+}
+
+func (r *recordingSessions) Get(ctx context.Context, req *session.GetRequest) (*session.GetResponse, error) {
+	r.record(req.UserID)
+	return r.Service.Get(ctx, req)
+}
+
+func (r *recordingSessions) Create(ctx context.Context, req *session.CreateRequest) (*session.CreateResponse, error) {
+	r.record(req.UserID)
+	return r.Service.Create(ctx, req)
+}
+
+func (r *recordingSessions) List(ctx context.Context, req *session.ListRequest) (*session.ListResponse, error) {
+	r.record(req.UserID)
+	return r.Service.List(ctx, req)
+}
+
+func (r *recordingSessions) AppendEvent(ctx context.Context, s session.Session, ev *session.Event) error {
+	r.record(s.UserID())
+	return r.Service.AppendEvent(ctx, s, ev)
+}
+
+// pinnedService is a service over set1 with one static case, case1, whose
+// session input is input; its sessions are sessions (nil for none).
+func pinnedService(t *testing.T, sessions session.Service, input *models.SessionInput) *service.LocalEvalService {
+	t.Helper()
+	sets := storage.NewInMemoryEvalSetsManager()
+	_, _ = sets.CreateEvalSet("app", "set1")
+	if err := sets.AddEvalCase("app", "set1", models.EvalCase{
+		EvalID:       "case1",
+		SessionInput: input,
+		Conversation: []models.Invocation{{UserContent: genai.NewContentFromText("Hello", genai.RoleUser)}},
+	}); err != nil {
+		t.Fatalf("AddEvalCase: %v", err)
+	}
+	a, err := agent.New(agent.Config{Name: "app", Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			ev := session.NewEvent(ctx, ctx.InvocationID())
+			ev.Author = "app"
+			ev.Content = genai.NewContentFromText("ok", genai.RoleModel)
+			yield(ev, nil)
+		}
+	}})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	runnerSessions := sessions
+	if runnerSessions == nil {
+		runnerSessions = session.InMemoryService()
+	}
+	rt, err := adkrun.NewRuntime(&launcher.Config{AgentLoader: agent.NewSingleLoader(a), SessionService: runnerSessions}, "app")
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	return &service.LocalEvalService{Generator: &generator.Generator{Runtime: rt}, Sets: sets, Registry: metrics.NewDefaultRegistry(), SimProvider: simulation.UserSimulatorProvider{}, Sessions: sessions}
+}
+
+// prepareSession creates session fixed under user with state and one user
+// event, "earlier turn".
+func prepareSession(t *testing.T, sessions session.Service, user string, state map[string]any) {
+	t.Helper()
+	ctx := context.Background()
+	resp, err := sessions.Create(ctx, &session.CreateRequest{AppName: "app", UserID: user, SessionID: "fixed", State: state})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	ev := session.NewEvent(ctx, "earlier")
+	ev.Author = "user"
+	ev.Content = genai.NewContentFromText("earlier turn", genai.RoleUser)
+	if err := sessions.AppendEvent(ctx, resp.Session, ev); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+}
+
+func getSession(t *testing.T, sessions session.Service, user string) session.Session {
+	t.Helper()
+	resp, err := sessions.Get(context.Background(), &session.GetRequest{AppName: "app", UserID: user, SessionID: "fixed"})
+	if err != nil || resp == nil {
+		return nil
+	}
+	return resp.Session
+}
+
+func inferOne(t *testing.T, svc *service.LocalEvalService, req service.InferenceRequest) []service.InferenceResult {
+	t.Helper()
+	req.AppName, req.EvalSetID = "app", "set1"
+	inf, err := svc.PerformInference(context.Background(), req)
+	if err != nil {
+		t.Fatalf("PerformInference: %v", err)
+	}
+	for _, r := range inf {
+		if r.Status != service.InferenceStatusSuccess {
+			t.Fatalf("inference = %+v", r)
+		}
+	}
+	return inf
+}
+
+// Acceptance 7, first half; mirrors adk-python test_evaluation_generator.py:1159.
+func TestPinnedSessionOfCallerIsReused(t *testing.T) {
+	sessions := session.InMemoryService()
+	prepareSession(t, sessions, "caller", map[string]any{"prepared_by": "caller"})
+	svc := pinnedService(t, sessions, &models.SessionInput{SessionID: "fixed", State: map[string]any{"prepared_by": "case"}})
+	inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller"})
+	if inf[0].SessionID != "fixed" {
+		t.Errorf("session ID = %q, want fixed", inf[0].SessionID)
+	}
+	s := getSession(t, sessions, "caller")
+	if s == nil {
+		t.Fatal("pinned session gone")
+	}
+	if v, _ := s.State().Get("prepared_by"); v != "caller" {
+		t.Errorf("prepared_by = %v, want caller (the case state must not overwrite it)", v)
+	}
+	if s.Events().Len() < 3 || s.Events().At(0).Content.Parts[0].Text != "earlier turn" {
+		t.Errorf("events = %d, first %+v; want the earlier turn kept and the new turn added", s.Events().Len(), s.Events().At(0).Content)
+	}
+}
+
+// Acceptance 7, second half: a case naming another user's session never
+// reads or writes it; the caller gets a fresh session of that ID.
+func TestPinnedSessionOfAnotherUserIsNeverRead(t *testing.T) {
+	inner := session.InMemoryService()
+	prepareSession(t, inner, "other-user", map[string]any{"secret": "s"})
+	rec := &recordingSessions{Service: inner}
+	svc := pinnedService(t, rec, &models.SessionInput{UserID: "other-user", SessionID: "fixed", State: map[string]any{"prepared_by": "case"}})
+	inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller"})
+	// Scoring reads the run's session back; that must be the caller's too.
+	if _, err := svc.Evaluate(context.Background(), service.EvaluateRequest{InferenceResults: inf, EvaluateConfig: service.EvaluateConfig{
+		EvalMetrics: []models.EvalMetric{{MetricName: "response_match_score", Threshold: 0.1}},
+	}}); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	for _, u := range rec.users {
+		if u == "other-user" {
+			t.Fatalf("session calls were made as other-user: %v", rec.users)
+		}
+	}
+	if s := getSession(t, inner, "other-user"); s == nil || s.Events().Len() != 1 {
+		t.Errorf("other-user's session changed")
+	}
+	s := getSession(t, inner, "caller")
+	if s == nil {
+		t.Fatal("no session fixed under the caller")
+	}
+	if v, _ := s.State().Get("prepared_by"); v != "case" {
+		t.Errorf("prepared_by = %v, want the case's state on the new session", v)
+	}
+	if v, err := s.State().Get("secret"); err == nil && v != nil {
+		t.Errorf("caller's session has other-user's secret")
+	}
+}
+
+// The agenteval path has no caller: the case's own user is looked up.
+func TestPinnedSessionWithoutCallerUsesCaseUser(t *testing.T) {
+	sessions := session.InMemoryService()
+	prepareSession(t, sessions, "u", map[string]any{"prepared_by": "caller"})
+	svc := pinnedService(t, sessions, &models.SessionInput{UserID: "u", SessionID: "fixed", State: map[string]any{"prepared_by": "case"}})
+	inf := inferOne(t, svc, service.InferenceRequest{})
+	if inf[0].SessionID != "fixed" {
+		t.Errorf("session ID = %q, want fixed", inf[0].SessionID)
+	}
+	if v, _ := getSession(t, sessions, "u").State().Get("prepared_by"); v != "caller" {
+		t.Errorf("prepared_by = %v, want caller", v)
+	}
+}
+
+func TestPinnedSessionWithoutSessionService(t *testing.T) {
+	svc := pinnedService(t, nil, &models.SessionInput{SessionID: "fixed"})
+	if inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller"}); inf[0].SessionID != "fixed" {
+		t.Errorf("session ID = %q, want fixed", inf[0].SessionID)
+	}
+}
+
+// Mirrors adk-python test_local_eval_service.py:315.
+func TestNumRunsDropsPinnedSession(t *testing.T) {
+	svc := pinnedService(t, session.InMemoryService(), &models.SessionInput{SessionID: "fixed"})
+	inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller", InferenceConfig: service.InferenceConfig{NumRuns: 2}})
+	if len(inf) != 2 || inf[0].SessionID == "fixed" || inf[1].SessionID == "fixed" || inf[0].SessionID == inf[1].SessionID {
+		t.Errorf("session IDs = %q, %q; want two fresh, different ones", inf[0].SessionID, inf[len(inf)-1].SessionID)
 	}
 }

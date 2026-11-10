@@ -464,3 +464,25 @@ func TestUnmarshalEvalConfigSnakeUserSimulatorKey(t *testing.T) {
 		t.Errorf("user simulator config = %s, %v; want the snake_case key kept", cfg.UserSimulatorConfig, err)
 	}
 }
+
+// Mirrors adk-python test_eval_case.py:190 and :202.
+func TestSessionInputSessionIDRoundTrip(t *testing.T) {
+	var in models.SessionInput
+	if err := json.Unmarshal([]byte(`{"appName":"a","userId":"u","sessionId":"s1"}`), &in); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if in.SessionID != "s1" || in.Extra["sessionId"] != nil {
+		t.Errorf("session input = %+v, want SessionID s1 and no Extra entry", in)
+	}
+	out, err := json.Marshal(in)
+	if err != nil || !strings.Contains(string(out), `"sessionId":"s1"`) {
+		t.Errorf("marshalled = %s, %v; want sessionId s1", out, err)
+	}
+	var none models.SessionInput
+	if err := json.Unmarshal([]byte(`{"appName":"a","userId":"u"}`), &none); err != nil || none.SessionID != "" {
+		t.Errorf("without sessionId: %+v, %v", none, err)
+	}
+	if out, _ := json.Marshal(none); strings.Contains(string(out), "sessionId") {
+		t.Errorf("marshalled = %s, want no sessionId", out)
+	}
+}

@@ -43,6 +43,9 @@ func (s *LocalEvalService) PerformInference(ctx context.Context, req InferenceRe
 		return nil, fmt.Errorf("eval set %q not found for app %q", req.EvalSetID, req.AppName)
 	}
 	cases := filterEvalCases(evalSet.EvalCases, req.EvalCaseIDs)
+	if req.InferenceConfig.NumRuns > 1 {
+		cases = dropPinnedSessions(cases, req.InferenceConfig.NumRuns)
+	}
 	// Each case runs NumRuns times through the same worker pool, so
 	// Parallelism bounds the repeats too. Results are case-major: case 0's
 	// runs 0..n-1, then case 1's, so callers can index them.
@@ -146,6 +149,41 @@ func runSessionInput(input *models.SessionInput, userID string) *models.SessionI
 	return &cp
 }
 
+// dropPinnedSessions returns cases with every pinned session cleared, for a
+// run of each case numRuns times: the runs would share one session, so each
+// starts a fresh one instead, as in adk-python. The stored cases are not
+// modified.
+func dropPinnedSessions(cases []models.EvalCase, numRuns int) []models.EvalCase {
+	out := make([]models.EvalCase, len(cases))
+	for i, c := range cases {
+		if c.SessionInput != nil && c.SessionInput.SessionID != "" {
+			log.Printf("evals: eval case %q pins session %q, but num_runs is %d, so each run starts a fresh session and the pinned session is not used.", c.EvalID, c.SessionInput.SessionID, numRuns)
+			in := *c.SessionInput
+			in.SessionID = ""
+			c.SessionInput = &in
+		}
+		out[i] = c
+	}
+	return out
+}
+
+// pinnedSessionExists reports whether input's pinned session exists for the
+// user the run uses: the caller when the request names one (runSessionInput
+// has already set it), else the case's user or the default eval user. No
+// other user's sessions are looked at. Without a session service, or on a
+// lookup error, the session counts as absent and the runner creates it.
+func (s *LocalEvalService) pinnedSessionExists(ctx context.Context, input *models.SessionInput) bool {
+	if s.Sessions == nil {
+		return false
+	}
+	resp, err := s.Sessions.Get(ctx, &session.GetRequest{
+		AppName:   s.Generator.Runtime.AppName(),
+		UserID:    evalCaseUserID(&models.EvalCase{SessionInput: input}),
+		SessionID: input.SessionID,
+	})
+	return err == nil && resp != nil && resp.Session != nil
+}
+
 // runInference executes agent inference for a single eval case.
 //
 // The session always runs on the runtime's app, and as userID when it is set,
@@ -157,6 +195,14 @@ func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID,
 		sessionID = s.NewSessionID()
 	}
 	input := runSessionInput(effectiveSessionInput(runSessionState, evalCase), userID)
+	if input.SessionID != "" {
+		sessionID = input.SessionID
+		if s.pinnedSessionExists(ctx, input) {
+			// A prepared session keeps its own state, as in adk-python,
+			// which applies the case's state only when it creates one.
+			input.State = nil
+		}
+	}
 	result := InferenceResult{
 		AppName:    appName,
 		EvalSetID:  evalSetID,

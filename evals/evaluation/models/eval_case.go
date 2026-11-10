@@ -10,7 +10,10 @@ type SessionInput struct {
 	AppName string         `json:"appName"`
 	UserID  string         `json:"userId"`
 	State   map[string]any `json:"state,omitempty"`
-	Extra   map[string]any `json:"-"`
+	// SessionID pins the case to a prepared session, reused when it exists
+	// under the user the run uses and created with that ID otherwise.
+	SessionID string         `json:"sessionId,omitempty"`
+	Extra     map[string]any `json:"-"`
 }
 
 // UnmarshalJSON preserves unknown SessionInput fields in Extra for forward compatibility.
@@ -23,6 +26,7 @@ func (s *SessionInput) UnmarshalJSON(data []byte) error {
 	s.AppName = a.AppName
 	s.UserID = a.UserID
 	s.State = a.State
+	s.SessionID = a.SessionID
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -31,6 +35,7 @@ func (s *SessionInput) UnmarshalJSON(data []byte) error {
 	delete(raw, "appName")
 	delete(raw, "userId")
 	delete(raw, "state")
+	delete(raw, "sessionId")
 	if len(raw) > 0 {
 		s.Extra = make(map[string]any, len(raw))
 		for k, v := range raw {
@@ -51,6 +56,9 @@ func (s SessionInput) MarshalJSON() ([]byte, error) {
 	m["userId"] = s.UserID
 	if s.State != nil {
 		m["state"] = s.State
+	}
+	if s.SessionID != "" {
+		m["sessionId"] = s.SessionID
 	}
 	for k, v := range s.Extra {
 		m[k] = v
