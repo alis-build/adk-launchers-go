@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"go.alis.build/adk/launchers/evals/evaluation/generator"
@@ -178,10 +179,19 @@ func (s *LocalEvalService) pinnedSessionExists(ctx context.Context, input *model
 	}
 	resp, err := s.Sessions.Get(ctx, &session.GetRequest{
 		AppName:   s.Generator.Runtime.AppName(),
-		UserID:    evalCaseUserID(&models.EvalCase{SessionInput: input}),
+		UserID:    pinLookupUser(input),
 		SessionID: input.SessionID,
 	})
 	return err == nil && resp != nil && resp.Session != nil
+}
+
+// pinLookupUser is the user the generator runs input as: its UserID, or the
+// default eval user when that is blank (generator sessionBootstrap).
+func pinLookupUser(input *models.SessionInput) string {
+	if strings.TrimSpace(input.UserID) == "" {
+		return defaultEvalUserID
+	}
+	return input.UserID
 }
 
 // runInference executes agent inference for a single eval case.
@@ -195,7 +205,8 @@ func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID,
 		sessionID = s.NewSessionID()
 	}
 	input := runSessionInput(effectiveSessionInput(runSessionState, evalCase), userID)
-	if input.SessionID != "" {
+	// Blank IDs are treated as unset, as the generator does.
+	if strings.TrimSpace(input.SessionID) != "" {
 		sessionID = input.SessionID
 		if s.pinnedSessionExists(ctx, input) {
 			// A prepared session keeps its own state, as in adk-python,

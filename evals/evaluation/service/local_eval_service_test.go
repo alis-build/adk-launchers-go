@@ -5,6 +5,7 @@ import (
 	"iter"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -556,8 +557,17 @@ func (r *recordingSessions) AppendEvent(ctx context.Context, s session.Session, 
 }
 
 // pinnedService is a service over set1 with one static case, case1, whose
-// session input is input; its sessions are sessions (nil for none).
+// session input is input; its sessions are sessions (nil for none: the
+// runner then gets a private store, see pinnedServiceWithRunnerSessions).
 func pinnedService(t *testing.T, sessions session.Service, input *models.SessionInput) *service.LocalEvalService {
+	t.Helper()
+	svc, _ := pinnedServiceWithRunnerSessions(t, sessions, input)
+	return svc
+}
+
+// pinnedServiceWithRunnerSessions is pinnedService, also returning the
+// session store the runner writes to.
+func pinnedServiceWithRunnerSessions(t *testing.T, sessions session.Service, input *models.SessionInput) (*service.LocalEvalService, session.Service) {
 	t.Helper()
 	sets := storage.NewInMemoryEvalSetsManager()
 	_, _ = sets.CreateEvalSet("app", "set1")
@@ -587,7 +597,7 @@ func pinnedService(t *testing.T, sessions session.Service, input *models.Session
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
-	return &service.LocalEvalService{Generator: &generator.Generator{Runtime: rt}, Sets: sets, Registry: metrics.NewDefaultRegistry(), SimProvider: simulation.UserSimulatorProvider{}, Sessions: sessions}
+	return &service.LocalEvalService{Generator: &generator.Generator{Runtime: rt}, Sets: sets, Registry: metrics.NewDefaultRegistry(), SimProvider: simulation.UserSimulatorProvider{}, Sessions: sessions}, runnerSessions
 }
 
 // prepareSession creates session fixed under user with state and one user
@@ -700,10 +710,31 @@ func TestPinnedSessionWithoutCallerUsesCaseUser(t *testing.T) {
 	}
 }
 
+// Without a session service nothing can be looked up, so the pinned session
+// counts as new and gets the case's state.
 func TestPinnedSessionWithoutSessionService(t *testing.T) {
-	svc := pinnedService(t, nil, &models.SessionInput{SessionID: "fixed"})
+	svc, runner := pinnedServiceWithRunnerSessions(t, nil, &models.SessionInput{SessionID: "fixed", State: map[string]any{"prepared_by": "case"}})
 	if inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller"}); inf[0].SessionID != "fixed" {
 		t.Errorf("session ID = %q, want fixed", inf[0].SessionID)
+	}
+	if v, _ := getSession(t, runner, "caller").State().Get("prepared_by"); v != "case" {
+		t.Errorf("prepared_by = %v, want the case's state", v)
+	}
+}
+
+// A blank pin is no pin, and a blank user is the default eval user, as the
+// generator treats them.
+func TestPinnedSessionBlankIDsAreUnset(t *testing.T) {
+	sessions := session.InMemoryService()
+	svc := pinnedService(t, sessions, &models.SessionInput{UserID: "  ", SessionID: "  "})
+	if inf := inferOne(t, svc, service.InferenceRequest{}); strings.TrimSpace(inf[0].SessionID) == "" {
+		t.Errorf("session ID = %q, want a fresh one", inf[0].SessionID)
+	}
+	prepareSession(t, sessions, "test_user_id", map[string]any{"prepared_by": "caller"})
+	svc = pinnedService(t, sessions, &models.SessionInput{UserID: "  ", SessionID: "fixed", State: map[string]any{"prepared_by": "case"}})
+	inferOne(t, svc, service.InferenceRequest{})
+	if v, _ := getSession(t, sessions, "test_user_id").State().Get("prepared_by"); v != "caller" {
+		t.Errorf("prepared_by = %v, want the prepared session kept", v)
 	}
 }
 
