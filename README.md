@@ -210,7 +210,7 @@ Params are protojson-compatible camelCase. See [`agui/doc.go`](agui/doc.go) and 
 
 #### Evals (`evals` sublauncher)
 
-Requires `evals` on the `adk web` command line. Local storage needs `-agents_dir=./agents` or [evals.WithAgentsDir](./evals). GCS storage: `-eval_storage_uri=gs://bucket` or [evals.WithEvalStorageURI](./evals).
+Requires `evals` on the `adk web` command line. By default eval sets and results live under `-agents_dir=./agents` ([evals.WithAgentsDir](./evals)). A storage URI moves them: `-eval_storage_uri=gs://bucket` for Cloud Storage or `-eval_storage_uri=file:///abs/path` for a local directory ([evals.WithEvalStorageURI](./evals)); when neither is set, the `ADK_EVAL_STORAGE_URI` environment variable supplies it, as in adk-python.
 
 This sublauncher is separate from [`console`](./console): it serves the dev evaluation API for adk-web, not the operator console SPA. Every route requires a caller identity; see [Authentication and authorization](#authentication-and-authorization).
 
@@ -232,7 +232,7 @@ All routes are under `/api/dev/apps/{appName}/...` by default (match webui `-api
 | GET            | `/api/dev/apps/{app}/eval_results/{resultId}`       | Get eval result                |
 | GET            | `/api/dev/apps/{app}/metrics-info`                  | Registered metric metadata     |
 
-A run body that sets `live_model_config` or `user_simulator_config` is answered 400 until live and simulator runs are supported.
+A run body may also set `parallelism` (cases run at once; Go only), `live_model_config` (run inference live; any object, even `{}`, turns it on) and `user_simulator_config` (`llm_backed`, or `llm_audio` to speak every user turn through an audio model resolved from ADK's model registry; adk-python's default `cloud_tts` has no Go implementation, so register one or name another). Every run reports the efficiency metrics (tool calls, model calls, tokens, duration). A case's `sessionInput.sessionId` reuses a prepared session only when it is the caller's own.
 
 Runs execute as the caller, so an agent that reads `user:` state or the memory service can score differently for different people. Seed what the agent needs in the case's session state, or compare results only within one caller's runs. For the same reason, eval runs use no stored [`tooloauth`](./tooloauth) token unless the embedder passes `evals.WithStoredOAuthTokens()`: otherwise an eval of a tool that writes would act on the caller's real account.
 

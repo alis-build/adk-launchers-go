@@ -9,6 +9,29 @@
 // Vertex and LLM-judge evaluators require injectable clients via
 // [Registry.SetConfig] and [RegistryConfig].
 //
+// # Efficiency metrics
+//
+// Four informational metrics report what a run cost without passing or
+// failing it (status [models.EvalStatusInformational]); a threshold on them is
+// rejected:
+//
+//   - tool_call_count_v1 — tool calls per invocation.
+//   - inference_call_count_v1 — model calls per invocation.
+//   - token_usage_v1 — prompt, completion and total tokens, with the
+//     per-model breakdown in [models.TokenUsageDetails].
+//   - invocation_duration_v1 — seconds per invocation, split into model and
+//     tool time in [models.DurationDetails]. Live inference records no
+//     durations, so for live runs this metric reports no value.
+//
+// The evals launcher adds all four to every run.
+//
+// # Tool trajectory matching
+//
+// tool_trajectory_avg_score compares tool calls by name and arguments, with
+// the criterion's matchType (EXACT, IN_ORDER or ANY_ORDER; match_type is
+// accepted too). With ignoreArgs (or ignore_args) set, only tool names are
+// compared, under any match type.
+//
 // # Rubric-based LLM-judge metrics
 //
 // Three metrics score a conversation against a caller-supplied
@@ -54,10 +77,19 @@
 //     `results[i].ActualInvocation == actual[i]` invariant holds).
 //  5. Overall = num_valid / num_evaluated across the collected results.
 //
+// The turns and the stop-signal turn are judged concurrently (see Judge
+// clients and safety); results keep turn order, and the first failed judge
+// call cancels the others and fails the metric, as in adk-python.
+//
 // # Judge clients and safety
 //
 // Metrics that call an LLM judge return [models.EvalStatusNotEvaluated] when
 // [RegistryConfig.JudgeClient] is nil, matching the adk-python fallback.
-// Callers should pass a client that respects rate limits — samples are drawn
-// sequentially to bound eval cost.
+//
+// A metric makes at most [models.JudgeModelOptions.ParallelismLimit] judge
+// calls at once, across its invocations and samples: one at a time when
+// unset, so eval cost and rate-limit pressure stay as they were unless a
+// criterion raises it. A limit below 1 is rejected when the evaluator is
+// built. For the per-invocation judge metrics a failed judge call leaves only
+// its own invocation NOT_EVALUATED (logged), not the whole metric.
 package metrics

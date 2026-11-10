@@ -27,8 +27,9 @@ type RunEvalRequest struct {
 	EvalMetrics  []models.EvalMetric `json:"eval_metrics"`
 	SessionState map[string]any      `json:"session_state,omitempty"`
 	// LiveModelConfig and UserSimulatorConfig are adk-web main's live-mode and
-	// audio-simulator settings, kept raw until they are supported. A field is
-	// set when present and not JSON null; {} counts as set, as in adk-python.
+	// user-simulator settings, kept raw and decoded per run (see the package
+	// doc's Run options). A field is set when present and not JSON null; {}
+	// counts as set, as in adk-python.
 	LiveModelConfig     json.RawMessage `json:"live_model_config,omitempty"`
 	UserSimulatorConfig json.RawMessage `json:"user_simulator_config,omitempty"`
 	// Parallelism caps how many cases run and are scored at once; nil leaves

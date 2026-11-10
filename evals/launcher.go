@@ -51,7 +51,9 @@ func WithAgentsDir(dir string) Option {
 	}
 }
 
-// WithEvalStorageURI uses GCS for eval sets and results (gs://bucket).
+// WithEvalStorageURI stores eval sets and results under uri: gs://bucket for
+// Cloud Storage or file:///abs/path for a local directory. It takes
+// precedence over the ADK_EVAL_STORAGE_URI environment variable.
 func WithEvalStorageURI(uri string) Option {
 	return func(l *evalsLauncher) {
 		l.evalStorageURI = uri

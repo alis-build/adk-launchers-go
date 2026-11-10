@@ -16,6 +16,13 @@ const defaultNumRuns = 2
 // when positive, else cfg.MultiRunConfig.NumRuns, else 2, as adk eval's
 // --num_runs overrides the config. A pass@k or pass^k criterion looking at
 // more runs than that is rejected before any inference.
+//
+// Each case's cross-run verdicts are in its result's CrossRunResults, and a
+// failed criterion fails the case. Of adk-python's multi_run_config only
+// num_runs and cross_run_criteria are ported: cross_run_scoring,
+// cross_run_scoring_by_metric, custom_methods and max_crashed_runs are
+// refused with an error naming the key. cfg.Parallelism, when set, limits
+// how many runs execute and are scored at once.
 func EvaluateEvalSet(
 	ctx context.Context,
 	svc *service.LocalEvalService,

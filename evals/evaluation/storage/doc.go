@@ -7,7 +7,9 @@
 // [EvalSetsManager] and [EvalSetResultsManager] are the storage interfaces.
 // Local backends write {agentsDir}/{app}/{id}.evalset.json and
 // {agentsDir}/{app}/.adk/eval_history/*.evalset_result.json. [NewGCSManagers]
-// configures a shared GCS bucket for both sets and results.
+// configures a shared GCS bucket for both sets and results. The evals
+// launcher maps a file:///abs/path storage URI to the local backends rooted
+// at that path, and a gs:// one to [NewGCSManagers].
 package storage
 
 import (

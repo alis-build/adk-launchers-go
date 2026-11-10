@@ -74,7 +74,12 @@
 // results at {agentsDir}/{app}/.adk/eval_history/. Set via [WithAgentsDir] or
 // --agents_dir.
 //
-// GCS mode: pass [WithEvalStorageURI] or --eval_storage_uri=gs://bucket.
+// A storage URI moves both elsewhere: gs://bucket for Cloud Storage, or
+// file:///abs/path for a local directory (created when missing; the host must
+// be empty or localhost). Set it with [WithEvalStorageURI] or
+// --eval_storage_uri; when neither is set, the ADK_EVAL_STORAGE_URI
+// environment variable supplies it, as in adk-python. Any other scheme is an
+// error at startup.
 //
 // Override backends with [WithEvalSetsManager] and [WithEvalSetResultsManager]
 // (for example in-memory managers in tests).
@@ -84,7 +89,8 @@
 // Options apply when calling [NewLauncher]:
 //
 //   - [WithAgentsDir] — local eval set and result storage root.
-//   - [WithEvalStorageURI] — GCS bucket for sets and results.
+//   - [WithEvalStorageURI] — storage URI (gs://bucket or file:///abs/path) for
+//     sets and results; see Storage.
 //   - [WithEvalSetsManager] / [WithEvalSetResultsManager] — custom storage backends.
 //   - [WithMetricRegistry] — metric evaluators (default [metrics.DefaultRegistry]).
 //   - [WithUserSimulatorProvider] — LLM-backed or static user simulators during inference.
@@ -95,7 +101,8 @@
 // CLI flags (after the "evals" keyword on the web command line):
 //
 //   - -path_prefix — same as [WithPathPrefix].
-//   - -agents_dir — same as [WithAgentsDir]; required for local storage unless GCS is set.
+//   - -agents_dir — same as [WithAgentsDir]; required unless a storage URI is
+//     set (flag, option or ADK_EVAL_STORAGE_URI).
 //   - -eval_storage_uri — same as [WithEvalStorageURI].
 //
 // # Evaluation engine
@@ -114,13 +121,43 @@
 //
 // The run body is accepted in adk-web main's snake_case form (eval_case_ids,
 // eval_metrics) and in the ADK v2.7.1 bundle's camelCase form (evalIds,
-// evalMetrics); evalCaseIds is accepted too. A body that sets live_model_config or user_simulator_config
-// is answered 400 until live and simulator runs are supported.
+// evalMetrics); evalCaseIds is accepted too.
 //
 // POST .../eval-sets/{id}/run answers {"runEvalResults": [...]}, as adk-python
 // does; the legacy POST .../eval_sets/{id}/run_eval answers a bare array.
 // adk-web main types the run response as a bare array, a mismatch it also has
 // with adk-python, and its History tab loads results through eval_results.
+//
+// # Run options
+//
+// Besides the cases and metrics, a run body may set:
+//
+//   - parallelism — how many cases run, and are scored, at once (default 4;
+//     below 1 answers 400). Go only: adk-python's request has no such field.
+//   - live_model_config (liveModelConfig) — run inference live, over a
+//     bidirectional stream, as Live API models need. Any object, even {},
+//     turns it on; timeout_seconds (timeoutSeconds) bounds each turn, 300 s
+//     when 0 or absent. null leaves the run unchanged.
+//   - user_simulator_config (userSimulatorConfig) — the user simulator, told
+//     apart by "type": llm_backed (the default when type is missing) or
+//     llm_audio, which speaks every user turn, static or simulated, through
+//     an audio model and streams the speech to the agent. The audio model is
+//     resolved by name through ADK's model registry (model.NewLLM), once per
+//     request, and an unknown name answers 400. adk-python's default,
+//     cloud_tts, has no Go implementation: register a model under that name,
+//     or name one, such as a Gemini TTS model, in audio_model.
+//
+// Every run also reports the informational efficiency metrics
+// (tool_call_count_v1, inference_call_count_v1, token_usage_v1,
+// invocation_duration_v1) without being asked, as adk-python's dev server
+// does.
+//
+// A case's sessionInput.sessionId pins it to a prepared session. The run
+// reuses that session, keeping its state and history, only when it exists
+// under the caller's ID; otherwise it creates a session with that ID for the
+// caller, with the case's state. Another user's session of that ID is never
+// read. With more than one run per case the pin is dropped, so the runs do
+// not share a session.
 //
 // # Eval sessions
 //
