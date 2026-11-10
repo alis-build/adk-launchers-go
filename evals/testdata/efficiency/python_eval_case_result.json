@@ -1,0 +1,271 @@
+{
+  "evalId": "case1",
+  "evalMetricResultPerInvocation": [
+    {
+      "actualInvocation": {
+        "creationTimestamp": 0.0,
+        "duration": 10.0,
+        "finalResponse": {
+          "parts": [
+            {
+              "text": "one"
+            }
+          ],
+          "role": "model"
+        },
+        "intermediateData": {
+          "invocationEvents": [
+            {
+              "author": "agent",
+              "modelVersion": "gemini-test",
+              "usageMetadata": {
+                "cachedContentTokenCount": 100,
+                "candidatesTokenCount": 200,
+                "promptTokenCount": 700,
+                "thoughtsTokenCount": 80,
+                "toolUsePromptTokenCount": 20
+              }
+            },
+            {
+              "author": "agent",
+              "content": {
+                "parts": [
+                  {
+                    "functionCall": {
+                      "args": {},
+                      "name": "t1"
+                    }
+                  }
+                ],
+                "role": "model"
+              }
+            }
+          ]
+        },
+        "invocationId": "inv1",
+        "modelDuration": 8.0,
+        "toolDuration": 1.0,
+        "userContent": {
+          "parts": [
+            {
+              "text": "turn one"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "evalMetricResults": [
+        {
+          "details": {},
+          "evalStatus": 4,
+          "metricName": "tool_call_count_v1",
+          "score": 1.0
+        },
+        {
+          "details": {},
+          "evalStatus": 4,
+          "metricName": "inference_call_count_v1",
+          "score": 1.0
+        },
+        {
+          "details": {
+            "tokenUsageDetails": {
+              "cachedTokens": 100.0,
+              "candidatesTokens": 200.0,
+              "inputTokens": 720.0,
+              "outputTokens": 280.0,
+              "promptTokens": 700.0,
+              "reasoningTokens": 80.0,
+              "toolUseTokens": 20.0,
+              "totalTokens": 1000.0
+            }
+          },
+          "evalStatus": 4,
+          "metricName": "token_usage_v1",
+          "score": 1000.0
+        },
+        {
+          "details": {
+            "durationDetails": {
+              "frameworkSeconds": 1.0,
+              "modelSeconds": 8.0,
+              "toolSeconds": 1.0,
+              "totalSeconds": 10.0
+            }
+          },
+          "evalStatus": 4,
+          "metricName": "invocation_duration_v1",
+          "score": 10.0
+        }
+      ],
+      "expectedInvocation": {
+        "creationTimestamp": 0.0,
+        "finalResponse": {
+          "parts": [
+            {
+              "text": "one"
+            }
+          ],
+          "role": "model"
+        },
+        "invocationId": "inv1",
+        "userContent": {
+          "parts": [
+            {
+              "text": "turn one"
+            }
+          ],
+          "role": "user"
+        }
+      }
+    },
+    {
+      "actualInvocation": {
+        "creationTimestamp": 0.0,
+        "duration": 20.0,
+        "finalResponse": {
+          "parts": [
+            {
+              "text": "two"
+            }
+          ],
+          "role": "model"
+        },
+        "intermediateData": {
+          "invocationEvents": [
+            {
+              "author": "agent",
+              "modelVersion": "gemini-test",
+              "usageMetadata": {
+                "candidatesTokenCount": 100,
+                "promptTokenCount": 200
+              }
+            }
+          ]
+        },
+        "invocationId": "inv2",
+        "modelDuration": 10.0,
+        "toolDuration": 5.0,
+        "userContent": {
+          "parts": [
+            {
+              "text": "turn two"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "evalMetricResults": [
+        {
+          "details": {},
+          "evalStatus": 4,
+          "metricName": "tool_call_count_v1",
+          "score": 0.0
+        },
+        {
+          "details": {},
+          "evalStatus": 4,
+          "metricName": "inference_call_count_v1",
+          "score": 1.0
+        },
+        {
+          "details": {
+            "tokenUsageDetails": {
+              "candidatesTokens": 100.0,
+              "inputTokens": 200.0,
+              "outputTokens": 100.0,
+              "promptTokens": 200.0,
+              "totalTokens": 300.0
+            }
+          },
+          "evalStatus": 4,
+          "metricName": "token_usage_v1",
+          "score": 300.0
+        },
+        {
+          "details": {
+            "durationDetails": {
+              "frameworkSeconds": 5.0,
+              "modelSeconds": 10.0,
+              "toolSeconds": 5.0,
+              "totalSeconds": 20.0
+            }
+          },
+          "evalStatus": 4,
+          "metricName": "invocation_duration_v1",
+          "score": 20.0
+        }
+      ],
+      "expectedInvocation": {
+        "creationTimestamp": 0.0,
+        "finalResponse": {
+          "parts": [
+            {
+              "text": "two"
+            }
+          ],
+          "role": "model"
+        },
+        "invocationId": "inv2",
+        "userContent": {
+          "parts": [
+            {
+              "text": "turn two"
+            }
+          ],
+          "role": "user"
+        }
+      }
+    }
+  ],
+  "evalSetFile": "es1",
+  "evalSetId": "es1",
+  "finalEvalStatus": 3,
+  "overallEvalMetricResults": [
+    {
+      "details": {},
+      "evalStatus": 4,
+      "metricName": "tool_call_count_v1",
+      "score": 0.5
+    },
+    {
+      "details": {},
+      "evalStatus": 4,
+      "metricName": "inference_call_count_v1",
+      "score": 1.0
+    },
+    {
+      "details": {
+        "tokenUsageDetails": {
+          "cachedTokens": 50.0,
+          "candidatesTokens": 150.0,
+          "inputTokens": 460.0,
+          "outputTokens": 190.0,
+          "promptTokens": 450.0,
+          "reasoningTokens": 40.0,
+          "toolUseTokens": 10.0,
+          "totalTokens": 650.0
+        }
+      },
+      "evalStatus": 4,
+      "metricName": "token_usage_v1",
+      "score": 650.0
+    },
+    {
+      "details": {
+        "durationDetails": {
+          "frameworkSeconds": 3.0,
+          "modelSeconds": 9.0,
+          "toolSeconds": 3.0,
+          "totalSeconds": 15.0
+        }
+      },
+      "evalStatus": 4,
+      "metricName": "invocation_duration_v1",
+      "score": 15.0
+    }
+  ],
+  "repetitionIndex": 1,
+  "sessionId": "s-1",
+  "userId": "test_user_id"
+}

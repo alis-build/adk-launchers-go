@@ -1,0 +1,146 @@
+{
+  "evalCase": {
+    "conversation": [
+      {
+        "creationTimestamp": 0.0,
+        "finalResponse": {
+          "parts": [
+            {
+              "text": "one"
+            }
+          ],
+          "role": "model"
+        },
+        "invocationId": "inv1",
+        "userContent": {
+          "parts": [
+            {
+              "text": "turn one"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      {
+        "creationTimestamp": 0.0,
+        "finalResponse": {
+          "parts": [
+            {
+              "text": "two"
+            }
+          ],
+          "role": "model"
+        },
+        "invocationId": "inv2",
+        "userContent": {
+          "parts": [
+            {
+              "text": "turn two"
+            }
+          ],
+          "role": "user"
+        }
+      }
+    ],
+    "creationTimestamp": 0.0,
+    "evalId": "case1",
+    "finalSessionState": {}
+  },
+  "inferenceResult": {
+    "appName": "app",
+    "evalCaseId": "case1",
+    "evalSetId": "es1",
+    "inferences": [
+      {
+        "creationTimestamp": 0.0,
+        "duration": 10.0,
+        "finalResponse": {
+          "parts": [
+            {
+              "text": "one"
+            }
+          ],
+          "role": "model"
+        },
+        "intermediateData": {
+          "invocationEvents": [
+            {
+              "author": "agent",
+              "modelVersion": "gemini-test",
+              "usageMetadata": {
+                "cachedContentTokenCount": 100,
+                "candidatesTokenCount": 200,
+                "promptTokenCount": 700,
+                "thoughtsTokenCount": 80,
+                "toolUsePromptTokenCount": 20
+              }
+            },
+            {
+              "author": "agent",
+              "content": {
+                "parts": [
+                  {
+                    "functionCall": {
+                      "args": {},
+                      "name": "t1"
+                    }
+                  }
+                ],
+                "role": "model"
+              }
+            }
+          ]
+        },
+        "invocationId": "inv1",
+        "modelDuration": 8.0,
+        "toolDuration": 1.0,
+        "userContent": {
+          "parts": [
+            {
+              "text": "turn one"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      {
+        "creationTimestamp": 0.0,
+        "duration": 20.0,
+        "finalResponse": {
+          "parts": [
+            {
+              "text": "two"
+            }
+          ],
+          "role": "model"
+        },
+        "intermediateData": {
+          "invocationEvents": [
+            {
+              "author": "agent",
+              "modelVersion": "gemini-test",
+              "usageMetadata": {
+                "candidatesTokenCount": 100,
+                "promptTokenCount": 200
+              }
+            }
+          ]
+        },
+        "invocationId": "inv2",
+        "modelDuration": 10.0,
+        "toolDuration": 5.0,
+        "userContent": {
+          "parts": [
+            {
+              "text": "turn two"
+            }
+          ],
+          "role": "user"
+        }
+      }
+    ],
+    "repetitionIndex": 1,
+    "sessionId": "s-1",
+    "status": 1
+  }
+}
