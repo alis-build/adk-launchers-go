@@ -80,7 +80,9 @@ func convertInvocationEvents(invocationID string, events []*session.Event, appDe
 			continue
 		}
 		if event.Content != nil && len(event.Content.Parts) > 0 {
-			if event.IsFinalResponse() {
+			// A later final event replaces a final response with text only when
+			// it has text too, so a live transcript survives trailing audio.
+			if event.IsFinalResponse() && (!contentHasText(finalResponse) || contentHasText(event.Content)) {
 				finalResponse = event.Content
 				finalEvent = event
 			}
@@ -206,4 +208,17 @@ func mergeUsageReports(events []*session.Event) (map[int]*genai.GenerateContentR
 		}
 	}
 	return merged, reports
+}
+
+// contentHasText reports whether any part of c has text.
+func contentHasText(c *genai.Content) bool {
+	if c == nil {
+		return false
+	}
+	for _, p := range c.Parts {
+		if p != nil && p.Text != "" {
+			return true
+		}
+	}
+	return false
 }

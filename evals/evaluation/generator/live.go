@@ -46,11 +46,7 @@ func (g *Generator) generateInferencesLive(ctx context.Context, opts InferenceOp
 		runOpts = append(runOpts, runner.WithStateDelta(state))
 	}
 
-	liveSess, eventIter, err := r.RunLive(ctx, userID, sessionID, agent.LiveRunConfig{
-		ResponseModalities:       []genai.Modality{genai.ModalityAudio},
-		InputAudioTranscription:  &genai.AudioTranscriptionConfig{},
-		OutputAudioTranscription: &genai.AudioTranscriptionConfig{},
-	}, runOpts...)
+	liveSess, eventIter, err := r.RunLive(ctx, userID, sessionID, liveRunConfig(), runOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("generator: start live session: %w", err)
 	}
@@ -76,7 +72,8 @@ func (g *Generator) generateInferencesLive(ctx context.Context, opts InferenceOp
 
 	var events []*session.Event
 	for {
-		next, err := opts.UserSimulator.GetNextUserMessage(ctx, cloneEvents(events))
+		// The simulator reads the agent's spoken replies as text.
+		next, err := opts.UserSimulator.GetNextUserMessage(ctx, normalizeLiveTranscriptions(cloneEvents(events)))
 		if err != nil {
 			return nil, err
 		}
@@ -90,7 +87,14 @@ func (g *Generator) generateInferencesLive(ctx context.Context, opts InferenceOp
 		userEv.Content = next.UserMessage
 		events = append(events, userEv)
 
-		if err := liveSess.Send(agent.LiveRequest{Content: next.UserMessage}); err != nil {
+		// The logged user event keeps the whole turn; the session gets audio
+		// alone when the turn has any, so the agent answers the speech.
+		if hasInlineData(next.UserMessage) {
+			err = sendAudioToLive(liveSess, next.UserMessage)
+		} else {
+			err = liveSess.Send(agent.LiveRequest{Content: next.UserMessage})
+		}
+		if err != nil {
 			return nil, fmt.Errorf("generator: send live user message: %w", err)
 		}
 
@@ -104,7 +108,88 @@ func (g *Generator) generateInferencesLive(ctx context.Context, opts InferenceOp
 	}
 
 	appDetails := GetAppDetailsByInvocationID(events, interceptor)
-	return ConvertEventsToEvalInvocations(events, appDetails), nil
+	return ConvertEventsToEvalInvocations(normalizeLiveTranscriptions(events), appDetails), nil
+}
+
+// audioChunkBytes is the size of each audio blob streamed to a live session.
+const audioChunkBytes = 16000
+
+// liveRunConfig is the config of every live eval session. Voice activity
+// detection is off, so each turn's boundaries are the activity markers
+// sendAudioToLive puts around its audio.
+func liveRunConfig() agent.LiveRunConfig {
+	return agent.LiveRunConfig{
+		ResponseModalities:       []genai.Modality{genai.ModalityAudio},
+		InputAudioTranscription:  &genai.AudioTranscriptionConfig{},
+		OutputAudioTranscription: &genai.AudioTranscriptionConfig{},
+		RealtimeInputConfig: &genai.RealtimeInputConfig{
+			AutomaticActivityDetection: &genai.AutomaticActivityDetection{Disabled: true},
+		},
+	}
+}
+
+// hasInlineData reports whether any part of c carries inline data.
+func hasInlineData(c *genai.Content) bool {
+	for _, p := range c.Parts {
+		if p != nil && p.InlineData != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// sendAudioToLive streams the audio of a user turn as realtime input,
+// between an activity start and end, in audioChunkBytes chunks. Text parts
+// are not sent.
+func sendAudioToLive(sess agent.LiveSession, content *genai.Content) error {
+	if err := sess.Send(agent.LiveRequest{RealtimeInput: &genai.ActivityStart{}}); err != nil {
+		return err
+	}
+	for _, p := range content.Parts {
+		if p == nil || p.InlineData == nil {
+			continue
+		}
+		data := p.InlineData.Data
+		for start := 0; start < len(data); start += audioChunkBytes {
+			chunk := data[start:min(start+audioChunkBytes, len(data))]
+			if err := sess.Send(agent.LiveRequest{RealtimeInput: &genai.Blob{Data: chunk, MIMEType: p.InlineData.MIMEType}}); err != nil {
+				return err
+			}
+		}
+	}
+	return sess.Send(agent.LiveRequest{RealtimeInput: &genai.ActivityEnd{}})
+}
+
+// normalizeLiveTranscriptions returns events with each final transcription
+// event rewritten as text content: what the user said as a user message,
+// what the agent said as a model message. Partial events, events that have
+// content, and events with no transcription text pass through; the input
+// events are not modified.
+func normalizeLiveTranscriptions(events []*session.Event) []*session.Event {
+	out := make([]*session.Event, 0, len(events))
+	for _, ev := range events {
+		if ev == nil || ev.Content != nil || ev.Partial {
+			out = append(out, ev)
+			continue
+		}
+		var text string
+		var role genai.Role
+		switch {
+		case ev.InputTranscription != nil && ev.InputTranscription.Text != "":
+			text, role = ev.InputTranscription.Text, genai.RoleUser
+		case ev.OutputTranscription != nil && ev.OutputTranscription.Text != "":
+			text, role = ev.OutputTranscription.Text, genai.RoleModel
+		default:
+			out = append(out, ev)
+			continue
+		}
+		rewritten := *ev
+		rewritten.InputTranscription = nil
+		rewritten.OutputTranscription = nil
+		rewritten.Content = genai.NewContentFromText(text, role)
+		out = append(out, &rewritten)
+	}
+	return out
 }
 
 // collectLiveTurn reads events until the turn completes, times out, or the stream errors.

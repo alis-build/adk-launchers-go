@@ -270,3 +270,17 @@ func TestUsageBatchedAfterContent(t *testing.T) {
 		t.Errorf("prompts = %v, want two events summing to 43", p)
 	}
 }
+
+// Mirrors adk-python test_evaluation_generator.py:122: a trailing audio-only
+// final event does not replace a text final response.
+func TestConvertKeepsTextResponseOverTrailingAudio(t *testing.T) {
+	events := []*session.Event{
+		buildEvent(t, "user", []*genai.Part{{Text: "Hello"}}, "inv1"),
+		buildEvent(t, "agent", []*genai.Part{{Text: "hi"}}, "inv1"),
+		buildEvent(t, "agent", []*genai.Part{{InlineData: &genai.Blob{Data: []byte("WAV"), MIMEType: "audio/pcm"}}}, "inv1"),
+	}
+	inv := generator.ConvertEventsToEvalInvocations(events, nil)
+	if len(inv) != 1 || inv[0].FinalResponse == nil || inv[0].FinalResponse.Parts[0].Text != "hi" {
+		t.Fatalf("final response = %+v, want the text \"hi\"", inv)
+	}
+}
