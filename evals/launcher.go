@@ -7,7 +7,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -149,7 +151,7 @@ func NewLauncher(opts ...Option) Launcher {
 	fs := flag.NewFlagSet("evals", flag.ContinueOnError)
 	fs.StringVar(&l.pathPrefix, "path_prefix", l.pathPrefix, "HTTP path prefix before /dev/apps (default /api, match webui api_server_address)")
 	fs.StringVar(&l.agentsDir, "agents_dir", l.agentsDir, "Directory containing agent apps for local eval storage")
-	fs.StringVar(&l.evalStorageURI, "eval_storage_uri", l.evalStorageURI, "GCS URI for eval storage (gs://bucket)")
+	fs.StringVar(&l.evalStorageURI, "eval_storage_uri", l.evalStorageURI, "Eval storage URI: gs://bucket or file:///abs/path (default: ADK_EVAL_STORAGE_URI, else agents_dir)")
 	l.flags = fs
 	return l
 }
@@ -294,8 +296,31 @@ func (l *evalsLauncher) initStorage(_ *adklauncher.Config) error {
 	if l.setsManager != nil && l.resultsManager != nil {
 		return nil
 	}
-	if l.evalStorageURI != "" {
-		bucket, err := bucketFromURI(l.evalStorageURI)
+	uri := l.evalStorageURI
+	if uri == "" {
+		if env := os.Getenv("ADK_EVAL_STORAGE_URI"); env != "" {
+			log.Printf("evals: using eval storage URI from ADK_EVAL_STORAGE_URI: %s", env)
+			uri = env
+		}
+	}
+	if strings.HasPrefix(strings.ToLower(uri), "file:") {
+		dir, err := localEvalDirFromURI(uri)
+		if err != nil {
+			return fmt.Errorf("evals: eval_storage_uri: %w", err)
+		}
+		if l.setsManager == nil {
+			l.setsManager = storage.NewLocalEvalSetsManager(dir)
+		}
+		if l.resultsManager == nil {
+			l.resultsManager = storage.NewLocalEvalSetResultsManager(dir)
+		}
+		return nil
+	}
+	if uri != "" && !strings.HasPrefix(strings.ToLower(uri), "gs://") {
+		return fmt.Errorf("evals: eval_storage_uri: Unsupported evals storage URI: %s. Supported URIs: gs://<bucket name>, file://<path>", uri)
+	}
+	if uri != "" {
+		bucket, err := bucketFromURI(uri)
 		if err != nil {
 			return fmt.Errorf("evals: eval_storage_uri: %w", err)
 		}
@@ -325,6 +350,68 @@ func (l *evalsLauncher) initStorage(_ *adklauncher.Config) error {
 		l.resultsManager = storage.NewLocalEvalSetResultsManager(l.agentsDir)
 	}
 	return nil
+}
+
+// localEvalDirFromURI returns the directory a file:// storage URI names,
+// creating it, as adk-python's _local_eval_dir_from_uri does. It splits the
+// URI the way Python's urlparse does rather than with net/url, so that
+// file://user:pw@localhost/x is rejected (net/url drops the user from Host)
+// and a stray % in the path is kept instead of failing the parse.
+func localEvalDirFromURI(uri string) (string, error) {
+	rest := uri[len("file:"):]
+	var host string
+	if strings.HasPrefix(rest, "//") {
+		rest = rest[2:]
+		i := strings.IndexAny(rest, "/?#")
+		if i < 0 {
+			i = len(rest)
+		}
+		host, rest = rest[:i], rest[i:]
+	}
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	if host != "" && !strings.EqualFold(host, "localhost") {
+		return "", fmt.Errorf("Invalid evals storage URI: %s. file:// URIs must target the local host, e.g. file:///abs/path", uri)
+	}
+	if !strings.HasPrefix(rest, "/") {
+		return "", fmt.Errorf("Invalid evals storage URI: %s. file:// URIs must use an absolute path, e.g. file:///abs/path", uri)
+	}
+	path := unquoteLenient(rest)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return "", fmt.Errorf("Failed to create eval storage directory %q for %q (configured via --eval_storage_uri or ADK_EVAL_STORAGE_URI): %w", path, uri, err)
+	}
+	return path, nil
+}
+
+// unquoteLenient decodes %XX escapes and keeps any malformed % as-is, like
+// Python's urllib.parse.unquote.
+func unquoteLenient(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]) {
+			b.WriteByte(unhex(s[i+1])<<4 | unhex(s[i+2]))
+			i += 2
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
+func unhex(c byte) byte {
+	switch {
+	case c <= '9':
+		return c - '0'
+	case c <= 'F':
+		return c - 'A' + 10
+	default:
+		return c - 'a' + 10
+	}
 }
 
 // gcsSetupTimeout bounds Attrs()/metadata calls during launcher startup so a
