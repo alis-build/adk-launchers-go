@@ -2,6 +2,7 @@ package models_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
@@ -374,5 +375,25 @@ func TestEffectiveThresholdFallsBackWhenCriterionSetsNone(t *testing.T) {
 	m := models.EvalMetric{Threshold: 0.7, Criterion: models.CriterionField(models.BaseCriterion{})}
 	if got := models.EffectiveThreshold(m); got != 0.7 {
 		t.Errorf("EffectiveThreshold() = %v, want the top-level 0.7", got)
+	}
+}
+
+func TestInvocationEventUsageRoundTrip(t *testing.T) {
+	in := `{"author":"agent","usageMetadata":{"promptTokenCount":7},"modelVersion":"m"}`
+	var ev models.InvocationEvent
+	if err := json.Unmarshal([]byte(in), &ev); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if ev.UsageMetadata == nil || ev.UsageMetadata.PromptTokenCount != 7 || ev.ModelVersion != "m" {
+		t.Fatalf("decoded = %+v", ev)
+	}
+	out, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, want := range []string{`"usageMetadata":{"promptTokenCount":7}`, `"modelVersion":"m"`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("encoded %s, want it to contain %s", out, want)
+		}
 	}
 }

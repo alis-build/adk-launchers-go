@@ -95,20 +95,19 @@ func convertInvocationEvents(invocationID string, events []*session.Event, appDe
 	invEvents := make([]models.InvocationEvent, 0, len(eventsToAdd))
 	for _, e := range eventsToAdd {
 		content := e.Content
-		// The final response's text is already Invocation.FinalResponse, so
-		// repeating it here would count it twice. Function calls stay, since
-		// tool trajectories read them from here, and grounding stays for the
-		// rubric judges, as in adk-python.
+		// The final response is kept, as in adk-python, so its model call's
+		// usage and grounding are not lost, but without its text: that is
+		// already Invocation.FinalResponse and repeating it would count it
+		// twice. Function calls stay, since tool trajectories read them here.
 		if e == finalEvent && !eventHasFunctionCall(e) {
-			if e.GroundingMetadata == nil {
-				continue
-			}
 			content = nil
 		}
 		invEvents = append(invEvents, models.InvocationEvent{
 			Author:            e.Author,
 			Content:           content,
 			GroundingMetadata: e.GroundingMetadata,
+			UsageMetadata:     e.UsageMetadata,
+			ModelVersion:      e.ModelVersion,
 		})
 	}
 

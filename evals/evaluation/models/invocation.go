@@ -28,6 +28,11 @@ type InvocationEvent struct {
 	// GroundingMetadata is the grounding the model reported with the event,
 	// such as the web searches it ran. Rubric judges read it as evidence.
 	GroundingMetadata *genai.GroundingMetadata `json:"groundingMetadata,omitempty"`
+	// UsageMetadata is the token usage the model reported for the call that
+	// produced the event; ModelVersion names the model that served it. The
+	// efficiency metrics read both.
+	UsageMetadata *genai.GenerateContentResponseUsageMetadata `json:"usageMetadata,omitempty"`
+	ModelVersion  string                                      `json:"modelVersion,omitempty"`
 }
 
 // InvocationEvents is a container of invocation-scoped events.

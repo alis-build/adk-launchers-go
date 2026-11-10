@@ -42,6 +42,12 @@ func TestConvertSingleTurnTextOnly(t *testing.T) {
 	if inv[0].FinalResponse == nil || inv[0].FinalResponse.Parts[0].Text != "Hi there!" {
 		t.Fatalf("final = %+v", inv[0].FinalResponse)
 	}
+	// adk-python 2d428ead3 keeps the final event for its model usage, without
+	// repeating its text.
+	events2 := invocationEvents(t, inv[0])
+	if len(events2) != 1 || events2[0].Content != nil {
+		t.Fatalf("invocation events = %+v, want the final event with nil content", events2)
+	}
 }
 
 func TestConvertSingleTurnToolCall(t *testing.T) {
@@ -121,8 +127,10 @@ func TestConvertKeepsGroundingOnlyEvent(t *testing.T) {
 	}
 
 	invEvents := invocationEvents(t, generator.ConvertEventsToEvalInvocations(events, nil)[0])
-	if len(invEvents) != 1 || invEvents[0].GroundingMetadata == nil {
-		t.Fatalf("invocation events = %+v, want the grounding-only event", invEvents)
+	// The final event follows it, kept for its usage without its text
+	// (adk-python 2d428ead3).
+	if len(invEvents) != 2 || invEvents[0].GroundingMetadata == nil || invEvents[1].Content != nil {
+		t.Fatalf("invocation events = %+v, want the grounding-only event then the final event without content", invEvents)
 	}
 }
 
@@ -133,4 +141,36 @@ func invocationEvents(t *testing.T, inv models.Invocation) []models.InvocationEv
 		t.Fatalf("intermediate data = %+v, want invocation events", inv.IntermediateData.Value())
 	}
 	return data.InvocationEvents
+}
+
+// Mirrors adk-python test_efficiency_evaluators.py:266: each model event's
+// usage and model version reach the invocation events, the final one kept
+// with nil content.
+func TestConvertRecordsUsageAndModelVersion(t *testing.T) {
+	call := buildEvent(t, "agent", []*genai.Part{{FunctionCall: &genai.FunctionCall{Name: "t1", Args: map[string]any{}}}}, "inv1")
+	call.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 60, CandidatesTokenCount: 40}
+	call.ModelVersion = "gemini-test"
+	final := buildEvent(t, "agent", []*genai.Part{{Text: "done"}}, "inv1")
+	final.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 200, CandidatesTokenCount: 50}
+	final.ModelVersion = "gemini-test"
+	events := []*session.Event{buildEvent(t, "user", []*genai.Part{{Text: "hi"}}, "inv1"), call, final}
+
+	inv := generator.ConvertEventsToEvalInvocations(events, nil)
+
+	got := invocationEvents(t, inv[0])
+	if len(got) != 2 {
+		t.Fatalf("invocation events = %+v, want 2", got)
+	}
+	for i, want := range [][2]int32{{60, 40}, {200, 50}} {
+		u := got[i].UsageMetadata
+		if u == nil || u.PromptTokenCount != want[0] || u.CandidatesTokenCount != want[1] || got[i].ModelVersion != "gemini-test" {
+			t.Errorf("event %d usage = %+v, model %q; want %v from gemini-test", i, u, got[i].ModelVersion, want)
+		}
+	}
+	if got[1].Content != nil {
+		t.Errorf("final event content = %+v, want nil", got[1].Content)
+	}
+	if inv[0].FinalResponse == nil || inv[0].FinalResponse.Parts[0].Text != "done" {
+		t.Errorf("final response = %+v, want done", inv[0].FinalResponse)
+	}
 }
