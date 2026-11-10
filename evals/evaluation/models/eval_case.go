@@ -10,8 +10,9 @@ type SessionInput struct {
 	AppName string         `json:"appName"`
 	UserID  string         `json:"userId"`
 	State   map[string]any `json:"state,omitempty"`
-	// SessionID pins the case to a prepared session, reused when it exists
-	// under the user the run uses and created with that ID otherwise.
+	// SessionID pins the case to a prepared eval session, reused when it
+	// exists under the user the run uses and created with that ID otherwise.
+	// Only eval session IDs are honoured; see the evals package doc.
 	SessionID string         `json:"sessionId,omitempty"`
 	Extra     map[string]any `json:"-"`
 }

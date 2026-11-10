@@ -152,12 +152,16 @@
 // invocation_duration_v1) without being asked, as adk-python's dev server
 // does.
 //
-// A case's sessionInput.sessionId pins it to a prepared session. The run
-// reuses that session, keeping its state and history, only when it exists
-// under the caller's ID; otherwise it creates a session with that ID for the
-// caller, with the case's state. Another user's session of that ID is never
-// read. With more than one run per case the pin is dropped, so the runs do
-// not share a session.
+// A case's sessionInput.sessionId pins it to a prepared eval session. The
+// run reuses that session, keeping its state and history, only when it
+// exists under the caller's ID; otherwise it creates a session with that ID
+// for the caller, with the case's state. Another user's session of that ID
+// is never read. Only eval session IDs (starting adk-eval-session-, or the
+// legacy ___eval___session___) can be pinned, unlike adk-python: a case is
+// shared, and pinning someone's real session would make their run write into
+// it and publish its state in the results. Any other pin starts a fresh
+// session, with a log line. With more than one run per case the pin is
+// dropped, so the runs do not share a session.
 //
 // # Eval sessions
 //

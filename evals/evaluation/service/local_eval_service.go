@@ -205,7 +205,14 @@ func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID,
 		sessionID = s.NewSessionID()
 	}
 	input := runSessionInput(effectiveSessionInput(runSessionState, evalCase), userID)
-	// Blank IDs are treated as unset, as the generator does.
+	// Blank IDs are treated as unset, as the generator does. Only an eval
+	// session can be pinned: a case is shared data, so a pin naming a real
+	// session would let its author make another caller's run write into that
+	// session and publish its state in the app-wide results.
+	if pin := input.SessionID; strings.TrimSpace(pin) != "" && !generator.IsEvalSessionID(pin) {
+		log.Printf("evals: eval case %q pins session %q, which is not an eval session (prefix %q), so the run starts a fresh session.", evalCase.EvalID, pin, generator.EvalSessionIDPrefix)
+		input.SessionID = ""
+	}
 	if strings.TrimSpace(input.SessionID) != "" {
 		sessionID = input.SessionID
 		if s.pinnedSessionExists(ctx, input) {

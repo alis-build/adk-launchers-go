@@ -523,6 +523,9 @@ func TestSavedEvalResultIDHasAppSetTimestampShape(t *testing.T) {
 	}
 }
 
+// pin is the eval session the pinned-session tests prepare and pin.
+const pin = generator.EvalSessionIDPrefix + "fixed"
+
 // recordingSessions records the user of every session call it passes on.
 type recordingSessions struct {
 	session.Service
@@ -600,12 +603,12 @@ func pinnedServiceWithRunnerSessions(t *testing.T, sessions session.Service, inp
 	return &service.LocalEvalService{Generator: &generator.Generator{Runtime: rt}, Sets: sets, Registry: metrics.NewDefaultRegistry(), SimProvider: simulation.UserSimulatorProvider{}, Sessions: sessions}, runnerSessions
 }
 
-// prepareSession creates session fixed under user with state and one user
+// prepareSession creates session pin under user with state and one user
 // event, "earlier turn".
 func prepareSession(t *testing.T, sessions session.Service, user string, state map[string]any) {
 	t.Helper()
 	ctx := context.Background()
-	resp, err := sessions.Create(ctx, &session.CreateRequest{AppName: "app", UserID: user, SessionID: "fixed", State: state})
+	resp, err := sessions.Create(ctx, &session.CreateRequest{AppName: "app", UserID: user, SessionID: pin, State: state})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -619,7 +622,7 @@ func prepareSession(t *testing.T, sessions session.Service, user string, state m
 
 func getSession(t *testing.T, sessions session.Service, user string) session.Session {
 	t.Helper()
-	resp, err := sessions.Get(context.Background(), &session.GetRequest{AppName: "app", UserID: user, SessionID: "fixed"})
+	resp, err := sessions.Get(context.Background(), &session.GetRequest{AppName: "app", UserID: user, SessionID: pin})
 	if err != nil || resp == nil {
 		return nil
 	}
@@ -645,9 +648,9 @@ func inferOne(t *testing.T, svc *service.LocalEvalService, req service.Inference
 func TestPinnedSessionOfCallerIsReused(t *testing.T) {
 	sessions := session.InMemoryService()
 	prepareSession(t, sessions, "caller", map[string]any{"prepared_by": "caller"})
-	svc := pinnedService(t, sessions, &models.SessionInput{SessionID: "fixed", State: map[string]any{"prepared_by": "case"}})
+	svc := pinnedService(t, sessions, &models.SessionInput{SessionID: pin, State: map[string]any{"prepared_by": "case"}})
 	inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller"})
-	if inf[0].SessionID != "fixed" {
+	if inf[0].SessionID != pin {
 		t.Errorf("session ID = %q, want fixed", inf[0].SessionID)
 	}
 	s := getSession(t, sessions, "caller")
@@ -668,7 +671,7 @@ func TestPinnedSessionOfAnotherUserIsNeverRead(t *testing.T) {
 	inner := session.InMemoryService()
 	prepareSession(t, inner, "other-user", map[string]any{"secret": "s"})
 	rec := &recordingSessions{Service: inner}
-	svc := pinnedService(t, rec, &models.SessionInput{UserID: "other-user", SessionID: "fixed", State: map[string]any{"prepared_by": "case"}})
+	svc := pinnedService(t, rec, &models.SessionInput{UserID: "other-user", SessionID: pin, State: map[string]any{"prepared_by": "case"}})
 	inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller"})
 	// Scoring reads the run's session back; that must be the caller's too.
 	if _, err := svc.Evaluate(context.Background(), service.EvaluateRequest{InferenceResults: inf, EvaluateConfig: service.EvaluateConfig{
@@ -700,9 +703,9 @@ func TestPinnedSessionOfAnotherUserIsNeverRead(t *testing.T) {
 func TestPinnedSessionWithoutCallerUsesCaseUser(t *testing.T) {
 	sessions := session.InMemoryService()
 	prepareSession(t, sessions, "u", map[string]any{"prepared_by": "caller"})
-	svc := pinnedService(t, sessions, &models.SessionInput{UserID: "u", SessionID: "fixed", State: map[string]any{"prepared_by": "case"}})
+	svc := pinnedService(t, sessions, &models.SessionInput{UserID: "u", SessionID: pin, State: map[string]any{"prepared_by": "case"}})
 	inf := inferOne(t, svc, service.InferenceRequest{})
-	if inf[0].SessionID != "fixed" {
+	if inf[0].SessionID != pin {
 		t.Errorf("session ID = %q, want fixed", inf[0].SessionID)
 	}
 	if v, _ := getSession(t, sessions, "u").State().Get("prepared_by"); v != "caller" {
@@ -713,8 +716,8 @@ func TestPinnedSessionWithoutCallerUsesCaseUser(t *testing.T) {
 // Without a session service nothing can be looked up, so the pinned session
 // counts as new and gets the case's state.
 func TestPinnedSessionWithoutSessionService(t *testing.T) {
-	svc, runner := pinnedServiceWithRunnerSessions(t, nil, &models.SessionInput{SessionID: "fixed", State: map[string]any{"prepared_by": "case"}})
-	if inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller"}); inf[0].SessionID != "fixed" {
+	svc, runner := pinnedServiceWithRunnerSessions(t, nil, &models.SessionInput{SessionID: pin, State: map[string]any{"prepared_by": "case"}})
+	if inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller"}); inf[0].SessionID != pin {
 		t.Errorf("session ID = %q, want fixed", inf[0].SessionID)
 	}
 	if v, _ := getSession(t, runner, "caller").State().Get("prepared_by"); v != "case" {
@@ -731,7 +734,7 @@ func TestPinnedSessionBlankIDsAreUnset(t *testing.T) {
 		t.Errorf("session ID = %q, want a fresh one", inf[0].SessionID)
 	}
 	prepareSession(t, sessions, "test_user_id", map[string]any{"prepared_by": "caller"})
-	svc = pinnedService(t, sessions, &models.SessionInput{UserID: "  ", SessionID: "fixed", State: map[string]any{"prepared_by": "case"}})
+	svc = pinnedService(t, sessions, &models.SessionInput{UserID: "  ", SessionID: pin, State: map[string]any{"prepared_by": "case"}})
 	inferOne(t, svc, service.InferenceRequest{})
 	if v, _ := getSession(t, sessions, "test_user_id").State().Get("prepared_by"); v != "caller" {
 		t.Errorf("prepared_by = %v, want the prepared session kept", v)
@@ -740,9 +743,30 @@ func TestPinnedSessionBlankIDsAreUnset(t *testing.T) {
 
 // Mirrors adk-python test_local_eval_service.py:315.
 func TestNumRunsDropsPinnedSession(t *testing.T) {
-	svc := pinnedService(t, session.InMemoryService(), &models.SessionInput{SessionID: "fixed"})
+	svc := pinnedService(t, session.InMemoryService(), &models.SessionInput{SessionID: pin})
 	inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller", InferenceConfig: service.InferenceConfig{NumRuns: 2}})
-	if len(inf) != 2 || inf[0].SessionID == "fixed" || inf[1].SessionID == "fixed" || inf[0].SessionID == inf[1].SessionID {
+	if len(inf) != 2 || inf[0].SessionID == pin || inf[1].SessionID == pin || inf[0].SessionID == inf[1].SessionID {
 		t.Errorf("session IDs = %q, %q; want two fresh, different ones", inf[0].SessionID, inf[len(inf)-1].SessionID)
+	}
+}
+
+// Only eval sessions can be pinned (a decision beyond adk-python): a pin
+// naming a real session of the caller's starts a fresh session and leaves the
+// real one untouched.
+func TestPinnedNonEvalSessionIsNotReused(t *testing.T) {
+	ctx := context.Background()
+	sessions := session.InMemoryService()
+	resp, err := sessions.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "caller", SessionID: "real-chat", State: map[string]any{"private": "x"}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	svc := pinnedService(t, sessions, &models.SessionInput{SessionID: "real-chat"})
+	inf := inferOne(t, svc, service.InferenceRequest{UserID: "caller"})
+	if inf[0].SessionID == "real-chat" || !generator.IsEvalSessionID(inf[0].SessionID) {
+		t.Errorf("session ID = %q, want a fresh eval session", inf[0].SessionID)
+	}
+	got, err := sessions.Get(ctx, &session.GetRequest{AppName: "app", UserID: "caller", SessionID: "real-chat"})
+	if err != nil || got.Session.Events().Len() != resp.Session.Events().Len() {
+		t.Errorf("the real session changed: %v", err)
 	}
 }
