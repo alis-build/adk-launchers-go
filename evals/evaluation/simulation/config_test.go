@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"go.alis.build/adk/launchers/evals/evaluation/simulation"
+	"google.golang.org/genai"
 )
 
 func parse(t *testing.T, raw string) simulation.UserSimulatorConfig {
@@ -86,5 +87,20 @@ func TestParseUserSimulatorConfigUnknownType(t *testing.T) {
 	_, err := simulation.ParseUserSimulatorConfig([]byte(`{"type":"typo_type_name"}`))
 	if err == nil || !strings.Contains(err.Error(), "typo_type_name") {
 		t.Errorf("error = %v, want one naming typo_type_name", err)
+	}
+}
+
+// Found in the hand check: adk-python's default voice is a Cloud
+// Text-to-Speech voice that Gemini TTS rejects, so a Gemini audio model with
+// no configuration gets audio output and Gemini's own default voice.
+func TestParseUserSimulatorConfigGeminiAudioDefault(t *testing.T) {
+	c := parse(t, `{"type":"llm_audio","audio_model":"gemini-2.5-flash-tts"}`).(simulation.LlmAudioUserSimulatorConfig)
+	cfg := c.AudioModelConfiguration
+	if cfg == nil || len(cfg.ResponseModalities) != 1 || cfg.ResponseModalities[0] != string(genai.ModalityAudio) || cfg.SpeechConfig != nil {
+		t.Errorf("audio configuration = %+v, want AUDIO output and no Cloud TTS voice", cfg)
+	}
+	given := parse(t, `{"type":"llm_audio","audio_model":"gemini-2.5-flash-tts","audio_model_configuration":{"speechConfig":{"languageCode":"fr-FR"}}}`).(simulation.LlmAudioUserSimulatorConfig)
+	if given.AudioModelConfiguration.SpeechConfig == nil || given.AudioModelConfiguration.SpeechConfig.LanguageCode != "fr-FR" || len(given.AudioModelConfiguration.ResponseModalities) != 0 {
+		t.Errorf("given configuration = %+v, want it used as given", given.AudioModelConfiguration)
 	}
 }

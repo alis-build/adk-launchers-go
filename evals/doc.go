@@ -145,7 +145,10 @@
 //     resolved by name through ADK's model registry (model.NewLLM), once per
 //     request, and an unknown name answers 400. adk-python's default,
 //     cloud_tts, has no Go implementation: register a model under that name,
-//     or name one, such as a Gemini TTS model, in audio_model.
+//     or name one, such as a Gemini TTS model, in audio_model. Without an
+//     audio_model_configuration a gemini-* audio model is asked for AUDIO
+//     output in Gemini's default voice, since adk-python's default voice is
+//     a Cloud Text-to-Speech one that Gemini rejects.
 //
 // Every run also reports the informational efficiency metrics
 // (tool_call_count_v1, inference_call_count_v1, token_usage_v1,

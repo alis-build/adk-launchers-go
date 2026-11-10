@@ -3,6 +3,7 @@ package simulation
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"google.golang.org/genai"
 )
@@ -73,7 +74,7 @@ func ParseUserSimulatorConfig(raw json.RawMessage) (UserSimulatorConfig, error) 
 			return nil, err
 		}
 		if audio.AudioModelConfiguration == nil {
-			audio.AudioModelConfiguration = defaultAudioModelConfiguration()
+			audio.AudioModelConfiguration = defaultAudioModelConfiguration(audio.AudioModel)
 		}
 		return audio, nil
 	default:
@@ -99,9 +100,16 @@ func decodeFields(fields map[string]json.RawMessage, targets map[[2]string]any) 
 	return nil
 }
 
-// defaultAudioModelConfiguration is adk-python's default voice: the prebuilt
-// en-US-Studio-O voice speaking en-US.
-func defaultAudioModelConfiguration() *genai.GenerateContentConfig {
+// defaultAudioModelConfiguration is the audio config used when the run gives
+// none. For a Gemini model it asks for audio output and leaves the voice to
+// Gemini: adk-python's default voice, en-US-Studio-O, is a Cloud
+// Text-to-Speech voice that Gemini TTS rejects with a 400, and Go has no
+// cloud_tts engine for it to suit. Any other model gets adk-python's default,
+// the prebuilt en-US-Studio-O voice speaking en-US.
+func defaultAudioModelConfiguration(audioModel string) *genai.GenerateContentConfig {
+	if strings.HasPrefix(strings.ToLower(audioModel), "gemini-") {
+		return &genai.GenerateContentConfig{ResponseModalities: []string{string(genai.ModalityAudio)}}
+	}
 	return &genai.GenerateContentConfig{SpeechConfig: &genai.SpeechConfig{
 		VoiceConfig:  &genai.VoiceConfig{PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: "en-US-Studio-O"}},
 		LanguageCode: "en-US",
