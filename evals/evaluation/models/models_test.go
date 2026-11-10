@@ -486,3 +486,25 @@ func TestSessionInputSessionIDRoundTrip(t *testing.T) {
 		t.Errorf("marshalled = %s, want no sessionId", out)
 	}
 }
+
+// adk-python's EvalMetric also accepts its field names (populate_by_name);
+// the camelCase alias wins when both appear.
+func TestEvalMetricAcceptsSnakeCaseKeys(t *testing.T) {
+	var m models.EvalMetric
+	if err := json.Unmarshal([]byte(`{"metric_name":"response_match_score","threshold":0.5,"custom_function_path":"pkg.fn"}`), &m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if m.MetricName != "response_match_score" || m.Threshold != 0.5 || m.CustomFunctionPath == nil || *m.CustomFunctionPath != "pkg.fn" {
+		t.Errorf("metric = %+v", m)
+	}
+	if err := json.Unmarshal([]byte(`{"metricName":"camel","metric_name":"snake"}`), &m); err != nil || m.MetricName != "camel" {
+		t.Errorf("both spellings: name = %q, %v; want camel", m.MetricName, err)
+	}
+	var withCriterion models.EvalMetric
+	if err := json.Unmarshal([]byte(`{"metric_name":"tool_trajectory_avg_score","criterion":{"threshold":0.5,"matchType":"ANY_ORDER"}}`), &withCriterion); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if c, ok := withCriterion.Criterion.AsToolTrajectory(); !ok || c.MatchType != models.ToolTrajectoryMatchAnyOrder {
+		t.Errorf("criterion = %+v, want the trajectory criterion kept", withCriterion.Criterion)
+	}
+}

@@ -101,6 +101,32 @@ type EvalMetric struct {
 	CustomFunctionPath *string       `json:"customFunctionPath,omitempty"`
 }
 
+// UnmarshalJSON accepts adk-python's field names (metric_name,
+// custom_function_path) as well as the camelCase aliases, which win when
+// both appear, as in pydantic.
+func (m *EvalMetric) UnmarshalJSON(data []byte) error {
+	type plain EvalMetric
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	var snake struct {
+		MetricName         *string `json:"metric_name"`
+		CustomFunctionPath *string `json:"custom_function_path"`
+	}
+	if err := json.Unmarshal(data, &snake); err != nil {
+		return err
+	}
+	if p.MetricName == "" && snake.MetricName != nil {
+		p.MetricName = *snake.MetricName
+	}
+	if p.CustomFunctionPath == nil && snake.CustomFunctionPath != nil {
+		p.CustomFunctionPath = snake.CustomFunctionPath
+	}
+	*m = EvalMetric(p)
+	return nil
+}
+
 // jsonCriterion holds unmarshaled criterion variants for EvalMetric.
 type jsonCriterion struct {
 	value any
