@@ -94,4 +94,10 @@
 // [RegistryConfig.JudgeClient] must be safe for concurrent use. A limit below 1 is rejected when the evaluator is
 // built. For the per-invocation judge metrics a failed judge call leaves only
 // its own invocation NOT_EVALUATED (logged), not the whole metric.
+//
+// That matches adk-python, but it means a judge outage or rate limit can let
+// a case pass: the overall score averages only the invocations the judge
+// graded, so an ungraded turn, however bad, does not count against it. When
+// pass rates jump, check the per-invocation statuses for NOT_EVALUATED before
+// trusting them.
 package metrics
