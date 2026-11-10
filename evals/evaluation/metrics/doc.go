@@ -23,6 +23,10 @@
 //     tool time in [models.DurationDetails]. Live inference records no
 //     durations, so for live runs this metric reports no value.
 //
+// ADK Go's live connection (v2.7.1) reports no token usage, so for live runs
+// inference_call_count_v1 is 0 and token_usage_v1 reports no value;
+// adk-python reports both.
+//
 // The evals launcher adds all four to every run.
 //
 // # Tool trajectory matching
