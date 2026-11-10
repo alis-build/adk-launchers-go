@@ -166,7 +166,7 @@ func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID,
 		RepetitionIndex: &rep,
 		UserID:          evalCaseUserID(&models.EvalCase{SessionInput: input}),
 	}
-	sim, err := s.SimProvider.Provide(evalCase)
+	sim, err := s.SimProvider.Provide(ctx, evalCase)
 	if err != nil {
 		result.Status = InferenceStatusFailed
 		result.ErrorMessage = err.Error()

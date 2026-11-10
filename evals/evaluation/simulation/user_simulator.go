@@ -3,8 +3,10 @@ package simulation
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
@@ -61,6 +63,13 @@ func (s *StaticUserSimulator) GetNextUserMessage(_ context.Context, _ []*session
 type UserSimulatorProvider struct {
 	Config BaseUserSimulatorConfig
 	LLM    LlmBackedFactory
+	// SimulatorConfig is the parsed user_simulator_config. An
+	// [LlmAudioUserSimulatorConfig] speaks every case's turns through an
+	// [AudioUserSimulator]; nil or any other config keeps text turns.
+	SimulatorConfig UserSimulatorConfig
+	// ResolveModel resolves the audio model by name; nil uses ADK's model
+	// registry (model.NewLLM).
+	ResolveModel func(ctx context.Context, name string) (model.LLM, error)
 }
 
 // LlmBackedFactory constructs LLM-backed simulators (injected for tests and runtime).
@@ -68,16 +77,42 @@ type LlmBackedFactory interface {
 	NewLlmBackedSimulator(cfg BaseUserSimulatorConfig, scenario *models.ConversationScenario) (UserSimulator, error)
 }
 
-// Provide selects a static or LLM-backed simulator based on eval case shape.
-func (p *UserSimulatorProvider) Provide(evalCase models.EvalCase) (UserSimulator, error) {
+// Provide selects a static or LLM-backed simulator based on eval case shape,
+// wrapped in an [AudioUserSimulator] when SimulatorConfig asks for audio
+// (adk-python's UserSimulatorProvider.provide).
+func (p *UserSimulatorProvider) Provide(ctx context.Context, evalCase models.EvalCase) (UserSimulator, error) {
 	if err := evalCase.Validate(); err != nil {
 		return nil, err
 	}
-	if evalCase.Conversation != nil {
-		return NewStaticUserSimulator(evalCase.Conversation), nil
+	audioCfg, audio := p.SimulatorConfig.(LlmAudioUserSimulatorConfig)
+	cfg := p.Config
+	if audio {
+		maxInvocations := audioCfg.MaxAllowedInvocations
+		cfg = BaseUserSimulatorConfig{MaxInvocations: &maxInvocations}
 	}
-	if p.LLM == nil {
+	var text UserSimulator
+	switch {
+	case evalCase.Conversation != nil:
+		text = NewStaticUserSimulator(evalCase.Conversation)
+	case p.LLM == nil:
 		return nil, errLlmSimulatorRequired
+	default:
+		sim, err := p.LLM.NewLlmBackedSimulator(cfg, evalCase.ConversationScenario)
+		if err != nil {
+			return nil, err
+		}
+		text = sim
 	}
-	return p.LLM.NewLlmBackedSimulator(p.Config, evalCase.ConversationScenario)
+	if !audio {
+		return text, nil
+	}
+	resolve := p.ResolveModel
+	if resolve == nil {
+		resolve = model.NewLLM
+	}
+	audioModel, err := resolve(ctx, audioCfg.AudioModel)
+	if err != nil {
+		return nil, fmt.Errorf("user_simulator_config.audio_model %q: %w", audioCfg.AudioModel, err)
+	}
+	return NewAudioUserSimulator(audioCfg, text, audioModel), nil
 }

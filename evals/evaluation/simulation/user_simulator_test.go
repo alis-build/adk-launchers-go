@@ -36,7 +36,7 @@ func TestUserSimulatorProviderStatic(t *testing.T) {
 		EvalID:       "c1",
 		Conversation: []models.Invocation{{UserContent: genai.NewContentFromText("hi", genai.RoleUser)}},
 	}
-	sim, err := p.Provide(c)
+	sim, err := p.Provide(context.Background(), c)
 	if err != nil {
 		t.Fatalf("Provide: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestUserSimulatorProviderScenarioRequiresFactory(t *testing.T) {
 			ConversationPlan: "plan",
 		},
 	}
-	_, err := p.Provide(c)
+	_, err := p.Provide(context.Background(), c)
 	if err == nil {
 		t.Fatal("expected error without LLM factory")
 	}

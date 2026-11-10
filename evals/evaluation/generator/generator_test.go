@@ -75,7 +75,7 @@ func TestGenerateInferencesUsesProvidedSessionID(t *testing.T) {
 		},
 	}
 	provider := simulation.UserSimulatorProvider{}
-	sim, err := provider.Provide(evalCase)
+	sim, err := provider.Provide(context.Background(), evalCase)
 	if err != nil {
 		t.Fatalf("Provide: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestGenerateInferencesStaticConversation(t *testing.T) {
 		},
 	}
 	provider := simulation.UserSimulatorProvider{}
-	sim, err := provider.Provide(evalCase)
+	sim, err := provider.Provide(context.Background(), evalCase)
 	if err != nil {
 		t.Fatalf("Provide: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestGenerateInferencesRecordsSilentTurns(t *testing.T) {
 		t.Fatalf("NewRuntime: %v", err)
 	}
 	provider := simulation.UserSimulatorProvider{}
-	sim, err := provider.Provide(models.EvalCase{
+	sim, err := provider.Provide(context.Background(), models.EvalCase{
 		EvalID: "case-1",
 		Conversation: []models.Invocation{
 			{UserContent: genai.NewContentFromText("First silent query", genai.RoleUser)},

@@ -107,7 +107,7 @@ func TestUserSimulatorProviderLlmBacked(t *testing.T) {
 			ConversationPlan: "plan",
 		},
 	}
-	sim, err := p.Provide(c)
+	sim, err := p.Provide(context.Background(), c)
 	if err != nil {
 		t.Fatalf("Provide: %v", err)
 	}
