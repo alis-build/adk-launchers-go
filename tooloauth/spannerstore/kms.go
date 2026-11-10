@@ -15,6 +15,9 @@ type keyWrapper interface {
 	// Unwrap decrypts ciphertext, and fails unless aad is the one it was
 	// wrapped with.
 	Unwrap(ctx context.Context, ciphertext, aad []byte) ([]byte, error)
+	// KeyName names the key, stored with each row so a row written with
+	// another key is told apart from a bad row.
+	KeyName() string
 }
 
 // kmsWrapper wraps data keys with the Cloud KMS key keyName.
@@ -22,6 +25,9 @@ type kmsWrapper struct {
 	client  *kms.KeyManagementClient
 	keyName string
 }
+
+// KeyName implements keyWrapper.
+func (w kmsWrapper) KeyName() string { return w.keyName }
 
 // Wrap implements keyWrapper with KMS Encrypt.
 func (w kmsWrapper) Wrap(ctx context.Context, plaintext, aad []byte) ([]byte, error) {

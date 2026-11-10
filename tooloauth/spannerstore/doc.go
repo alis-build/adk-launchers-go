@@ -9,6 +9,18 @@
 // with the KMS key sees only ciphertext. The row key is a digest of the
 // app, user and slot, so no user ID is stored in clear.
 //
+// A row whose token can never be read (corrupted, tampered with, or copied
+// from another row) is deleted when read and reported as no token, so the
+// user is asked to sign in again. A KMS failure that is not about the row
+// itself, such as an outage, a missing decrypt grant, or a disabled or
+// destroyed key version, is an error and leaves the row in place: deleting
+// on it would sign every user out. Each row records the KMS key that wrapped
+// it, so a store pointed at the wrong key (a staging key name in production,
+// say) reports an error for each row and deletes none, though KMS answers it
+// exactly as it answers a bad row. To move to another key on purpose, delete the
+// table's rows; users then sign in again. Rotating versions of one key needs
+// nothing.
+//
 // Create the table with [DDL]. Its row deletion policy makes a row eligible
 // for deletion a day after its expiry, and Spanner removes it in the
 // background, typically within three days; the store never serves a row past

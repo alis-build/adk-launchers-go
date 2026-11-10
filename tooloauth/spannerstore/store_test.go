@@ -12,6 +12,8 @@ import (
 	"cloud.google.com/go/spanner/spannertest"
 	"go.alis.build/adk/launchers/tooloauth"
 	"google.golang.org/adk/v2/auth"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var key7 = auth.CredentialKey{AppName: "app-1", UserID: "user-7", Key: "slot-a"}
@@ -164,5 +166,96 @@ func TestNew_rejectsKeyVersionName(t *testing.T) {
 	_, err := New(&spanner.Client{}, kmsClient, "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1")
 	if err == nil || err.Error() != "spannerstore: key name must name a CryptoKey, not a CryptoKeyVersion" {
 		t.Errorf("New() error = %v, want the key-version error", err)
+	}
+}
+
+// A row whose token cannot be decoded is dropped as a miss, so the user signs
+// in again instead of seeing the sign-in as unavailable until it expires.
+func TestStore_undecodableTokenIsDroppedAsAMiss(t *testing.T) {
+	client := startSpanner(t)
+	kms := newFakeKMS()
+	s := newStore(client, kms)
+	ctx := context.Background()
+	rk := rowKey(key7)
+	dataKey := make([]byte, 32)
+	wrappedKey, err := kms.Wrap(ctx, dataKey, rk)
+	if err != nil {
+		t.Fatalf("Wrap: %v", err)
+	}
+	aead, err := newAEAD(dataKey)
+	if err != nil {
+		t.Fatalf("newAEAD: %v", err)
+	}
+	nonce := make([]byte, 12)
+	ciphertext := aead.Seal(nil, nonce, []byte("not json"), rk)
+	if _, err := client.Apply(ctx, []*spanner.Mutation{spanner.InsertOrUpdate(Table, columns, []any{rk, wrappedKey, nonce, ciphertext, kms.KeyName(), time.Now().Add(time.Hour).UTC()})}); err != nil {
+		t.Fatalf("insert row: %v", err)
+	}
+
+	cred, ok, err := s.Get(ctx, key7)
+
+	if cred != nil || ok || err != nil {
+		t.Errorf("Get() = %v, %v, %v; want a miss", cred, ok, err)
+	}
+	if rowExists(t, client, key7) {
+		t.Error("the undecodable row is still stored, want it dropped")
+	}
+}
+
+// A KMS failure that is not about the row itself is an error and keeps the
+// row: deleting on an outage or a disabled key would sign every user out.
+func TestStore_kmsFailureKeepsTheRow(t *testing.T) {
+	for name, kmsErr := range map[string]error{
+		"outage":            status.Error(codes.Unavailable, "kms down"),
+		"permission denied": status.Error(codes.PermissionDenied, "no decrypt grant"),
+		"key disabled":      status.Error(codes.FailedPrecondition, "key version disabled"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := startSpanner(t)
+			kms := newFakeKMS()
+			s := newStore(client, kms)
+			ctx := context.Background()
+			if err := s.Set(ctx, key7, &tooloauth.Token{AccessToken: "at-1"}, time.Now().Add(time.Hour)); err != nil {
+				t.Fatalf("Set() error = %v", err)
+			}
+			kms.unwrapErr = kmsErr
+
+			cred, ok, err := s.Get(ctx, key7)
+
+			if err == nil || ok || cred != nil {
+				t.Errorf("Get() = %v, %v, %v; want an error", cred, ok, err)
+			}
+			if !rowExists(t, client, key7) {
+				t.Error("row dropped on a KMS failure, want it kept")
+			}
+		})
+	}
+}
+
+// A store pointed at another KMS key than the rows were written with, such
+// as a staging key name in production, gets KMS's "invalid" answer for every
+// row. That is a misconfiguration, not a bad row: it is an error and every
+// row is kept, rather than signing every user out.
+func TestStore_wrongKMSKeyKeepsTheRows(t *testing.T) {
+	client := startSpanner(t)
+	prod := newFakeKMS()
+	prod.name = "projects/p/locations/global/keyRings/r/cryptoKeys/prod"
+	ctx := context.Background()
+	if err := newStore(client, prod).Set(ctx, key7, &tooloauth.Token{AccessToken: "at-1"}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	staging := newFakeKMS()
+	staging.name = "projects/p/locations/global/keyRings/r/cryptoKeys/staging"
+
+	cred, ok, err := newStore(client, staging).Get(ctx, key7)
+
+	if err == nil || ok || cred != nil {
+		t.Errorf("Get() with another key = %v, %v, %v; want an error", cred, ok, err)
+	}
+	if !rowExists(t, client, key7) {
+		t.Error("row dropped under the wrong key, want it kept")
+	}
+	if cred, ok, err := newStore(client, prod).Get(ctx, key7); !ok || err != nil || cred.(*tooloauth.Token).AccessToken != "at-1" {
+		t.Errorf("Get() with the right key = %v, %v, %v; want the token", cred, ok, err)
 	}
 }

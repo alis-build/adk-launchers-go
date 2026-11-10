@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +13,8 @@ import (
 	"cloud.google.com/go/spanner/spannertest"
 	"cloud.google.com/go/spanner/spansql"
 	"go.alis.build/adk/launchers/tooloauth"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // startSpanner starts the Spanner client library's in-memory fake with DDL
@@ -53,6 +54,16 @@ type fakeKMS struct {
 	// ignoreAAD makes Unwrap skip the AAD check, so a test can show the
 	// token's own seal binds it to its row.
 	ignoreAAD bool
+	// unwrapErr, when set, is what every Unwrap returns, standing in for a
+	// KMS outage or a disabled key.
+	unwrapErr error
+	// aadRejections counts Unwraps refused because the AAD did not match.
+	aadRejections int
+	// name is the key name KeyName reports.
+	name string
+	// onUnwrap, when set, runs at the start of each Unwrap, outside the
+	// lock, so a test can write to the store while a Get is in flight.
+	onUnwrap func()
 }
 
 type wrapped struct {
@@ -75,14 +86,33 @@ func (f *fakeKMS) Wrap(_ context.Context, plaintext, aad []byte) ([]byte, error)
 }
 
 func (f *fakeKMS) Unwrap(_ context.Context, ciphertext, aad []byte) ([]byte, error) {
+	if f.onUnwrap != nil {
+		f.onUnwrap()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unwraps++
+	if f.unwrapErr != nil {
+		return nil, f.unwrapErr
+	}
 	w, ok := f.keys[hex.EncodeToString(ciphertext)]
+	if ok && !f.ignoreAAD && !bytes.Equal(w.aad, aad) {
+		f.aadRejections++
+	}
 	if !ok || (!f.ignoreAAD && !bytes.Equal(w.aad, aad)) {
-		return nil, errors.New("fake kms: decryption failed")
+		// What KMS answers for a ciphertext that is not this key's, or whose
+		// AAD differs.
+		return nil, status.Error(codes.InvalidArgument, "fake kms: decryption failed")
 	}
 	return bytes.Clone(w.plaintext), nil
+}
+
+// KeyName implements keyWrapper; name defaults to "fake-key".
+func (f *fakeKMS) KeyName() string {
+	if f.name == "" {
+		return "fake-key"
+	}
+	return f.name
 }
 
 func (f *fakeKMS) unwrapCount() int {
