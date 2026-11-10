@@ -147,8 +147,9 @@
 //     cloud_tts, has no Go implementation: register a model under that name,
 //     or name one, such as a Gemini TTS model, in audio_model. Without an
 //     audio_model_configuration a gemini-* audio model is asked for AUDIO
-//     output in Gemini's default voice, since adk-python's default voice is
-//     a Cloud Text-to-Speech one that Gemini rejects.
+//     output in the Gemini voice Kore, since adk-python's default voice is a
+//     Cloud Text-to-Speech one that Gemini rejects, and Vertex AI requires a
+//     voice to be named.
 //
 // Every run also reports the informational efficiency metrics
 // (tool_call_count_v1, inference_call_count_v1, token_usage_v1,

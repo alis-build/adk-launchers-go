@@ -91,13 +91,16 @@ func TestParseUserSimulatorConfigUnknownType(t *testing.T) {
 }
 
 // Found in the hand check: adk-python's default voice is a Cloud
-// Text-to-Speech voice that Gemini TTS rejects, so a Gemini audio model with
-// no configuration gets audio output and Gemini's own default voice.
+// Text-to-Speech voice that Gemini TTS rejects, and Vertex AI rejects a
+// Gemini TTS request with no voice, so a Gemini audio model with no
+// configuration gets audio output in the Gemini voice Kore.
 func TestParseUserSimulatorConfigGeminiAudioDefault(t *testing.T) {
 	c := parse(t, `{"type":"llm_audio","audio_model":"gemini-2.5-flash-tts"}`).(simulation.LlmAudioUserSimulatorConfig)
 	cfg := c.AudioModelConfiguration
-	if cfg == nil || len(cfg.ResponseModalities) != 1 || cfg.ResponseModalities[0] != string(genai.ModalityAudio) || cfg.SpeechConfig != nil {
-		t.Errorf("audio configuration = %+v, want AUDIO output and no Cloud TTS voice", cfg)
+	if cfg == nil || len(cfg.ResponseModalities) != 1 || cfg.ResponseModalities[0] != string(genai.ModalityAudio) ||
+		cfg.SpeechConfig == nil || cfg.SpeechConfig.VoiceConfig == nil || cfg.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig == nil ||
+		cfg.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName != "Kore" || cfg.SpeechConfig.LanguageCode != "" {
+		t.Errorf("audio configuration = %+v, want AUDIO output in the Gemini voice Kore", cfg)
 	}
 	given := parse(t, `{"type":"llm_audio","audio_model":"gemini-2.5-flash-tts","audio_model_configuration":{"speechConfig":{"languageCode":"fr-FR"}}}`).(simulation.LlmAudioUserSimulatorConfig)
 	if given.AudioModelConfiguration.SpeechConfig == nil || given.AudioModelConfiguration.SpeechConfig.LanguageCode != "fr-FR" || len(given.AudioModelConfiguration.ResponseModalities) != 0 {

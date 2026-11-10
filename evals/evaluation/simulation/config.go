@@ -100,15 +100,23 @@ func decodeFields(fields map[string]json.RawMessage, targets map[[2]string]any) 
 	return nil
 }
 
+// geminiDefaultVoice is the prebuilt Gemini voice an llm_audio run speaks in
+// when its Gemini audio model is given no configuration.
+const geminiDefaultVoice = "Kore"
+
 // defaultAudioModelConfiguration is the audio config used when the run gives
-// none. For a Gemini model it asks for audio output and leaves the voice to
-// Gemini: adk-python's default voice, en-US-Studio-O, is a Cloud
-// Text-to-Speech voice that Gemini TTS rejects with a 400, and Go has no
-// cloud_tts engine for it to suit. Any other model gets adk-python's default,
+// none. For a Gemini model it asks for audio output in Gemini's prebuilt
+// voice Kore: adk-python's default voice, en-US-Studio-O, is a Cloud
+// Text-to-Speech voice that Gemini TTS rejects with a 400, Go has no
+// cloud_tts engine for it to suit, and Vertex AI also rejects a Gemini TTS
+// request that names no voice. Any other model gets adk-python's default,
 // the prebuilt en-US-Studio-O voice speaking en-US.
 func defaultAudioModelConfiguration(audioModel string) *genai.GenerateContentConfig {
 	if strings.HasPrefix(strings.ToLower(audioModel), "gemini-") {
-		return &genai.GenerateContentConfig{ResponseModalities: []string{string(genai.ModalityAudio)}}
+		return &genai.GenerateContentConfig{
+			ResponseModalities: []string{string(genai.ModalityAudio)},
+			SpeechConfig:       &genai.SpeechConfig{VoiceConfig: &genai.VoiceConfig{PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: geminiDefaultVoice}}},
+		}
 	}
 	return &genai.GenerateContentConfig{SpeechConfig: &genai.SpeechConfig{
 		VoiceConfig:  &genai.VoiceConfig{PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: "en-US-Studio-O"}},
