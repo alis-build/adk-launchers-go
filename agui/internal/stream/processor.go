@@ -164,6 +164,7 @@ type State struct {
 	RootAppName               string
 	StreamedReasoning         string          // accumulated partial reasoning text of the current streamed message; classifies non-partial thought events as repeat vs independent
 	StreamedText              strings.Builder // partial text deltas streamed for the current message; classifies non-partial text events as repeat vs independent
+	StreamedStep              string          // step name of the producer whose partials StreamedText and StreamedReasoning hold
 	RunFinalized              bool
 	EmittedInterrupts         []types.Interrupt
 	EmittedToolCallArgsJSON   map[string]string
@@ -282,7 +283,10 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 	} else if stepName == state.RootAppName {
 		stepName = ""
 	}
-	stepChanging := stepMayChange && stepName != state.CurrentStepName
+	// ADK's trailing final arrives after TurnComplete closed the step. When it
+	// only repeats what the same producer streamed, it is dropped below, and
+	// re-opening the step for it would leave an empty step on the wire.
+	stepChanging := stepMayChange && stepName != state.CurrentStepName && !isTrailingRepeat(ev, state, stepName)
 
 	// The outgoing step closes before the incoming activation opens. Emitting it
 	// after the handover would stamp the previous producer's STEP_FINISHED with
@@ -293,8 +297,13 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 		closeReasoningMessage(sink, state)
 		// A different producer follows its own streaming convention; its text
 		// must not be deduped against the previous author's streamed content.
-		state.StreamedText.Reset()
-		state.StreamedReasoning = ""
+		// The same producer re-opening its step after TurnComplete closed it
+		// keeps the accumulation: that is how ADK's trailing final, which
+		// arrives after TurnComplete, is still recognized as a repeat.
+		if stepName != state.StreamedStep {
+			state.StreamedText.Reset()
+			state.StreamedReasoning = ""
+		}
 		if state.CurrentStepName != "" {
 			sink.Emit(events.NewStepFinishedEvent(state.CurrentStepName))
 		}
@@ -378,6 +387,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 					}
 					text = text[len(state.StreamedReasoning):]
 					state.StreamedReasoning = part.Text
+					state.StreamedStep = stepName
 				} else if streamed := state.StreamedReasoning; streamed != "" {
 					switch {
 					case text == streamed:
@@ -442,6 +452,7 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 						state.StreamedText.Reset()
 					}
 					state.StreamedText.WriteString(text)
+					state.StreamedStep = stepName
 				} else if streamed := state.StreamedText.String(); streamed != "" {
 					switch {
 					case text == streamed:
@@ -585,6 +596,28 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 	}
 
 	return false, sink.Err()
+}
+
+// isTrailingRepeat reports whether ev is ADK's trailing non-partial final for
+// a stream that TurnComplete already closed: the same producer (stepName), no
+// open step, and content that is only the streamed text or the streamed
+// thought, repeated exactly, with no signature blob (which is still emitted).
+// The content loop drops such parts, so the event contributes nothing a step
+// would bracket.
+func isTrailingRepeat(ev *session.Event, state *State, stepName string) bool {
+	if ev.Partial || state.CurrentStepName != "" || stepName != state.StreamedStep || ev.Content == nil || len(ev.Content.Parts) == 0 {
+		return false
+	}
+	for _, part := range ev.Content.Parts {
+		switch {
+		case part == nil:
+		case part.Thought && part.Text != "" && part.Text == state.StreamedReasoning && len(part.ThoughtSignature) == 0:
+		case !part.Thought && part.Text != "" && part.Text == state.StreamedText.String() && len(part.ThoughtSignature) == 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // finalizeLifecycle closes any open text messages, reasoning phases, and

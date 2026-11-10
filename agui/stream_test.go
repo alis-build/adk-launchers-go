@@ -225,6 +225,145 @@ func TestProcessEvent_TextStreaming_FinalDedupedAfterTurnComplete(t *testing.T) 
 	}
 }
 
+// Found in the tooloauth hand check: a producer that gets a step (a sub-agent,
+// or the root agent stamped with a node path, as ADK v2.7.1 does) had every
+// streamed reply emitted twice. TurnComplete closes the message and the step;
+// the trailing final then re-opened the step, and the step change wiped the
+// streamed text the repeat is recognized by.
+func TestProcessEvent_TextStreaming_FinalDedupedAfterTurnCompleteInAStep(t *testing.T) {
+	for name, stamp := range map[string]func(*session.Event){
+		"sub-agent":             func(ev *session.Event) { ev.Author = "helper" },
+		"root with a node path": func(ev *session.Event) { ev.Author = "test-app"; ev.NodeInfo = &session.NodeInfo{Path: "test-app"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			l := newTestLauncher("test-app")
+			state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+			var all []sseEvent
+			send := func(build func(*session.Event)) []sseEvent {
+				t.Helper()
+				e, rec := newTestEmitter()
+				ev := session.NewEvent(t.Context(), "inv1")
+				stamp(ev)
+				build(ev)
+				if _, err := l.processEvent(e, ev, state, nil); err != nil {
+					t.Fatalf("processEvent() error = %v", err)
+				}
+				got := parseSSEEvents(rec.Body.String())
+				all = append(all, got...)
+				return got
+			}
+			send(func(ev *session.Event) {
+				ev.Content = genai.NewContentFromText("Hel", genai.RoleModel)
+				ev.Partial = true
+			})
+			send(func(ev *session.Event) {
+				ev.Content = genai.NewContentFromText("lo", genai.RoleModel)
+				ev.Partial = true
+			})
+			send(func(ev *session.Event) { ev.TurnComplete = true })
+			final := send(func(ev *session.Event) { ev.Content = genai.NewContentFromText("Hello", genai.RoleModel) })
+			if len(final) != 0 {
+				t.Errorf("trailing final emitted %d events (first %s), want none: no repeated text and no empty step", len(final), final[0].Type)
+			}
+			var starts int
+			var text strings.Builder
+			for _, ev := range all {
+				switch ev.Type {
+				case events.EventTypeTextMessageStart:
+					starts++
+				case events.EventTypeTextMessageContent:
+					text.WriteString(ev.str("delta"))
+				}
+			}
+			if starts != 1 || text.String() != "Hello" {
+				t.Errorf("got %d messages with text %q, want 1 with Hello", starts, text.String())
+			}
+		})
+	}
+}
+
+// A trailing final that repeats the streamed text and adds a tool call
+// re-opens the step for the call, but the text is still the stream's repeat.
+func TestProcessEvent_TextStreaming_FinalWithToolCallInAStep(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+	var final []sseEvent
+	for i, build := range []func(*session.Event){
+		func(ev *session.Event) {
+			ev.Content = genai.NewContentFromText("Checking.", genai.RoleModel)
+			ev.Partial = true
+		},
+		func(ev *session.Event) { ev.TurnComplete = true },
+		func(ev *session.Event) {
+			ev.Content = &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{
+				{Text: "Checking."},
+				{FunctionCall: &genai.FunctionCall{ID: "call-1", Name: "lookup"}},
+			}}
+		},
+	} {
+		e, rec := newTestEmitter()
+		ev := session.NewEvent(t.Context(), "inv1")
+		ev.Author = "helper"
+		build(ev)
+		if _, err := l.processEvent(e, ev, state, nil); err != nil {
+			t.Fatalf("processEvent() error = %v", err)
+		}
+		if i == 2 {
+			final = parseSSEEvents(rec.Body.String())
+		}
+	}
+	var toolStarts int
+	for _, ev := range final {
+		switch ev.Type {
+		case events.EventTypeTextMessageStart, events.EventTypeTextMessageContent:
+			t.Errorf("trailing final emitted %s, want its repeated text dropped", ev.Type)
+		case events.EventTypeToolCallStart:
+			toolStarts++
+		}
+	}
+	if toolStarts != 1 {
+		t.Errorf("got %d TOOL_CALL_START, want the call emitted", toolStarts)
+	}
+}
+
+// A different producer's reply that happens to equal the previous producer's
+// streamed text is its own message, not a repeat.
+func TestProcessEvent_TextStreaming_OtherProducerSameTextNotDeduped(t *testing.T) {
+	l := newTestLauncher("test-app")
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+	var starts int
+	for _, step := range []struct {
+		author  string
+		partial bool
+		turn    bool
+		text    string
+	}{
+		{"helper", true, false, "Done."},
+		{"helper", false, true, ""},
+		{"reviewer", false, false, "Done."},
+	} {
+		e, rec := newTestEmitter()
+		ev := session.NewEvent(t.Context(), "inv1")
+		ev.Author = step.author
+		ev.Partial = step.partial
+		ev.TurnComplete = step.turn
+		if step.text != "" {
+			ev.Content = genai.NewContentFromText(step.text, genai.RoleModel)
+		}
+		if _, err := l.processEvent(e, ev, state, nil); err != nil {
+			t.Fatalf("processEvent() error = %v", err)
+		}
+		for _, got := range parseSSEEvents(rec.Body.String()) {
+			if got.Type == events.EventTypeTextMessageStart {
+				starts++
+			}
+		}
+	}
+	if starts != 2 {
+		t.Errorf("got %d messages, want 2: reviewer's reply is not helper's repeat", starts)
+	}
+}
+
 func TestProcessEvent_TextStreaming_NonPartialOnly(t *testing.T) {
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
