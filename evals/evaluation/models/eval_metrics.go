@@ -21,6 +21,12 @@ const (
 	MetricMultiTurnTrajectoryQualityV1            = "multi_turn_trajectory_quality_v1"
 	MetricMultiTurnToolUseQualityV1               = "multi_turn_tool_use_quality_v1"
 	MetricRubricBasedMultiTurnTrajectoryQualityV1 = "rubric_based_multi_turn_trajectory_quality_v1"
+	// Informational efficiency metrics: they report a value per eval and
+	// never pass or fail it.
+	MetricToolCallCountV1      = "tool_call_count_v1"
+	MetricInferenceCallCountV1 = "inference_call_count_v1"
+	MetricTokenUsageV1         = "token_usage_v1"
+	MetricInvocationDurationV1 = "invocation_duration_v1"
 )
 
 // JudgeModelOptions configures LLM-as-judge metrics.
@@ -188,6 +194,36 @@ type MetricInfo struct {
 // present only for rubric-based metrics.
 type EvalMetricResultDetails struct {
 	RubricScores []RubricScore `json:"rubricScores,omitempty"`
+	// TokenUsageDetails breaks token_usage_v1's total down by token type.
+	TokenUsageDetails *TokenUsageDetails `json:"tokenUsageDetails,omitempty"`
+	// DurationDetails splits invocation_duration_v1's total into model, tool
+	// and framework time.
+	DurationDetails *DurationDetails `json:"durationDetails,omitempty"`
+}
+
+// TokenUsageDetails is every token count behind token_usage_v1, with
+// adk-python's telemetry meanings: total is input plus output; input is
+// prompt plus tool use, of which cached; output is candidates plus
+// reasoning. A count is nil when no model call reported it.
+type TokenUsageDetails struct {
+	TotalTokens      *float64 `json:"totalTokens,omitempty"`
+	InputTokens      *float64 `json:"inputTokens,omitempty"`
+	PromptTokens     *float64 `json:"promptTokens,omitempty"`
+	CachedTokens     *float64 `json:"cachedTokens,omitempty"`
+	ToolUseTokens    *float64 `json:"toolUseTokens,omitempty"`
+	OutputTokens     *float64 `json:"outputTokens,omitempty"`
+	CandidatesTokens *float64 `json:"candidatesTokens,omitempty"`
+	ReasoningTokens  *float64 `json:"reasoningTokens,omitempty"`
+}
+
+// DurationDetails partitions invocation_duration_v1's total: seconds
+// awaiting a model, seconds inside tools, and the framework's own time. Each
+// is nil when it was not measured.
+type DurationDetails struct {
+	TotalSeconds     *float64 `json:"totalSeconds,omitempty"`
+	ModelSeconds     *float64 `json:"modelSeconds,omitempty"`
+	ToolSeconds      *float64 `json:"toolSeconds,omitempty"`
+	FrameworkSeconds *float64 `json:"frameworkSeconds,omitempty"`
 }
 
 // EvalMetricResult is the outcome for one metric.

@@ -112,10 +112,10 @@ func TestResponseMatchEvaluator(t *testing.T) {
 	}
 }
 
-func TestDefaultRegistryHas13Metrics(t *testing.T) {
+func TestDefaultRegistryHas17Metrics(t *testing.T) {
 	infos := metrics.DefaultRegistry.GetRegisteredMetrics()
-	if len(infos) != 13 {
-		t.Fatalf("len = %d, want 13", len(infos))
+	if len(infos) != 17 {
+		t.Fatalf("len = %d, want 17", len(infos))
 	}
 }
 

@@ -131,3 +131,35 @@ func rubricMultiTurnMetricInfo() models.MetricInfo {
 		RequiresThreshold: true,
 	}
 }
+
+// toolCallCountMetricInfo returns metadata for tool_call_count_v1, an informational efficiency metric.
+func toolCallCountMetricInfo() models.MetricInfo {
+	return models.MetricInfo{
+		MetricName:  models.MetricToolCallCountV1,
+		Description: "This metric counts the number of tool (function) calls the agent made per invocation, averaged across the eval case. It is an informational efficiency metric: it reports the value for tracking and does not pass or fail the eval case.",
+	}
+}
+
+// inferenceCallCountMetricInfo returns metadata for inference_call_count_v1, an informational efficiency metric.
+func inferenceCallCountMetricInfo() models.MetricInfo {
+	return models.MetricInfo{
+		MetricName:  models.MetricInferenceCallCountV1,
+		Description: "This metric counts the number of inference (model) calls the agent made per invocation, averaged across the eval case. It is a proxy for the number of attempts or reasoning steps taken, and read alongside token usage it separates the two ways a turn gets expensive: more calls, or a larger context per call. It is an informational efficiency metric: it reports the value for tracking and does not pass or fail the eval case.",
+	}
+}
+
+// tokenUsageMetricInfo returns metadata for token_usage_v1, an informational efficiency metric.
+func tokenUsageMetricInfo() models.MetricInfo {
+	return models.MetricInfo{
+		MetricName:  models.MetricTokenUsageV1,
+		Description: "This metric sums the tokens consumed by the model across all model calls in an invocation, averaged across the eval case. The score is the total; every token type is reported alongside it as a nested breakdown -- total, then input (prompt, of which cached, plus tool use) and output (candidates plus reasoning) -- using the same definitions as ADK's telemetry token metrics. It is an informational efficiency metric: it reports the value for tracking and does not pass or fail the eval case.",
+	}
+}
+
+// invocationDurationMetricInfo returns metadata for invocation_duration_v1, an informational efficiency metric.
+func invocationDurationMetricInfo() models.MetricInfo {
+	return models.MetricInfo{
+		MetricName:  models.MetricInvocationDurationV1,
+		Description: "This metric reports the wall-clock seconds an invocation took, averaged across the eval case. The score is the total, and where it went is reported alongside it as a breakdown that partitions the turn: time awaiting a model, time inside tools, and the framework's own time. Tool time is kept separate from the framework's so that a slow external API a tool calls is not read as ADK overhead. The duration is measured while the agent runs; an invocation not produced by this eval run reports no value. Wall-clock time is noisier than the token and call counts, since it moves with model-server load and network, so read it as an indication rather than a regression signal. It is an informational efficiency metric: it reports the value for tracking and does not pass or fail the eval case.",
+	}
+}

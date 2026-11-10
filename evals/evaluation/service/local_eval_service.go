@@ -423,7 +423,27 @@ func (s *LocalEvalService) evaluateMetric(
 		Threshold:  metric.Threshold,
 		Score:      result.OverallScore,
 		EvalStatus: result.OverallEvalStatus,
-		Details:    &models.EvalMetricResultDetails{RubricScores: result.OverallRubricScores},
+		Details: &models.EvalMetricResultDetails{
+			RubricScores:      result.OverallRubricScores,
+			TokenUsageDetails: result.OverallTokenUsageDetails,
+			DurationDetails:   result.OverallDurationDetails,
+		},
+	}
+
+	// An informational metric that did not report every invocation still
+	// gets one entry per invocation, with no score and not evaluated, as
+	// adk-python keeps the per-invocation list aligned with placeholders.
+	if result.OverallEvalStatus == models.EvalStatusInformational && len(result.PerInvocationResults) != len(perInvocation) {
+		log.Printf("evals: metric %q returned %d per-invocation results for %d invocations", metric.MetricName, len(result.PerInvocationResults), len(perInvocation))
+		for i := range perInvocation {
+			perInvocation[i].EvalMetricResults = append(perInvocation[i].EvalMetricResults, models.EvalMetricResult{
+				MetricName: metric.MetricName,
+				Threshold:  metric.Threshold,
+				EvalStatus: models.EvalStatusNotEvaluated,
+				Details:    &models.EvalMetricResultDetails{},
+			})
+		}
+		return []models.EvalMetricResult{overall}
 	}
 
 	if result.OverallEvalStatus != models.EvalStatusNotEvaluated {
@@ -434,7 +454,11 @@ func (s *LocalEvalService) evaluateMetric(
 			invResult := result.PerInvocationResults[i]
 			score := invResult.Score
 			status := invResult.EvalStatus
-			details := &models.EvalMetricResultDetails{RubricScores: invResult.RubricScores}
+			details := &models.EvalMetricResultDetails{
+				RubricScores:      invResult.RubricScores,
+				TokenUsageDetails: invResult.TokenUsageDetails,
+				DurationDetails:   invResult.DurationDetails,
+			}
 			perInvocation[i].EvalMetricResults = append(perInvocation[i].EvalMetricResults, models.EvalMetricResult{
 				MetricName: metric.MetricName,
 				Threshold:  metric.Threshold,

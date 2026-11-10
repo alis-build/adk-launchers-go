@@ -83,3 +83,6 @@ func (c jsonCriterion) AsUserSimulator() (LlmBackedUserSimulatorCriterion, bool)
 	v, ok := c.value.(LlmBackedUserSimulatorCriterion)
 	return v, ok
 }
+
+// IsSet reports whether a criterion was configured at all.
+func (c jsonCriterion) IsSet() bool { return c.value != nil }

@@ -13,14 +13,18 @@ type PerInvocationResult struct {
 	Score              *float64
 	EvalStatus         models.EvalStatus
 	RubricScores       []models.RubricScore
+	TokenUsageDetails  *models.TokenUsageDetails
+	DurationDetails    *models.DurationDetails
 }
 
 // EvaluationResult aggregates metric scores for an eval case.
 type EvaluationResult struct {
-	OverallScore         *float64
-	OverallEvalStatus    models.EvalStatus
-	PerInvocationResults []PerInvocationResult
-	OverallRubricScores  []models.RubricScore
+	OverallScore             *float64
+	OverallEvalStatus        models.EvalStatus
+	PerInvocationResults     []PerInvocationResult
+	OverallRubricScores      []models.RubricScore
+	OverallTokenUsageDetails *models.TokenUsageDetails
+	OverallDurationDetails   *models.DurationDetails
 }
 
 // Evaluator scores actual invocations against expected golden data.

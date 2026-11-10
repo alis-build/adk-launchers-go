@@ -142,6 +142,10 @@ func registerAllPrebuiltMetrics(r *Registry) {
 	r.RegisterEvaluator(rubricMultiTurnMetricInfo(), func(m models.EvalMetric, cfg *RegistryConfig) (Evaluator, error) {
 		return newRubricBasedEvaluator(m, rubricKindMultiTurnTrajectory, cfg), nil
 	})
+	r.RegisterEvaluator(toolCallCountMetricInfo(), efficiencyFactory(efficiencyFunc(toolCallCount)))
+	r.RegisterEvaluator(inferenceCallCountMetricInfo(), efficiencyFactory(efficiencyFunc(inferenceCallCount)))
+	r.RegisterEvaluator(tokenUsageMetricInfo(), efficiencyFactory(tokenUsageEvaluator{}))
+	r.RegisterEvaluator(invocationDurationMetricInfo(), efficiencyFactory(durationEvaluator{}))
 }
 
 // customMetricEvaluator is a placeholder for user-defined metrics referenced

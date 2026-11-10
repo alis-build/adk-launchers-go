@@ -79,6 +79,12 @@ type Invocation struct {
 	CreationTimestamp float64          `json:"creationTimestamp,omitempty"`
 	Rubrics           []Rubric         `json:"rubrics,omitempty"`
 	AppDetails        *AppDetails      `json:"appDetails,omitempty"`
+	// Duration is the turn's wall-clock seconds as measured during
+	// inference; ModelDuration and ToolDuration are the seconds of it spent
+	// awaiting a model and inside tools. All nil when the turn was not timed.
+	Duration      *float64 `json:"duration,omitempty"`
+	ModelDuration *float64 `json:"modelDuration,omitempty"`
+	ToolDuration  *float64 `json:"toolDuration,omitempty"`
 }
 
 // jsonIntermediate unmarshals intermediateData as either IntermediateData or InvocationEvents.
