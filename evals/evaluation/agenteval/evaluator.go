@@ -52,7 +52,10 @@ func EvaluateEvalSet(
 	if err != nil {
 		return nil, err
 	}
-	metricList = models.AppendDefaultEfficiencyMetrics(metricList)
+	metricList, err = service.PrepareEvalMetrics(svc.Registry, metricList)
+	if err != nil {
+		return nil, err
+	}
 
 	// Unset leaves 0, so the service's default applies.
 	parallelism := 0

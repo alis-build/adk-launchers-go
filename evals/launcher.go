@@ -302,7 +302,8 @@ func (l *evalsLauncher) initStorage(_ *adklauncher.Config) error {
 	uri := l.evalStorageURI
 	if uri == "" {
 		if env := os.Getenv("ADK_EVAL_STORAGE_URI"); env != "" {
-			log.Printf("evals: using eval storage URI from ADK_EVAL_STORAGE_URI: %s", env)
+			// The value is not logged: a URI can carry credentials.
+			log.Printf("evals: using the eval storage URI in ADK_EVAL_STORAGE_URI")
 			uri = env
 		}
 	}
@@ -1008,6 +1009,14 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 		parallelism = *req.Parallelism
 	}
 
+	// Efficiency is reported on every run without being asked for, as
+	// adk-python's dev server does; a bad efficiency config is refused here,
+	// before anything runs.
+	evalMetrics, err := service.PrepareEvalMetrics(l.registry, req.EvalMetrics)
+	if err != nil {
+		return nil, alismux.BadRequestErr("%s", err.Error())
+	}
+
 	evalSet, err := l.setsManager.GetEvalSet(appName, evalSetID)
 	if err != nil {
 		return nil, err
@@ -1045,9 +1054,7 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 	caseResults, evalErr := svc.Evaluate(r.Context(), service.EvaluateRequest{
 		InferenceResults: inferences,
 		EvaluateConfig: service.EvaluateConfig{
-			// Efficiency is reported on every run without being asked for,
-			// as adk-python's dev server does.
-			EvalMetrics: models.AppendDefaultEfficiencyMetrics(req.EvalMetrics),
+			EvalMetrics: evalMetrics,
 			Parallelism: parallelism,
 		},
 	})

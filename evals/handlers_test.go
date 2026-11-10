@@ -992,6 +992,19 @@ func TestRunEvalSimulatorConfigDoesNotOutliveItsRequest(t *testing.T) {
 	}
 }
 
+// A threshold on an efficiency metric is refused before anything runs, as
+// adk-python refuses it.
+func TestRunEvalRejectsEfficiencyThreshold(t *testing.T) {
+	l, a := liveLauncher(t, simulation.UserSimulatorProvider{})
+	_, err := runLive(t, l, `{"eval_metrics":[{"metricName":"token_usage_v1","threshold":0.5}],"live_model_config":{}}`)
+	if alismux.StatusCode(err) != http.StatusBadRequest || !strings.Contains(err.Error(), "token_usage_v1") {
+		t.Errorf("error = %v, want a 400 naming token_usage_v1", err)
+	}
+	if n, _ := a.liveCalls(); n != 0 {
+		t.Errorf("%d live sessions ran, want none", n)
+	}
+}
+
 // Was evalscompat's TestRunRejectsLiveModelConfig: live mode is now run.
 func TestRunEvalAcceptsEmptyLiveModelConfig(t *testing.T) {
 	l, a := liveLauncher(t, simulation.UserSimulatorProvider{})

@@ -232,6 +232,9 @@ func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID,
 	}
 	sim, err := s.SimProvider.Provide(ctx, evalCase)
 	if err != nil {
+		// The case result records only that it failed, so the reason is
+		// logged, as adk-python does.
+		log.Printf("evals: inference failed for eval case %q (run %d): %v", evalCase.EvalID, rep, err)
 		result.Status = InferenceStatusFailed
 		result.ErrorMessage = err.Error()
 		return result
@@ -244,6 +247,7 @@ func (s *LocalEvalService) runInference(ctx context.Context, appName, evalSetID,
 		LiveTimeoutSeconds: cfg.LiveTimeoutSeconds,
 	})
 	if err != nil {
+		log.Printf("evals: inference failed for eval case %q (run %d): %v", evalCase.EvalID, rep, err)
 		result.Status = InferenceStatusFailed
 		result.ErrorMessage = err.Error()
 		return result

@@ -446,3 +446,28 @@ func TestEvaluateEvalSetScoresWithConfigParallelism(t *testing.T) {
 		t.Fatalf("EvaluateEvalSet: %v", err)
 	}
 }
+
+// A registry without the efficiency metrics must not leave every run
+// undecided: none are added, so pass_rate is decided.
+func TestEvaluateEvalSetCustomRegistryKeepsRunsDecided(t *testing.T) {
+	g := newGate()
+	close(g.release)
+	reg := &metrics.Registry{}
+	reg.RegisterEvaluator(models.MetricInfo{MetricName: "gated"}, func(models.EvalMetric, *metrics.RegistryConfig) (metrics.Evaluator, error) {
+		return gatedEvaluator{g}, nil
+	})
+	// Six scoring calls fit the gate's arrival buffer, so nothing drains it.
+	svc, set := threeCaseService(t, nil, reg)
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"criteria":{"gated":0.5},"multi_run_config":{"cross_run_criteria":[{"method":"pass_rate","threshold":0.5}]}}`))
+	if err != nil {
+		t.Fatalf("UnmarshalEvalConfig: %v", err)
+	}
+	results, err := agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 2)
+	if err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+	c := results[0].CrossRunResults
+	if len(c) != 1 || c[0].Value == nil || *c[0].Value != 1 || c[0].EvalStatus != models.EvalStatusPassed {
+		t.Errorf("cross-run results = %+v, want pass_rate 1 PASSED", c)
+	}
+}

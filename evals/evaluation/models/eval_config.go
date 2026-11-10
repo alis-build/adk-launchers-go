@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 // CodeConfig locates a custom metric function (Python CodeConfig.name).
@@ -172,6 +173,12 @@ var defaultEfficiencyMetrics = []string{
 	MetricInferenceCallCountV1,
 	MetricTokenUsageV1,
 	MetricInvocationDurationV1,
+}
+
+// IsDefaultEfficiencyMetric reports whether name is one of the efficiency
+// metrics added to every eval.
+func IsDefaultEfficiencyMetric(name string) bool {
+	return slices.Contains(defaultEfficiencyMetrics, name)
 }
 
 // AppendDefaultEfficiencyMetrics returns a new slice: metrics, then each
