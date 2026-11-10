@@ -120,7 +120,7 @@ func TestNormalizeOutputTranscription(t *testing.T) {
 // Mirrors adk-python test_evaluation_generator.py:363.
 func TestNormalizeInputTranscription(t *testing.T) {
 	got := normalizeLiveTranscriptions([]*session.Event{transcriptionEvent(t, "user said", "")})
-	if len(got) != 1 || got[0].Content == nil || got[0].Content.Role != genai.RoleUser || got[0].Content.Parts[0].Text != "user said" || got[0].InputTranscription != nil {
+	if len(got) != 1 || got[0].Author != "user" || got[0].Content == nil || got[0].Content.Role != genai.RoleUser || got[0].Content.Parts[0].Text != "user said" || got[0].InputTranscription != nil {
 		t.Errorf("normalized = %+v", got[0])
 	}
 }
@@ -224,5 +224,28 @@ func TestLiveCancelledTurnIsNotATimeout(t *testing.T) {
 	})
 	if err == nil || strings.Contains(err.Error(), "timed out") || !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled, not a timeout", err)
+	}
+}
+
+// Found in the hand check: ADK Go authors the user's transcript as the agent,
+// so it was graded as the agent's final response. It is the user's turn, as
+// in adk-python, and the agent's reply stays the final response.
+func TestLiveInputTranscriptIsTheUsersTurn(t *testing.T) {
+	rt, sess := newFakeLiveRuntime(t)
+	sess.inputTranscript = "what is 2 + 2?"
+	sess.audioOnlyFinal = true
+	inv, err := (&Generator{Runtime: rt}).GenerateInferences(context.Background(), InferenceOptions{
+		UserSimulator:      simulation.NewStaticUserSimulator([]models.Invocation{{UserContent: genai.NewContentFromText("What is two plus two?", genai.RoleUser)}}),
+		UseLive:            true,
+		LiveTimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatalf("GenerateInferences: %v", err)
+	}
+	if len(inv) != 1 || inv[0].FinalResponse == nil || inv[0].FinalResponse.Parts[0].Text != "transcribed reply" {
+		t.Fatalf("final response = %+v, want the agent's transcript", inv)
+	}
+	if inv[0].UserContent == nil || inv[0].UserContent.Parts[0].Text != "what is 2 + 2?" {
+		t.Errorf("user content = %+v, want the user's transcript", inv[0].UserContent)
 	}
 }

@@ -40,6 +40,10 @@ type fakeLiveSession struct {
 	flood int
 	// finished is closed when the event stream returns, if set.
 	finished chan struct{}
+	// inputTranscript, when set, is sent after the agent's transcript, as in
+	// a real run, as the transcript of what the user said, authored by the
+	// agent as ADK Go's live flow does.
+	inputTranscript string
 }
 
 func (s *fakeLiveSession) Send(req agent.LiveRequest) error {
@@ -88,6 +92,14 @@ func (a *fakeLiveAgent) RunLive(ctx agent.InvocationContext) (agent.LiveSession,
 			transcript.OutputTranscription = &genai.Transcription{Text: "transcribed reply"}
 			if !yield(transcript, nil) {
 				return
+			}
+			if a.sess.inputTranscript != "" {
+				heard := session.NewEvent(ctx, ctx.InvocationID())
+				heard.Author = "reply-agent"
+				heard.InputTranscription = &genai.Transcription{Text: a.sess.inputTranscript}
+				if !yield(heard, nil) {
+					return
+				}
 			}
 			final := session.NewEvent(ctx, ctx.InvocationID())
 			final.Author = "reply-agent"

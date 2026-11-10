@@ -174,8 +174,9 @@ func sendAudioToLive(sess agent.LiveSession, content *genai.Content) error {
 }
 
 // normalizeLiveTranscriptions returns events with each final transcription
-// event rewritten as text content: what the user said as a user message,
-// what the agent said as a model message. Partial events, events that have
+// event rewritten as text content: what the user said as a user message
+// authored by the user (so it becomes the invocation's user content, as in
+// adk-python), what the agent said as a model message. Partial events, events that have
 // content, and events with no transcription text pass through; the input
 // events are not modified.
 func normalizeLiveTranscriptions(events []*session.Event) []*session.Event {
@@ -187,9 +188,13 @@ func normalizeLiveTranscriptions(events []*session.Event) []*session.Event {
 		}
 		var text string
 		var role genai.Role
+		author := ev.Author
 		switch {
 		case ev.InputTranscription != nil && ev.InputTranscription.Text != "":
-			text, role = ev.InputTranscription.Text, genai.RoleUser
+			// What the user said. ADK Go authors this event as the agent;
+			// adk-python authors it as the user, which is what keeps it from
+			// being graded as the agent's reply.
+			text, role, author = ev.InputTranscription.Text, genai.RoleUser, userAuthor
 		case ev.OutputTranscription != nil && ev.OutputTranscription.Text != "":
 			text, role = ev.OutputTranscription.Text, genai.RoleModel
 		default:
@@ -197,6 +202,7 @@ func normalizeLiveTranscriptions(events []*session.Event) []*session.Event {
 			continue
 		}
 		rewritten := *ev
+		rewritten.Author = author
 		rewritten.InputTranscription = nil
 		rewritten.OutputTranscription = nil
 		rewritten.Content = genai.NewContentFromText(text, role)
