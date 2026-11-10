@@ -851,6 +851,13 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 	if rawSet(req.UserSimulatorConfig) {
 		return nil, alismux.BadRequestErr("user_simulator_config is not supported yet")
 	}
+	parallelism := 0
+	if req.Parallelism != nil {
+		if *req.Parallelism < 1 {
+			return nil, alismux.BadRequestErr("parallelism must be at least 1, got %d", *req.Parallelism)
+		}
+		parallelism = *req.Parallelism
+	}
 
 	evalSet, err := l.setsManager.GetEvalSet(appName, evalSetID)
 	if err != nil {
@@ -875,7 +882,7 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 		AppName:         appName,
 		EvalSetID:       evalSetID,
 		EvalCaseIDs:     caseIDs,
-		InferenceConfig: service.InferenceConfig{},
+		InferenceConfig: service.InferenceConfig{Parallelism: parallelism},
 		SessionState:    req.SessionState,
 		// Runs write real sessions, so they are the caller's, never the user
 		// stored on a shared case.
@@ -891,6 +898,7 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 			// Efficiency is reported on every run without being asked for,
 			// as adk-python's dev server does.
 			EvalMetrics: models.AppendDefaultEfficiencyMetrics(req.EvalMetrics),
+			Parallelism: parallelism,
 		},
 	})
 	// Return a hard error only when every case failed to evaluate; partial

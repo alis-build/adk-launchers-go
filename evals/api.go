@@ -31,6 +31,9 @@ type RunEvalRequest struct {
 	// set when present and not JSON null; {} counts as set, as in adk-python.
 	LiveModelConfig     json.RawMessage `json:"live_model_config,omitempty"`
 	UserSimulatorConfig json.RawMessage `json:"user_simulator_config,omitempty"`
+	// Parallelism caps how many cases run and are scored at once; nil leaves
+	// the service default. A Go extension: adk-python's request has none.
+	Parallelism *int `json:"parallelism,omitempty"`
 }
 
 // RunEvalResponse wraps per-case run results.

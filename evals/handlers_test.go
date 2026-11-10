@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.alis.build/adk/launchers/evals/evaluation/metrics"
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"go.alis.build/adk/launchers/evals/evaluation/storage"
 	iam "go.alis.build/iam/v3"
@@ -1087,5 +1089,83 @@ func TestRunEvalReportsEfficiencyMetricsUnrequested(t *testing.T) {
 	}
 	if r.FinalEvalStatus != statuses["tool_trajectory_avg_score"] {
 		t.Errorf("case status = %d, want the trajectory's %d", r.FinalEvalStatus, statuses["tool_trajectory_avg_score"])
+	}
+}
+
+// runGated starts a run of set1 with body in the background and returns a
+// channel that yields the handler's result.
+func runGated(t *testing.T, l *evalsLauncher, body string) <-chan error {
+	t.Helper()
+	// Checked here because callHandlerAs fails the test on a body it cannot
+	// encode, and t.Fatal must not run on the goroutine below.
+	if !json.Valid([]byte(body)) {
+		t.Fatalf("invalid body %s", body)
+	}
+	done := make(chan error, 1)
+	go func() {
+		rec, err := callHandlerAs(t, l.runEvalHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/set1/run", "user1",
+			json.RawMessage(body), map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+		if err == nil && rec.Code != http.StatusOK {
+			err = fmt.Errorf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		done <- err
+	}()
+	return done
+}
+
+// Positive control for the next test: by default all three cases run at
+// once.
+func TestRunEvalRunsCasesConcurrentlyByDefault(t *testing.T) {
+	g := newGate()
+	done := runGated(t, gatedLauncher(t, g, metrics.DefaultRegistry), `{"eval_metrics":[{"metricName":"response_match_score","threshold":0.5}]}`)
+	for range 3 {
+		g.waitArrived(t)
+	}
+	close(g.release)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// Acceptance 4: parallelism 1 runs the cases one at a time.
+func TestRunEvalParallelismOneRunsCasesOneAtATime(t *testing.T) {
+	g := newGate()
+	done := runGated(t, gatedLauncher(t, g, metrics.DefaultRegistry), `{"eval_metrics":[{"metricName":"response_match_score","threshold":0.5}],"parallelism":1}`)
+	g.runOneAtATime(t, 3)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// Positive control for the next test: by default all three cases are scored
+// at once.
+func TestRunEvalScoresCasesConcurrentlyByDefault(t *testing.T) {
+	g := newGate()
+	done := runGated(t, gatedLauncher(t, nil, gatedRegistry(g)), `{"eval_metrics":[{"metricName":"gated","threshold":0.5}]}`)
+	for range 3 {
+		g.waitArrived(t)
+	}
+	close(g.release)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// Parallelism 1 also scores the cases one at a time.
+func TestRunEvalParallelismOneScoresCasesOneAtATime(t *testing.T) {
+	g := newGate()
+	done := runGated(t, gatedLauncher(t, nil, gatedRegistry(g)), `{"eval_metrics":[{"metricName":"gated","threshold":0.5}],"parallelism":1}`)
+	g.runOneAtATime(t, 3)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+func TestRunEvalRejectsParallelismBelowOne(t *testing.T) {
+	l := gatedLauncher(t, nil, metrics.DefaultRegistry)
+	_, err := callHandlerAs(t, l.runEvalHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/set1/run", "user1",
+		json.RawMessage(`{"eval_metrics":[],"parallelism":0}`), map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if alismux.StatusCode(err) != http.StatusBadRequest || !strings.Contains(err.Error(), "parallelism must be at least 1") {
+		t.Errorf("error = %v, want a 400 naming parallelism", err)
 	}
 }

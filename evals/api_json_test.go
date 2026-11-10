@@ -192,3 +192,14 @@ func TestRunEvalRequestUnmarshalLiveFieldsSnakeAndCamel(t *testing.T) {
 		t.Errorf("UserSimulatorConfig = %q, want the raw object", got)
 	}
 }
+
+func TestRunEvalRequestParallelism(t *testing.T) {
+	var req RunEvalRequest
+	if err := json.Unmarshal([]byte(`{"parallelism":2}`), &req); err != nil || req.Parallelism == nil || *req.Parallelism != 2 {
+		t.Errorf("parallelism 2 = %v, %v", req.Parallelism, err)
+	}
+	var none RunEvalRequest
+	if err := json.Unmarshal([]byte(`{}`), &none); err != nil || none.Parallelism != nil {
+		t.Errorf("no parallelism = %v, %v; want nil", none.Parallelism, err)
+	}
+}
