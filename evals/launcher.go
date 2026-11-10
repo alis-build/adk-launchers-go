@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1138,7 +1139,13 @@ func (l *evalsLauncher) metricsInfoHandler() alismux.Func {
 		if l.registry == nil {
 			return alismux.BadRequestErr("%s", missingMetricRegistryMessage)
 		}
-		info := l.registry.GetRegisteredMetrics()
+		// The efficiency metrics are left out, unlike adk-python's list: they
+		// are added to every run and refuse a threshold, so there is nothing
+		// to choose, and the adk-web bundled with ADK Go 2.7.1 crashes on a
+		// metric without a value range. Current adk-web hides them anyway.
+		info := slices.DeleteFunc(l.registry.GetRegisteredMetrics(), func(m models.MetricInfo) bool {
+			return models.IsDefaultEfficiencyMetric(m.MetricName)
+		})
 		sort.Slice(info, func(i, j int) bool {
 			return info[i].MetricName < info[j].MetricName
 		})

@@ -150,7 +150,9 @@
 // Every run also reports the informational efficiency metrics
 // (tool_call_count_v1, inference_call_count_v1, token_usage_v1,
 // invocation_duration_v1) without being asked, as adk-python's dev server
-// does.
+// does. Unlike adk-python, /metrics-info does not list them: they take no
+// threshold, so there is nothing to choose, and the adk-web bundled with ADK
+// Go 2.7.1 cannot open its Run dialog when they are listed.
 //
 // A case's sessionInput.sessionId pins it to a prepared eval session. The
 // run reuses that session, keeping its state and history, only when it

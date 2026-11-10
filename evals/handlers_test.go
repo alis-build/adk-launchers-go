@@ -325,6 +325,26 @@ func TestMetricsInfoMatchesAdkPython(t *testing.T) {
 	}
 }
 
+// Found in the hand check: the adk-web bundled with ADK Go 2.7.1 crashes on
+// a metric without a value range, so the efficiency metrics, which take no
+// threshold and are added to every run, are not offered.
+func TestMetricsInfoOmitsEfficiencyMetrics(t *testing.T) {
+	l, _ := newHandlerTestLauncher(t)
+	rec, err := callHandlerAs(t, l.metricsInfoHandler(), http.MethodGet, "/dev/apps/my_app/metrics-info", "user1", nil, map[string]string{"app_name": "my_app"})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("metrics-info: status = %d, err = %v", rec.Code, err)
+	}
+	var resp ListMetricsInfoResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, m := range resp.MetricsInfo {
+		if models.IsDefaultEfficiencyMetric(m.MetricName) || m.MetricValueInfo.Interval == nil {
+			t.Errorf("metrics-info lists %q (interval %v), want only metrics with a value range", m.MetricName, m.MetricValueInfo.Interval)
+		}
+	}
+}
+
 func TestRunEvalDeterministicMetric(t *testing.T) {
 	l, sets := newHandlerTestLauncher(t)
 	_, _ = sets.CreateEvalSet("my_app", "set1")
