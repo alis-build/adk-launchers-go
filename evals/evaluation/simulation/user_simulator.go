@@ -77,6 +77,15 @@ type LlmBackedFactory interface {
 	NewLlmBackedSimulator(cfg BaseUserSimulatorConfig, scenario *models.ConversationScenario) (UserSimulator, error)
 }
 
+// LlmBackedConfigFactory is an [LlmBackedFactory] that can also build a
+// simulator from a whole text-simulator config, so a run's
+// user_simulator_config (its model, turn limit, instructions) takes effect.
+// [DefaultLlmBackedFactory] implements it; a factory that does not only gets
+// the turn limit, through NewLlmBackedSimulator.
+type LlmBackedConfigFactory interface {
+	NewLlmBackedSimulatorWithConfig(cfg LlmBackedUserSimulatorConfig, scenario *models.ConversationScenario) (UserSimulator, error)
+}
+
 // Provide selects a static or LLM-backed simulator based on eval case shape,
 // wrapped in an [AudioUserSimulator] when SimulatorConfig asks for audio
 // (adk-python's UserSimulatorProvider.provide).
@@ -85,10 +94,14 @@ func (p *UserSimulatorProvider) Provide(ctx context.Context, evalCase models.Eva
 		return nil, err
 	}
 	audioCfg, audio := p.SimulatorConfig.(LlmAudioUserSimulatorConfig)
-	cfg := p.Config
-	if audio {
-		maxInvocations := audioCfg.MaxAllowedInvocations
-		cfg = BaseUserSimulatorConfig{MaxInvocations: &maxInvocations}
+	// The text simulator of a scenario case takes the run's text settings,
+	// from either config type, as adk-python builds it.
+	var textCfg *LlmBackedUserSimulatorConfig
+	switch c := p.SimulatorConfig.(type) {
+	case LlmBackedUserSimulatorConfig:
+		textCfg = &c
+	case LlmAudioUserSimulatorConfig:
+		textCfg = &c.LlmBackedUserSimulatorConfig
 	}
 	var text UserSimulator
 	switch {
@@ -97,7 +110,18 @@ func (p *UserSimulatorProvider) Provide(ctx context.Context, evalCase models.Eva
 	case p.LLM == nil:
 		return nil, errLlmSimulatorRequired
 	default:
-		sim, err := p.LLM.NewLlmBackedSimulator(cfg, evalCase.ConversationScenario)
+		var sim UserSimulator
+		var err error
+		if f, ok := p.LLM.(LlmBackedConfigFactory); ok && textCfg != nil {
+			sim, err = f.NewLlmBackedSimulatorWithConfig(*textCfg, evalCase.ConversationScenario)
+		} else {
+			cfg := p.Config
+			if textCfg != nil {
+				maxInvocations := textCfg.MaxAllowedInvocations
+				cfg = BaseUserSimulatorConfig{MaxInvocations: &maxInvocations}
+			}
+			sim, err = p.LLM.NewLlmBackedSimulator(cfg, evalCase.ConversationScenario)
+		}
 		if err != nil {
 			return nil, err
 		}

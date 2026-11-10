@@ -3,7 +3,10 @@ package simulation_test
 import (
 	"context"
 	"iter"
+	"net/http"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
@@ -70,7 +73,7 @@ func TestAudioSimulatorReturnsTextAndAudio(t *testing.T) {
 		p[1].InlineData == nil || string(p[1].InlineData.Data) != "WAV" || p[1].InlineData.MIMEType != "audio/pcm;rate=16000" {
 		t.Errorf("message = %+v", got.UserMessage)
 	}
-	if len(m.requests) != 1 || m.requests[0].Model != "my-tts" || m.requests[0].Config != cfg.AudioModelConfiguration ||
+	if len(m.requests) != 1 || m.requests[0].Model != "my-tts" || !reflect.DeepEqual(m.requests[0].Config, cfg.AudioModelConfiguration) ||
 		len(m.requests[0].Contents) != 1 || m.requests[0].Contents[0].Parts[0].Text != "Book me a flight." {
 		t.Errorf("audio requests = %+v", m.requests)
 	}
@@ -209,5 +212,96 @@ func TestProviderLlmBackedConfigKeepsStatic(t *testing.T) {
 	sim, err := p.Provide(context.Background(), staticCase())
 	if _, ok := sim.(*simulation.StaticUserSimulator); err != nil || !ok {
 		t.Errorf("simulator = %T, err = %v; want a static simulator", sim, err)
+	}
+}
+
+// headerWritingModel writes into each request's config as ADK's gemini model
+// does (model/gemini/gemini.go: HTTPOptions and its headers), then speaks.
+type headerWritingModel struct{}
+
+func (headerWritingModel) Name() string { return "header-writer" }
+
+func (headerWritingModel) GenerateContent(_ context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	if req.Config.HTTPOptions == nil {
+		req.Config.HTTPOptions = &genai.HTTPOptions{}
+	}
+	if req.Config.HTTPOptions.Headers == nil {
+		req.Config.HTTPOptions.Headers = make(http.Header)
+	}
+	req.Config.HTTPOptions.Headers.Set("x-goog-api-client", "test")
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(audioResponse("WAV", "audio/pcm;rate=16000"), nil)
+	}
+}
+
+// Cases run concurrently over one config; each audio request must get its
+// own copy (run with -race; sharing it is a concurrent map write).
+func TestAudioSimulatorConcurrentCasesDoNotShareConfig(t *testing.T) {
+	cfg := audioConfig(t, `{"type":"llm_audio","audioModelConfiguration":{"httpOptions":{"headers":{"X-Base":["1"]}}}}`)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := simulation.NewAudioUserSimulator(cfg, cannedText{textTurn("hi")}, headerWritingModel{}).GetNextUserMessage(context.Background(), nil); err != nil {
+				t.Errorf("GetNextUserMessage: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if h := cfg.AudioModelConfiguration.HTTPOptions.Headers; h.Get("x-goog-api-client") != "" || h.Get("X-Base") != "1" {
+		t.Errorf("shared config headers = %v, want them untouched", h)
+	}
+}
+
+// recordingGenerator is a text-simulator model that records the model names
+// it is asked for and replies "follow up".
+type recordingGenerator struct {
+	mu     sync.Mutex
+	models []string
+}
+
+func (g *recordingGenerator) GenerateContent(_ context.Context, model, _ string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.models = append(g.models, model)
+	return "follow up", nil
+}
+
+// A run's user_simulator_config sets the scenario's text simulator, for
+// both config types (adk-python user_simulator_provider.py builds it from
+// the audio config's text fields).
+func TestProviderPassesRunTextConfigToFactory(t *testing.T) {
+	for _, raw := range []string{
+		`{"type":"llm_backed","model":"sim-model","maxAllowedInvocations":1}`,
+		`{"type":"llm_audio","model":"sim-model","maxAllowedInvocations":1}`,
+	} {
+		cfg, err := simulation.ParseUserSimulatorConfig([]byte(raw))
+		if err != nil {
+			t.Fatalf("ParseUserSimulatorConfig: %v", err)
+		}
+		gen := &recordingGenerator{}
+		p := simulation.UserSimulatorProvider{
+			LLM:             &simulation.DefaultLlmBackedFactory{Config: simulation.LlmBackedUserSimulatorConfig{Model: "factory-model"}, Generator: gen},
+			SimulatorConfig: cfg,
+			ResolveModel:    func(context.Context, string) (model.LLM, error) { return headerWritingModel{}, nil },
+		}
+		sim, err := p.Provide(context.Background(), scenarioCase())
+		if err != nil {
+			t.Fatalf("%s: Provide: %v", raw, err)
+		}
+		// The starting prompt is turn one; the limit of one stops turn two
+		// before the model is asked.
+		first, err1 := sim.GetNextUserMessage(context.Background(), nil)
+		second, err2 := sim.GetNextUserMessage(context.Background(), nil)
+		if err1 != nil || err2 != nil || first.Status != simulation.StatusSuccess || second.Status != simulation.StatusTurnLimitReached {
+			t.Errorf("%s: turns = %v, %v (%v, %v); want success then turn limit", raw, first.Status, second.Status, err1, err2)
+		}
+		third, _ := (&simulation.UserSimulatorProvider{LLM: p.LLM, SimulatorConfig: simulation.LlmBackedUserSimulatorConfig{Model: "sim-model", MaxAllowedInvocations: 3}}).Provide(context.Background(), scenarioCase())
+		_, _ = third.GetNextUserMessage(context.Background(), nil)
+		_, _ = third.GetNextUserMessage(context.Background(), nil)
+		if len(gen.models) != 1 || gen.models[0] != "sim-model" {
+			t.Errorf("%s: text model calls = %v, want one to sim-model", raw, gen.models)
+		}
 	}
 }

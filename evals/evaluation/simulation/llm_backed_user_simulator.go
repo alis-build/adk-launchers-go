@@ -164,3 +164,9 @@ func (f *DefaultLlmBackedFactory) NewLlmBackedSimulator(_ BaseUserSimulatorConfi
 	}
 	return NewLlmBackedUserSimulator(cfg, scenario, f.Generator)
 }
+
+// NewLlmBackedSimulatorWithConfig builds a simulator from cfg, a run's
+// user_simulator_config, in place of the factory's own Config.
+func (f *DefaultLlmBackedFactory) NewLlmBackedSimulatorWithConfig(cfg LlmBackedUserSimulatorConfig, scenario *models.ConversationScenario) (UserSimulator, error) {
+	return NewLlmBackedUserSimulator(cfg, scenario, f.Generator)
+}

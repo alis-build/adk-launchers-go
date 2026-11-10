@@ -73,7 +73,7 @@ func (s *AudioUserSimulator) toAudioContent(ctx context.Context, text string) (*
 func (s *AudioUserSimulator) generateAudio(ctx context.Context, text string) ([]byte, string, error) {
 	req := &model.LLMRequest{
 		Model:    s.cfg.AudioModel,
-		Config:   s.cfg.AudioModelConfiguration,
+		Config:   cloneAudioConfig(s.cfg.AudioModelConfiguration),
 		Contents: []*genai.Content{genai.NewContentFromText(text, genai.RoleUser)},
 	}
 	var data []byte
@@ -105,4 +105,20 @@ func (s *AudioUserSimulator) generateAudio(ctx context.Context, text string) ([]
 		return nil, "", errors.New("Audio model returned no audio data")
 	}
 	return data, mime, nil
+}
+
+// cloneAudioConfig copies c for one request. Every case's simulator shares
+// the run's config, and models write into the request's config (ADK's gemini
+// model adds headers to HTTPOptions), so concurrent cases must not share it.
+func cloneAudioConfig(c *genai.GenerateContentConfig) *genai.GenerateContentConfig {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	if c.HTTPOptions != nil {
+		opts := *c.HTTPOptions
+		opts.Headers = c.HTTPOptions.Headers.Clone()
+		cp.HTTPOptions = &opts
+	}
+	return &cp
 }
