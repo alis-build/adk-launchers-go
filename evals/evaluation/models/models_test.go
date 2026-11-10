@@ -456,3 +456,11 @@ func TestUnmarshalEvalConfigParallelism(t *testing.T) {
 		}
 	}
 }
+
+// Mirrors adk-python test_eval_config.py:390.
+func TestUnmarshalEvalConfigSnakeUserSimulatorKey(t *testing.T) {
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"user_simulator_config":{"model":"legacy-model-snake"}}`))
+	if err != nil || !strings.Contains(string(cfg.UserSimulatorConfig), "legacy-model-snake") {
+		t.Errorf("user simulator config = %s, %v; want the snake_case key kept", cfg.UserSimulatorConfig, err)
+	}
+}

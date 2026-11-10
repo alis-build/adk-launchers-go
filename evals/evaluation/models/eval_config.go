@@ -115,6 +115,7 @@ func UnmarshalEvalConfig(data []byte) (EvalConfig, error) {
 		Criteria            map[string]json.RawMessage    `json:"criteria"`
 		CustomMetrics       map[string]CustomMetricConfig `json:"customMetrics"`
 		UserSimulatorConfig json.RawMessage               `json:"userSimulatorConfig"`
+		UserSimulatorSnake  json.RawMessage               `json:"user_simulator_config"`
 		MultiRunCamel       json.RawMessage               `json:"multiRunConfig"`
 		MultiRunSnake       json.RawMessage               `json:"multi_run_config"`
 		Parallelism         *int                          `json:"parallelism"`
@@ -126,6 +127,10 @@ func UnmarshalEvalConfig(data []byte) (EvalConfig, error) {
 		CustomMetrics:       raw.CustomMetrics,
 		UserSimulatorConfig: raw.UserSimulatorConfig,
 		Parallelism:         raw.Parallelism,
+	}
+	// adk-python accepts the field name too; the camelCase alias wins.
+	if len(cfg.UserSimulatorConfig) == 0 || string(cfg.UserSimulatorConfig) == "null" {
+		cfg.UserSimulatorConfig = raw.UserSimulatorSnake
 	}
 	if cfg.Parallelism != nil && *cfg.Parallelism < 1 {
 		return EvalConfig{}, fmt.Errorf("parallelism must be at least 1, got %d", *cfg.Parallelism)
