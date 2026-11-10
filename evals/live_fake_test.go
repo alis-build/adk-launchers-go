@@ -26,6 +26,8 @@ type fakeLiveAgent struct {
 	mu       sync.Mutex
 	runLives int
 	requests []agent.LiveRequest
+	// silent makes live sessions never answer, so every turn times out.
+	silent bool
 }
 
 type fakeLiveSession struct {
@@ -56,6 +58,9 @@ func (a *fakeLiveAgent) RunLive(ctx agent.InvocationContext) (agent.LiveSession,
 	sess := &fakeLiveSession{a: a, turns: make(chan struct{}, 16)}
 	events := func(yield func(*session.Event, error) bool) {
 		for range sess.turns {
+			if a.silent {
+				continue
+			}
 			transcript := session.NewEvent(ctx, ctx.InvocationID())
 			transcript.Author = "my_app"
 			transcript.OutputTranscription = &genai.Transcription{Text: "transcribed reply"}

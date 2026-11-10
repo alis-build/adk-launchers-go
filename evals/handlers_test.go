@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"go.alis.build/adk/launchers/evals/evaluation/generator"
@@ -953,6 +954,41 @@ func TestLiveTimeoutFromConfig(t *testing.T) {
 		if got, err := liveTimeoutFromConfig(json.RawMessage(raw)); err != nil || got != want {
 			t.Errorf("%s = %d, %v; want %d", raw, got, err, want)
 		}
+	}
+}
+
+// The request's timeout reaches the live run: a silent agent fails the turn
+// after 1 s, not the 300 s default.
+func TestRunEvalLiveTimeoutReachesTheRun(t *testing.T) {
+	l, a := liveLauncher(t, simulation.UserSimulatorProvider{})
+	a.silent = true
+	done := make(chan error, 1)
+	go func() {
+		_, err := runLive(t, l, `{"eval_metrics":[{"metricName":"response_match_score","threshold":0.1}],"live_model_config":{"timeoutSeconds":1}}`)
+		done <- err
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("run still going after 10 s; the 1 s live timeout was not applied")
+	}
+}
+
+// Each request's simulator config is its own: an audio run does not leave
+// the launcher speaking the next, plain run's turns.
+func TestRunEvalSimulatorConfigDoesNotOutliveItsRequest(t *testing.T) {
+	l, a := liveLauncher(t, simulation.UserSimulatorProvider{ResolveModel: resolveFakeTTS})
+	if rec, err := runLive(t, l, `{"eval_metrics":[],"live_model_config":{},"user_simulator_config":{"type":"llm_audio","audio_model":"fake-tts"}}`); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("audio run: status %d, err %v", rec.Code, err)
+	}
+	_, before := a.liveCalls()
+	if rec, err := runLive(t, l, `{"eval_metrics":[],"live_model_config":{}}`); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("plain run: status %d, err %v", rec.Code, err)
+	}
+	_, after := a.liveCalls()
+	plain := after[len(before):]
+	if len(plain) != 1 || plain[0].Content == nil || plain[0].Content.Parts[0].Text != "Book me a flight." {
+		t.Errorf("plain run sent %+v, want the text turn as content", plain)
 	}
 }
 
