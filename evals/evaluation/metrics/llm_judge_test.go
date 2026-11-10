@@ -456,11 +456,8 @@ func TestPerTurnSimulatorFlowAllPass(t *testing.T) {
 
 // 10. Per-turn simulator stop-signal failure overwrites the last real turn.
 func TestPerTurnSimulatorStopSignalOverwrite(t *testing.T) {
-	fake := &fakeJudge{responses: []string{
-		`{"is_valid": true}`,
-		`{"is_valid": true}`,
-		`{"is_valid": false}`, // stop-signal turn fails
-	}}
+	// Turns are judged concurrently, so the fake answers by turn, not order.
+	fake := turnJudge{"</finished>": `{"is_valid": false}`} // stop-signal turn fails
 	metric := models.EvalMetric{
 		MetricName: models.MetricPerTurnUserSimulatorQualityV1,
 		Threshold:  0.5,
@@ -601,11 +598,7 @@ func TestRubricEvaluatorHonorsInvocationRubrics(t *testing.T) {
 // copying Score/EvalStatus from the synthetic stop-signal turn. Guards
 // against the code-review Critical #2 regression.
 func TestPerTurnSimulatorStopSignalPreservesActualInvocation(t *testing.T) {
-	fake := &fakeJudge{responses: []string{
-		`{"is_valid": true}`,
-		`{"is_valid": true}`,
-		`{"is_valid": false}`,
-	}}
+	fake := turnJudge{"</finished>": `{"is_valid": false}`}
 	metric := models.EvalMetric{
 		MetricName: models.MetricPerTurnUserSimulatorQualityV1,
 		Threshold:  0.5,

@@ -204,6 +204,9 @@ func judgeOptions(metric models.EvalMetric) models.JudgeModelOptions {
 	if c, ok := metric.Criterion.AsHallucinations(); ok {
 		return c.JudgeModelOptions
 	}
+	if c, ok := metric.Criterion.AsUserSimulator(); ok {
+		return c.JudgeModelOptions
+	}
 	return models.JudgeModelOptions{}
 }
 

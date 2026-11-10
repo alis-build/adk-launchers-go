@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"go.alis.build/adk/launchers/evals/evaluation/models"
 	"google.golang.org/genai"
@@ -63,22 +64,42 @@ func (e *perTurnSimulatorEvaluator) EvaluateInvocations(
 		return EvaluationResult{OverallEvalStatus: models.EvalStatusNotEvaluated}, nil
 	}
 
-	results := make([]PerInvocationResult, 0, len(actual)+1)
-	results = append(results, e.evaluateFirstTurn(actual[0], scenario))
-
-	for i := 1; i < len(actual); i++ {
-		r, err := e.evaluateIntermediateTurn(ctx, actual[i], actual[:i], scenario)
-		if err != nil {
-			return EvaluationResult{}, err
-		}
-		results = append(results, r)
+	// Turns 1..n-1 and the synthetic stop-signal turn (Python
+	// _evaluate_stop_signal_turn) are judged concurrently, every judge call
+	// taking a slot of one ParallelismLimit semaphore. Results go to their
+	// turn's slot; the first error cancels the rest and is returned, as in
+	// adk-python.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sem := make(chan struct{}, parallelismLimit(e.opts))
+	results := make([]PerInvocationResult, len(actual))
+	results[0] = e.evaluateFirstTurn(actual[0], scenario)
+	var stopResult PerInvocationResult
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var firstErr error
+	judge := func(dst *PerInvocationResult, inv models.Invocation, history []models.Invocation) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r, err := e.evaluateIntermediateTurn(ctx, sem, inv, history, scenario)
+			if err != nil {
+				errOnce.Do(func() {
+					firstErr = err
+					cancel()
+				})
+				return
+			}
+			*dst = r
+		}()
 	}
-
-	// Synthetic stop-signal turn (Python _evaluate_stop_signal_turn).
-	stop := e.stopSignalInvocation()
-	stopResult, err := e.evaluateIntermediateTurn(ctx, stop, actual, scenario)
-	if err != nil {
-		return EvaluationResult{}, err
+	for i := 1; i < len(actual); i++ {
+		judge(&results[i], actual[i], actual[:i])
+	}
+	judge(&stopResult, e.stopSignalInvocation(), actual)
+	wg.Wait()
+	if firstErr != nil {
+		return EvaluationResult{}, firstErr
 	}
 	if stopResult.EvalStatus == models.EvalStatusFailed && len(results) > 0 {
 		// Copy only Score/EvalStatus from the stop-signal outcome so the last
@@ -118,6 +139,7 @@ func (e *perTurnSimulatorEvaluator) evaluateFirstTurn(
 // build a prompt, sample NumSamples times, majority-vote aggregate.
 func (e *perTurnSimulatorEvaluator) evaluateIntermediateTurn(
 	ctx context.Context,
+	sem chan struct{},
 	inv models.Invocation,
 	history []models.Invocation,
 	scenario *models.ConversationScenario,
@@ -132,25 +154,42 @@ func (e *perTurnSimulatorEvaluator) evaluateIntermediateTurn(
 	if n <= 0 {
 		n = 1
 	}
-	samples := make([]PerInvocationResult, 0, n)
-	for range n {
-		resp, err := e.client.GenerateJudgeResponse(ctx, prompt, e.opts)
+	// The samples run concurrently too, each taking a semaphore slot.
+	samples := make([]PerInvocationResult, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return PerInvocationResult{}, ctx.Err()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			resp, err := e.client.GenerateJudgeResponse(ctx, prompt, e.opts)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			score, perr := parseIsValidJSON(resp)
+			var s *float64
+			st := models.EvalStatusNotEvaluated
+			if perr == nil {
+				v := score
+				s = &v
+				st = statusForScore(score, e.metric.Threshold)
+			}
+			samples[i] = PerInvocationResult{ActualInvocation: inv, Score: s, EvalStatus: st}
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
 		if err != nil {
 			return PerInvocationResult{}, err
 		}
-		score, perr := parseIsValidJSON(resp)
-		var s *float64
-		st := models.EvalStatusNotEvaluated
-		if perr == nil {
-			v := score
-			s = &v
-			st = statusForScore(score, e.metric.Threshold)
-		}
-		samples = append(samples, PerInvocationResult{
-			ActualInvocation: inv,
-			Score:            s,
-			EvalStatus:       st,
-		})
 	}
 	if len(samples) == 0 {
 		return PerInvocationResult{

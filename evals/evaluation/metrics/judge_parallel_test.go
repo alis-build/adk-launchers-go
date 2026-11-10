@@ -196,3 +196,173 @@ func TestJudgeRejectsParallelismLimitBelowOne(t *testing.T) {
 		}
 	}
 }
+
+// judgedTurn returns the user response a per-turn simulator prompt asks
+// about: the text after its last "# Generated User Response" heading (the
+// prompt also embeds the conversation history).
+func judgedTurn(prompt string) string {
+	_, after, _ := strings.Cut(prompt[strings.LastIndex(prompt, "# Generated User Response"):], "\n")
+	return strings.TrimSpace(after)
+}
+
+// turnJudge answers a simulator judge prompt by the turn it asks about, and
+// {"is_valid": true} for turns it does not name.
+type turnJudge map[string]string
+
+func (j turnJudge) GenerateJudgeResponse(_ context.Context, prompt string, _ models.JudgeModelOptions) (string, error) {
+	if a, ok := j[judgedTurn(prompt)]; ok {
+		return a, nil
+	}
+	return `{"is_valid": true}`, nil
+}
+
+// simulatorEvaluator returns the per-turn simulator evaluator for criterion
+// JSON, judged by c.
+func simulatorEvaluator(t *testing.T, c JudgeClient, criterion string) Evaluator {
+	t.Helper()
+	e, err := judgeEvaluator(t, c, `{"metricName":"per_turn_user_simulator_quality_v1","threshold":0.5,"criterion":`+criterion+`}`)
+	if err != nil {
+		t.Fatalf("GetEvaluator: %v", err)
+	}
+	return e
+}
+
+func simulatorTurns(texts ...string) []models.Invocation {
+	var out []models.Invocation
+	for _, s := range texts {
+		out = append(out, models.Invocation{UserContent: genai.NewContentFromText(s, genai.RoleUser)})
+	}
+	return out
+}
+
+var simulatorScenario = &models.ConversationScenario{StartingPrompt: "start", ConversationPlan: "plan"}
+
+// Mirrors adk-python test_per_turn_user_simulation_quality_v1.py:797.
+func TestSimulatorJudgeCallsUpToParallelismLimit(t *testing.T) {
+	g := newGatedJudge()
+	g.answer = `{"is_valid": true}`
+	e := simulatorEvaluator(t, g, `{"threshold":0.5,"stopSignal":"</finished>","judgeModelOptions":{"numSamples":2,"parallelismLimit":3}}`)
+	done := make(chan EvaluationResult, 1)
+	go func() {
+		res, _ := e.EvaluateInvocations(context.Background(), simulatorTurns("start", "t1", "t2", "t3"), nil, simulatorScenario)
+		done <- res
+	}()
+	// Three intermediate turns plus the stop-signal turn, two samples each.
+	for range 3 {
+		g.waitArrived(t)
+	}
+	for i := range 8 {
+		if n := g.inFlight.Load(); n > 3 {
+			t.Fatalf("in flight = %d, want at most 3", n)
+		}
+		g.releaseOne(t)
+		if i < 5 {
+			g.waitArrived(t)
+		}
+	}
+	waitResult(t, done)
+	if got, calls := g.maxInFlight.Load(), g.calls.Load(); got != 3 || calls != 8 {
+		t.Errorf("max in flight = %d over %d calls, want 3 over 8", got, calls)
+	}
+}
+
+// heldJudge holds every simulator judge call until the test releases it,
+// reporting each call's turn on arrived.
+type heldJudge struct {
+	arrived chan heldCall
+	answers turnJudge
+}
+
+type heldCall struct {
+	turn    string
+	release chan struct{}
+}
+
+func (j *heldJudge) GenerateJudgeResponse(ctx context.Context, prompt string, opts models.JudgeModelOptions) (string, error) {
+	c := heldCall{turn: judgedTurn(prompt), release: make(chan struct{})}
+	j.arrived <- c
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return j.answers.GenerateJudgeResponse(ctx, prompt, opts)
+}
+
+// Mirrors adk-python test_per_turn_user_simulation_quality_v1.py:867 for its
+// out-of-order release; the scores are derived from the Go rules.
+func TestSimulatorJudgeKeepsTurnOrder(t *testing.T) {
+	j := &heldJudge{arrived: make(chan heldCall, 8), answers: turnJudge{"t1": `{"is_valid": false}`, "t3": `{"is_valid": false}`}}
+	e := simulatorEvaluator(t, j, `{"threshold":0.5,"stopSignal":"</finished>","judgeModelOptions":{"parallelismLimit":4}}`)
+	done := make(chan EvaluationResult, 1)
+	go func() {
+		res, _ := e.EvaluateInvocations(context.Background(), simulatorTurns("start", "t1", "t2", "t3"), nil, simulatorScenario)
+		done <- res
+	}()
+	var calls []heldCall
+	for range 4 {
+		select {
+		case c := <-j.arrived:
+			calls = append(calls, c)
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for judge calls")
+		}
+	}
+	for i := len(calls) - 1; i >= 0; i-- {
+		close(calls[i].release)
+	}
+	res := waitResult(t, done)
+	want := []float64{1, 0, 1, 0}
+	if len(res.PerInvocationResults) != len(want) {
+		t.Fatalf("per invocation = %+v", res.PerInvocationResults)
+	}
+	for i, w := range want {
+		if s := res.PerInvocationResults[i].Score; s == nil || *s != w {
+			t.Errorf("turn %d score = %v, want %v", i, s, w)
+		}
+	}
+}
+
+// erringJudge fails the call for turn t1 once two other calls are waiting,
+// and makes every other call wait for cancellation.
+type erringJudge struct {
+	waiting, cancelled atomic.Int32
+	inFlight           atomic.Int32
+}
+
+func (j *erringJudge) GenerateJudgeResponse(ctx context.Context, prompt string, _ models.JudgeModelOptions) (string, error) {
+	j.inFlight.Add(1)
+	defer j.inFlight.Add(-1)
+	if judgedTurn(prompt) == "t1" {
+		for j.waiting.Load() < 2 {
+			time.Sleep(time.Millisecond)
+		}
+		return "", errors.New("judge down")
+	}
+	j.waiting.Add(1)
+	<-ctx.Done()
+	j.cancelled.Add(1)
+	return "", ctx.Err()
+}
+
+// Mirrors adk-python test_per_turn_user_simulation_quality_v1.py:1003.
+func TestSimulatorJudgeCancelsSiblingsOnError(t *testing.T) {
+	j := &erringJudge{}
+	e := simulatorEvaluator(t, j, `{"threshold":0.5,"stopSignal":"</finished>","judgeModelOptions":{"parallelismLimit":3}}`)
+	errc := make(chan error, 1)
+	go func() {
+		_, err := e.EvaluateInvocations(context.Background(), simulatorTurns("start", "t1", "t2"), nil, simulatorScenario)
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "judge down") {
+			t.Errorf("error = %v, want the judge's error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("evaluation still running 5 s after a judge call failed")
+	}
+	if got, left := j.cancelled.Load(), j.inFlight.Load(); got != 2 || left != 0 {
+		t.Errorf("cancelled = %d, in flight = %d; want 2 and 0", got, left)
+	}
+}
