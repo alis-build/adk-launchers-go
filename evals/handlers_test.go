@@ -16,8 +16,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.alis.build/adk/launchers/evals/evaluation/generator"
 	"go.alis.build/adk/launchers/evals/evaluation/metrics"
 	"go.alis.build/adk/launchers/evals/evaluation/models"
+	"go.alis.build/adk/launchers/evals/evaluation/simulation"
 	"go.alis.build/adk/launchers/evals/evaluation/storage"
 	iam "go.alis.build/iam/v3"
 	alismux "go.alis.build/mux"
@@ -857,26 +859,129 @@ func assertNoResults(t *testing.T, l *evalsLauncher) {
 	}
 }
 
-func TestRunRejectsLiveModelConfig(t *testing.T) {
-	l, _ := runSetWithOneCase(t)
-	_, err := callHandlerAs(t, l.runEvalHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/set1/run", "user1",
-		json.RawMessage(`{"eval_case_ids": ["case1"], "eval_metrics": [{"metricName": "response_match_score", "threshold": 0.7}], "live_model_config": {}}`),
-		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
-	if alismux.StatusCode(err) != http.StatusBadRequest || !strings.Contains(err.Error(), "live_model_config is not supported yet") {
-		t.Errorf("run with live_model_config: err = %v, want 400 naming live_model_config", err)
+// runLive posts body to the canonical run endpoint of l as user1.
+func runLive(t *testing.T, l *evalsLauncher, body string) (*httptest.ResponseRecorder, error) {
+	t.Helper()
+	return callHandlerAs(t, l.runEvalHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/set1/run", "user1",
+		json.RawMessage(body), map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+}
+
+// runResults decodes a canonical run response.
+func runResults(t *testing.T, rec *httptest.ResponseRecorder) []models.RunEvalResult {
+	t.Helper()
+	var resp RunEvalResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode run response: %v", err)
+	}
+	return resp.RunEvalResults
+}
+
+// Acceptance 6: a live run with an audio-simulated user is run, not refused.
+func TestRunEvalLiveAudioSimulatedRun(t *testing.T) {
+	l, a := liveLauncher(t, simulation.UserSimulatorProvider{ResolveModel: resolveFakeTTS})
+	rec, err := runLive(t, l, `{"eval_metrics":[{"metricName":"response_match_score","threshold":0.1}],"live_model_config":{"timeout_seconds":5},"user_simulator_config":{"type":"llm_audio","audio_model":"fake-tts"}}`)
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("run: status %d, err %v", rec.Code, err)
+	}
+	if got := runResults(t, rec); len(got) != 1 || got[0].EvalID != "case1" {
+		t.Errorf("results = %+v, want one for case1", got)
+	}
+	_, reqs := a.liveCalls()
+	if len(reqs) != 3 {
+		t.Fatalf("live requests = %+v, want start, audio, end", reqs)
+	}
+	_, start := reqs[0].RealtimeInput.(*genai.ActivityStart)
+	blob, _ := reqs[1].RealtimeInput.(*genai.Blob)
+	_, end := reqs[2].RealtimeInput.(*genai.ActivityEnd)
+	if !start || blob == nil || string(blob.Data) != "WAV" || !end {
+		t.Errorf("live requests = %+v, want ActivityStart, blob WAV, ActivityEnd", reqs)
+	}
+}
+
+func TestRunEvalRejectsUnresolvableAudioModel(t *testing.T) {
+	l, a := liveLauncher(t, simulation.UserSimulatorProvider{ResolveModel: resolveFakeTTS})
+	_, err := runLive(t, l, `{"eval_metrics":[],"user_simulator_config":{"type":"llm_audio"}}`)
+	if alismux.StatusCode(err) != http.StatusBadRequest || !strings.Contains(err.Error(), `audio_model "cloud_tts"`) {
+		t.Errorf("error = %v, want a 400 naming the audio model", err)
+	}
+	if n, _ := a.liveCalls(); n != 0 {
+		t.Errorf("%d live sessions ran, want none", n)
 	}
 	assertNoResults(t, l)
 }
 
-func TestRunRejectsUserSimulatorConfig(t *testing.T) {
-	l, _ := runSetWithOneCase(t)
-	_, err := callHandlerAs(t, l.runEvalLegacyHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/run_eval", "user1",
-		json.RawMessage(`{"evalMetrics": [{"metricName": "response_match_score", "threshold": 0.7}], "userSimulatorConfig": {"type": "llm_audio"}}`),
-		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
-	if alismux.StatusCode(err) != http.StatusBadRequest || !strings.Contains(err.Error(), "user_simulator_config is not supported yet") {
-		t.Errorf("run with userSimulatorConfig: err = %v, want 400 naming user_simulator_config", err)
+func TestRunEvalRejectsUnknownSimulatorType(t *testing.T) {
+	l, _ := liveLauncher(t, simulation.UserSimulatorProvider{})
+	_, err := runLive(t, l, `{"eval_metrics":[],"user_simulator_config":{"type":"typo"}}`)
+	if alismux.StatusCode(err) != http.StatusBadRequest || !strings.Contains(err.Error(), "user_simulator_config") {
+		t.Errorf("error = %v, want a 400 naming user_simulator_config", err)
 	}
-	assertNoResults(t, l)
+}
+
+func TestRunEvalRejectsBadLiveModelConfig(t *testing.T) {
+	l, _ := liveLauncher(t, simulation.UserSimulatorProvider{})
+	_, err := runLive(t, l, `{"eval_metrics":[],"live_model_config":{"timeout_seconds":"soon"}}`)
+	if alismux.StatusCode(err) != http.StatusBadRequest || !strings.Contains(err.Error(), "live_model_config") {
+		t.Errorf("error = %v, want a 400 naming live_model_config", err)
+	}
+}
+
+// Both spellings, and {}, run live; null runs the plain path.
+func TestRunEvalLiveModelConfigSpellings(t *testing.T) {
+	for cfg, wantLive := range map[string]bool{`{"timeoutSeconds":7}`: true, `{"timeout_seconds":7}`: true, `{}`: true, `null`: false} {
+		l, a := liveLauncher(t, simulation.UserSimulatorProvider{})
+		rec, err := runLive(t, l, `{"eval_metrics":[{"metricName":"response_match_score","threshold":0.1}],"live_model_config":`+cfg+`}`)
+		if err != nil || rec.Code != http.StatusOK || len(runResults(t, rec)) != 1 {
+			t.Errorf("%s: status %d, err %v", cfg, rec.Code, err)
+		}
+		if n, _ := a.liveCalls(); (n > 0) != wantLive {
+			t.Errorf("%s: %d live sessions, want live %v", cfg, n, wantLive)
+		}
+	}
+}
+
+// The camelCase key wins when both appear, as in pydantic (checked against
+// pydantic 2.14), and 0 or absent means the default.
+func TestLiveTimeoutFromConfig(t *testing.T) {
+	for raw, want := range map[string]int{
+		`{"timeoutSeconds":7}`:                     7,
+		`{"timeout_seconds":7}`:                    7,
+		`{"timeout_seconds":7,"timeoutSeconds":3}`: 3,
+		`{}`:                    generator.DefaultLiveTimeoutSeconds,
+		`{"timeout_seconds":0}`: generator.DefaultLiveTimeoutSeconds,
+	} {
+		if got, err := liveTimeoutFromConfig(json.RawMessage(raw)); err != nil || got != want {
+			t.Errorf("%s = %d, %v; want %d", raw, got, err, want)
+		}
+	}
+}
+
+// Was evalscompat's TestRunRejectsLiveModelConfig: live mode is now run.
+func TestRunEvalAcceptsEmptyLiveModelConfig(t *testing.T) {
+	l, a := liveLauncher(t, simulation.UserSimulatorProvider{})
+	rec, err := runLive(t, l, `{"eval_case_ids": ["case1"], "eval_metrics": [{"metricName": "response_match_score", "threshold": 0.7}], "live_model_config": {}}`)
+	if err != nil || rec.Code != http.StatusOK || len(runResults(t, rec)) != 1 {
+		t.Fatalf("run: status %d, err %v", rec.Code, err)
+	}
+	if n, _ := a.liveCalls(); n != 1 {
+		t.Errorf("%d live sessions, want 1", n)
+	}
+}
+
+// Was evalscompat's TestRunRejectsUserSimulatorConfig: the legacy endpoint
+// reads the camelCase key and runs the audio simulator.
+func TestRunEvalAcceptsCamelCaseUserSimulatorConfig(t *testing.T) {
+	l, a := liveLauncher(t, simulation.UserSimulatorProvider{ResolveModel: resolveFakeTTS})
+	rec, err := callHandlerAs(t, l.runEvalLegacyHandler(), http.MethodPost, "/dev/apps/my_app/eval_sets/set1/run_eval", "user1",
+		json.RawMessage(`{"evalMetrics": [{"metricName": "response_match_score", "threshold": 0.1}], "liveModelConfig": {}, "userSimulatorConfig": {"type": "llm_audio", "audio_model": "fake-tts"}}`),
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("legacy run: status %d, err %v", rec.Code, err)
+	}
+	n, reqs := a.liveCalls()
+	if n != 1 || len(reqs) != 3 {
+		t.Errorf("%d live sessions with requests %+v, want one audio turn", n, reqs)
+	}
 }
 
 func TestRunAcceptsNullLiveModelConfig(t *testing.T) {

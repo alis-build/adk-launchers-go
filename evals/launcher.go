@@ -31,6 +31,7 @@ import (
 	alismux "go.alis.build/mux"
 	adklauncher "google.golang.org/adk/v2/cmd/launcher"
 	adkweb "google.golang.org/adk/v2/cmd/launcher/web"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 )
 
@@ -912,6 +913,60 @@ func (l *evalsLauncher) runEvalLegacyHandler() alismux.Func {
 	}
 }
 
+// liveTimeoutFromConfig returns the turn timeout a set live_model_config
+// asks for: timeoutSeconds or timeout_seconds, the camelCase alias winning
+// when both appear as in pydantic, and the default when it is 0 or absent.
+func liveTimeoutFromConfig(raw json.RawMessage) (int, error) {
+	var c struct {
+		Camel *int `json:"timeoutSeconds"`
+		Snake *int `json:"timeout_seconds"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return 0, err
+	}
+	timeout := 0
+	if c.Snake != nil {
+		timeout = *c.Snake
+	}
+	if c.Camel != nil {
+		timeout = *c.Camel
+	}
+	if timeout <= 0 {
+		timeout = generator.DefaultLiveTimeoutSeconds
+	}
+	return timeout, nil
+}
+
+// requestSimProvider returns the user simulator provider for one run: the
+// launcher's own when raw is unset, else a copy carrying the parsed config.
+// An audio config's model is resolved here, once, so a bad name is a 400
+// instead of a failure in every case.
+func (l *evalsLauncher) requestSimProvider(ctx context.Context, raw json.RawMessage) (simulation.UserSimulatorProvider, error) {
+	p := l.simProvider
+	if !rawSet(raw) {
+		return p, nil
+	}
+	cfg, err := simulation.ParseUserSimulatorConfig(raw)
+	if err != nil {
+		return p, alismux.BadRequestErr("%s", err.Error())
+	}
+	p.SimulatorConfig = cfg
+	audio, ok := cfg.(simulation.LlmAudioUserSimulatorConfig)
+	if !ok {
+		return p, nil
+	}
+	resolve := p.ResolveModel
+	if resolve == nil {
+		resolve = model.NewLLM
+	}
+	m, err := resolve(ctx, audio.AudioModel)
+	if err != nil {
+		return p, alismux.BadRequestErr("user_simulator_config.audio_model %q: %s", audio.AudioModel, err.Error())
+	}
+	p.ResolveModel = func(context.Context, string) (model.LLM, error) { return m, nil }
+	return p, nil
+}
+
 // executeRunEval loads the eval set, runs inference and scoring, and returns results.
 func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult, error) {
 	caller, err := iam.FromContext(r.Context())
@@ -930,13 +985,18 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return nil, alismux.BadRequestErr("invalid request body: %s", err.Error())
 	}
-	// Refused before anything loads or runs, rather than ignored: a caller
-	// asking for live mode or an audio simulator must not get a plain run.
+	// adk-python runs live whenever live_model_config is given, even as {}.
+	liveCfg := service.InferenceConfig{}
 	if rawSet(req.LiveModelConfig) {
-		return nil, alismux.BadRequestErr("live_model_config is not supported yet")
+		timeout, err := liveTimeoutFromConfig(req.LiveModelConfig)
+		if err != nil {
+			return nil, alismux.BadRequestErr("live_model_config: %s", err.Error())
+		}
+		liveCfg = service.InferenceConfig{UseLive: true, LiveTimeoutSeconds: timeout}
 	}
-	if rawSet(req.UserSimulatorConfig) {
-		return nil, alismux.BadRequestErr("user_simulator_config is not supported yet")
+	simProvider, err := l.requestSimProvider(r.Context(), req.UserSimulatorConfig)
+	if err != nil {
+		return nil, err
 	}
 	parallelism := 0
 	if req.Parallelism != nil {
@@ -958,6 +1018,7 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 	if err != nil {
 		return nil, alismux.BadRequestErr("evals: %s", err.Error())
 	}
+	svc.SimProvider = simProvider
 
 	caseIDs := req.EvalCaseIDs
 	if len(caseIDs) == 0 {
@@ -969,7 +1030,7 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 		AppName:         appName,
 		EvalSetID:       evalSetID,
 		EvalCaseIDs:     caseIDs,
-		InferenceConfig: service.InferenceConfig{Parallelism: parallelism},
+		InferenceConfig: service.InferenceConfig{Parallelism: parallelism, UseLive: liveCfg.UseLive, LiveTimeoutSeconds: liveCfg.LiveTimeoutSeconds},
 		SessionState:    req.SessionState,
 		// Runs write real sessions, so they are the caller's, never the user
 		// stored on a shared case.
