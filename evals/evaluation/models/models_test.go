@@ -397,3 +397,45 @@ func TestInvocationEventUsageRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// Mirrors adk-python test_eval_config.py:208.
+func TestAppendDefaultEfficiencyMetricsAddsThemToAPlainList(t *testing.T) {
+	got := models.AppendDefaultEfficiencyMetrics([]models.EvalMetric{{MetricName: models.MetricToolTrajectoryAvgScore, Threshold: 1}})
+	var names []string
+	for _, m := range got {
+		names = append(names, m.MetricName)
+	}
+	want := []string{"tool_trajectory_avg_score", "tool_call_count_v1", "inference_call_count_v1", "token_usage_v1", "invocation_duration_v1"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("names = %v, want %v", names, want)
+	}
+	for _, m := range got[1:] {
+		if m.Threshold != 0 || m.Criterion.IsSet() {
+			t.Errorf("%s threshold %v, criterion set %v; want none", m.MetricName, m.Threshold, m.Criterion.IsSet())
+		}
+	}
+}
+
+func TestAppendDefaultEfficiencyMetricsKeepsCallerEntry(t *testing.T) {
+	got := models.AppendDefaultEfficiencyMetrics([]models.EvalMetric{{MetricName: models.MetricTokenUsageV1, Threshold: 1}})
+	n := 0
+	for _, m := range got {
+		if m.MetricName == models.MetricTokenUsageV1 {
+			n++
+			if m.Threshold != 1 {
+				t.Errorf("token_usage_v1 threshold = %v, want the caller's 1", m.Threshold)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("token_usage_v1 appears %d times, want 1", n)
+	}
+}
+
+func TestAppendDefaultEfficiencyMetricsDoesNotMutate(t *testing.T) {
+	in := []models.EvalMetric{{MetricName: models.MetricToolTrajectoryAvgScore}}
+	_ = models.AppendDefaultEfficiencyMetrics(in)
+	if len(in) != 1 {
+		t.Errorf("input length = %d, want 1", len(in))
+	}
+}

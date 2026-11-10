@@ -888,7 +888,9 @@ func (l *evalsLauncher) executeRunEval(r *http.Request) ([]models.RunEvalResult,
 	caseResults, evalErr := svc.Evaluate(r.Context(), service.EvaluateRequest{
 		InferenceResults: inferences,
 		EvaluateConfig: service.EvaluateConfig{
-			EvalMetrics: req.EvalMetrics,
+			// Efficiency is reported on every run without being asked for,
+			// as adk-python's dev server does.
+			EvalMetrics: models.AppendDefaultEfficiencyMetrics(req.EvalMetrics),
 		},
 	})
 	// Return a hard error only when every case failed to evaluate; partial

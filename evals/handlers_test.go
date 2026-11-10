@@ -1042,3 +1042,50 @@ func TestAddSessionSessionBackendErrorIs500(t *testing.T) {
 		t.Errorf("add-session with a failing session backend: status %d (err %v), want 500", got, err)
 	}
 }
+
+// Acceptance 2: efficiency is reported on every run without being asked for.
+func TestRunEvalReportsEfficiencyMetricsUnrequested(t *testing.T) {
+	l, sets := newHandlerTestLauncher(t)
+	_, _ = sets.CreateEvalSet("my_app", "set1")
+	_ = sets.AddEvalCase("my_app", "set1", models.EvalCase{
+		EvalID: "case1",
+		Conversation: []models.Invocation{{
+			UserContent:   genai.NewContentFromText("hi", genai.RoleUser),
+			FinalResponse: genai.NewContentFromText("ok", genai.RoleModel),
+		}},
+	})
+	rec, err := callHandlerAs(t, l.runEvalHandler(), http.MethodPost, "/dev/apps/my_app/eval-sets/set1/run", "user1",
+		json.RawMessage(`{"eval_metrics": [{"metricName": "tool_trajectory_avg_score", "threshold": 1.0}]}`),
+		map[string]string{"app_name": "my_app", "eval_set_id": "set1"})
+	if err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("run: status = %d, err = %v, body = %s", rec.Code, err, rec.Body.String())
+	}
+	var got struct {
+		RunEvalResults []struct {
+			FinalEvalStatus          int `json:"finalEvalStatus"`
+			OverallEvalMetricResults []struct {
+				MetricName string `json:"metricName"`
+				EvalStatus int    `json:"evalStatus"`
+			} `json:"overallEvalMetricResults"`
+		} `json:"runEvalResults"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.RunEvalResults) != 1 {
+		t.Fatalf("results = %+v, want one", got)
+	}
+	r := got.RunEvalResults[0]
+	statuses := map[string]int{}
+	for _, m := range r.OverallEvalMetricResults {
+		statuses[m.MetricName] = m.EvalStatus
+	}
+	for _, name := range []string{"tool_call_count_v1", "inference_call_count_v1", "token_usage_v1", "invocation_duration_v1"} {
+		if s, ok := statuses[name]; !ok || s != int(models.EvalStatusInformational) {
+			t.Errorf("%s status = %v (present %v), want 4", name, s, ok)
+		}
+	}
+	if r.FinalEvalStatus != statuses["tool_trajectory_avg_score"] {
+		t.Errorf("case status = %d, want the trajectory's %d", r.FinalEvalStatus, statuses["tool_trajectory_avg_score"])
+	}
+}

@@ -45,6 +45,7 @@ func EvaluateEvalSet(
 	if err != nil {
 		return nil, err
 	}
+	metricList = models.AppendDefaultEfficiencyMetrics(metricList)
 
 	inferences, err := svc.PerformInference(ctx, service.InferenceRequest{
 		AppName:         appName,
@@ -150,6 +151,12 @@ func meanMetricResults(cases []models.EvalCaseResult) []models.EvalMetricResult 
 	out := make([]models.EvalMetricResult, 0, len(byName))
 	for _, a := range byName {
 		m := a.metric
+		// Details (rubric scores, token and duration breakdowns) describe one
+		// run, so an average over several drops them, as adk-python's
+		// aggregator does, rather than pair run 1's with everyone's mean.
+		if len(cases) > 1 {
+			m.Details = &models.EvalMetricResultDetails{}
+		}
 		if a.count > 0 {
 			mean := a.total / float64(a.count)
 			m.Score = &mean

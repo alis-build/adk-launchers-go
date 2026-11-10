@@ -151,3 +151,31 @@ func UnmarshalEvalConfig(data []byte) (EvalConfig, error) {
 	}
 	return cfg, nil
 }
+
+// defaultEfficiencyMetrics are reported on every eval, in this order
+// (adk-python's _DEFAULT_EFFICIENCY_METRICS).
+var defaultEfficiencyMetrics = []string{
+	MetricToolCallCountV1,
+	MetricInferenceCallCountV1,
+	MetricTokenUsageV1,
+	MetricInvocationDurationV1,
+}
+
+// AppendDefaultEfficiencyMetrics returns a new slice: metrics, then each
+// informational efficiency metric metrics does not already name, with no
+// threshold or criterion. A metric the caller named is kept as written, so a
+// threshold on it is still refused. metrics is not modified.
+func AppendDefaultEfficiencyMetrics(metrics []EvalMetric) []EvalMetric {
+	out := make([]EvalMetric, 0, len(metrics)+len(defaultEfficiencyMetrics))
+	out = append(out, metrics...)
+	named := make(map[string]bool, len(metrics))
+	for _, m := range metrics {
+		named[m.MetricName] = true
+	}
+	for _, name := range defaultEfficiencyMetrics {
+		if !named[name] {
+			out = append(out, EvalMetric{MetricName: name})
+		}
+	}
+	return out
+}

@@ -113,10 +113,11 @@ func TestEvaluateEvalSetKeepsInformationalMetricOutOfVerdict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateEvalSet: %v", err)
 	}
-	if len(results) != 1 || len(results[0].OverallEvalMetricResults) != 1 {
-		t.Fatalf("results = %+v, want one case with one metric", results)
+	// The efficiency metrics are reported too, unasked (append-efficiency-metrics).
+	if len(results) != 1 {
+		t.Fatalf("results = %+v, want one case", results)
 	}
-	m := results[0].OverallEvalMetricResults[0]
+	m := metricResult(t, results[0], "tool_call_count_v1")
 	if m.Score == nil {
 		t.Fatalf("tool_call_count_v1 has no score, want 3")
 	}
@@ -171,10 +172,10 @@ func TestEvaluateEvalSetReportsUnscoredMetricAsNotEvaluated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateEvalSet: %v", err)
 	}
-	if len(results) != 1 || len(results[0].OverallEvalMetricResults) != 1 {
-		t.Fatalf("results = %+v, want one case with one metric", results)
+	if len(results) != 1 {
+		t.Fatalf("results = %+v, want one case", results)
 	}
-	if got := results[0].OverallEvalMetricResults[0].EvalStatus; got != models.EvalStatusNotEvaluated {
+	if got := metricResult(t, results[0], "final_response_match_v2").EvalStatus; got != models.EvalStatusNotEvaluated {
 		t.Errorf("metric status = %d, want %d", got, models.EvalStatusNotEvaluated)
 	}
 	if results[0].FinalEvalStatus == models.EvalStatusFailed {
@@ -342,5 +343,37 @@ func TestEvaluateEvalSetRejectsPassKWithoutK(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "needs k") {
 		t.Errorf("error = %v, want the needs-k error", err)
+	}
+}
+
+// metricResult returns the case's overall result for metric name.
+func metricResult(t *testing.T, c models.EvalCaseResult, name string) models.EvalMetricResult {
+	t.Helper()
+	for _, m := range c.OverallEvalMetricResults {
+		if m.MetricName == name {
+			return m
+		}
+	}
+	t.Fatalf("no %s in %+v", name, c.OverallEvalMetricResults)
+	return models.EvalMetricResult{}
+}
+
+// Averaged over runs, a metric keeps no one run's breakdown next to the
+// mean, as adk-python's aggregator drops it.
+func TestEvaluateEvalSetDropsPerRunDetailsFromAverages(t *testing.T) {
+	svc, set := newEvalService(t, metrics.NewDefaultRegistry())
+	cfg, err := models.UnmarshalEvalConfig([]byte(`{"criteria":{"response_match_score":0.5}}`))
+	if err != nil {
+		t.Fatalf("UnmarshalEvalConfig: %v", err)
+	}
+
+	results, err := agenteval.EvaluateEvalSet(context.Background(), svc, "app", set, cfg, 2)
+	if err != nil {
+		t.Fatalf("EvaluateEvalSet: %v", err)
+	}
+
+	m := metricResult(t, results[0], "invocation_duration_v1")
+	if m.Details == nil || m.Details.DurationDetails != nil || m.Details.TokenUsageDetails != nil {
+		t.Errorf("averaged details = %+v, want empty", m.Details)
 	}
 }
