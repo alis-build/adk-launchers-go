@@ -236,9 +236,12 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 	// because they represent internal reasoning that logically precedes the
 	// visible response but is rendered separately in the UI.
 	if len(toolCalls) > 0 {
+		// Always an assistant message: only those carry tool calls, and ADK
+		// writes some of its own calls, such as adk_request_credential, as
+		// user-role events.
 		messages = append(messages, types.Message{
 			ID:             messageID(ev.ID, partIndex),
-			Role:           role,
+			Role:           types.RoleAssistant,
 			ToolCalls:      toolCalls,
 			Name:           senderName,
 			EncryptedValue: takeEncryptedValue(),

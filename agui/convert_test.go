@@ -483,6 +483,30 @@ func TestConvertSessionToMessages_FunctionCallAuthorName(t *testing.T) {
 	}
 }
 
+// ADK writes its credential request as a user-role event; the call still
+// belongs on an assistant message, the only kind that carries tool calls.
+func TestConvertSessionToMessages_credentialRequestIsAssistantToolCall(t *testing.T) {
+	sess := buildSession(func(s *mockSession) {
+		ev := session.NewEvent(t.Context(), "inv1")
+		ev.Author = "assistant"
+		ev.Content = &genai.Content{Role: string(genai.RoleUser), Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+			ID: "cred-1", Name: toolauth.RequestCredentialFunctionCallName, Args: map[string]any{"functionCallId": "call-1"},
+		}}}}
+		s.events = append(s.events, ev)
+	})
+
+	msgs, err := ConvertSessionToMessages(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != types.RoleAssistant || len(msgs[0].ToolCalls) != 1 || msgs[0].ToolCalls[0].ID != "cred-1" {
+		t.Errorf("message = %+v, want an assistant message carrying tool call cred-1", msgs[0])
+	}
+}
+
 // A call waiting for the user's sign-in answers with a placeholder; thread
 // history keeps only the result of ADK's rerun.
 func TestConvertSessionToMessages_skipsSignInPlaceholder(t *testing.T) {

@@ -63,7 +63,12 @@ func interruptFor(t *testing.T, fc *genai.FunctionCall) (map[string]any, string)
 	ev := session.NewEvent(t.Context(), "inv1")
 	ev.InvocationID = "e-auth"
 	ev.LongRunningToolIDs = []string{fc.ID}
-	ev.Content = &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{FunctionCall: fc}}}
+	// ADK writes its credential request as a user-role event.
+	role := genai.RoleModel
+	if fc.Name == toolauth.RequestCredentialFunctionCallName {
+		role = genai.RoleUser
+	}
+	ev.Content = &genai.Content{Role: string(role), Parts: []*genai.Part{{FunctionCall: fc}}}
 	if _, err := l.processEvent(e, ev, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
