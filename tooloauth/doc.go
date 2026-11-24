@@ -61,7 +61,10 @@
 // run in that same turn. Calls sharing one sign-in exchange the code once.
 // A forged, stale or failed answer fails with an error naming the provider
 // and stores nothing; an answer with no auth response URI cancels with
-// "<Provider> sign-in was cancelled". A replayed answer never resumes the
+// "<Provider> sign-in was cancelled". ADK keeps the answer for the rest of
+// the run, so a failed or cancelled sign-in answers every later call to a
+// tool on that sign-in in the same run with the same error; the user can
+// sign in on their next message. A replayed answer never resumes the
 // call or sends the code twice: ADK drops an answer to a call it has
 // already answered, and the plugin refuses a duplicate that still reaches
 // it.

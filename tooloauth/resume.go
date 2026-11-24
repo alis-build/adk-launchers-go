@@ -150,6 +150,8 @@ func (r *resolver) claimSignIn(ctx agent.Context, key signInKey) (claim, *signIn
 	defer r.pending.mu.Unlock()
 	run := r.pending.byInvocation[ctx.InvocationID()]
 	if run == nil {
+		// The record was pruned between the lookup and this claim. Whether
+		// the code was already sent is unknown, so refuse it.
 		return claimSameCall, nil
 	}
 	switch f, ok := run.claimed[key]; {
