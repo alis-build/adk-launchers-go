@@ -213,7 +213,8 @@ func storedAnswer(ctx agent.Context, t Tool) (*toolauth.OAuth2Auth, bool) {
 
 // resumeSignIn completes a sign-in when ADK reruns a call after the user
 // answered the plugin's request, and reports false, so the call goes on to
-// the stored-token lookup, when there is no answer for t. The answer counts
+// the stored-token lookup, when there is no answer for t. An answer without
+// an auth response URI cancels the sign-in. The answer counts
 // only for a request the plugin issued in this invocation's session; ADK
 // pins the answer's state to the request it sent. When another call in this
 // invocation already took the answer up, the call waits for that sign-in to
@@ -221,13 +222,18 @@ func storedAnswer(ctx agent.Context, t Tool) (*toolauth.OAuth2Auth, bool) {
 // the token that sign-in stored, or fails as out of date when there is none.
 func (r *resolver) resumeSignIn(ctx agent.Context, toolName string, t Tool) (result map[string]any, handled bool, err error) {
 	answer, ok := storedAnswer(ctx, t)
-	if !ok || answer.AuthResponseURI == "" {
+	if !ok {
 		return nil, false, nil
 	}
 	outOfDate := fmt.Errorf("%s sign-in failed: the sign-in request is out of date", t.Provider)
 	key := signInKey{author: ctx.AgentName(), credentialKey: t.slot(), state: answer.State}
 	requested, ok := r.lookupSignIn(ctx, key)
-	if !ok {
+	switch {
+	case !ok && answer.AuthResponseURI == "":
+		// Nothing to cancel: an empty answer for a request the plugin did not
+		// issue changes nothing.
+		return nil, false, nil
+	case !ok:
 		return nil, true, outOfDate
 	}
 	c, f := r.claimSignIn(ctx, key)
@@ -253,6 +259,11 @@ func (r *resolver) resumeSignIn(ctx agent.Context, toolName string, t Tool) (res
 		}
 	}
 	defer close(f.done)
+	if answer.AuthResponseURI == "" {
+		// An answer with no auth response is the user cancelling the sign-in.
+		f.err = fmt.Errorf("%s sign-in was cancelled", t.Provider)
+		return nil, true, f.err
+	}
 	result, err = r.completeSignIn(ctx, t, requested, answer)
 	f.err = err
 	return result, true, err

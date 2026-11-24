@@ -58,6 +58,35 @@ func redirectResponse(payload map[string]any, query string) map[string]any {
 	return withADKWebResponse(payload, "http://localhost:4200/?"+query, "http://localhost:4200")
 }
 
+// An answer with no auth response URI is the user cancelling the sign-in.
+func TestResumeReject_cancelled(t *testing.T) {
+	h, cfg, rs, te := rejectSetup(t, http.StatusOK, exchangeReply)
+	events := rejectCase(t, h, func(map[string]any, string) map[string]any {
+		return map[string]any{"authType": "oauth2", "oauth2": map[string]any{}}
+	})
+	rejected(t, events, cfg, rs, te, "Google Calendar sign-in was cancelled", 0)
+}
+
+// Every call that asked for the cancelled sign-in gets the cancelled error.
+func TestResumeReject_cancelledSharedByTwoCalls(t *testing.T) {
+	h, _, rs, te := twoCallsHarness(t, http.StatusOK, exchangeReply)
+	fc := credentialCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+
+	events := h.run(t.Context(), "user-7", "s-1", credentialAnswer(fc, map[string]any{"authType": "oauth2", "oauth2": map[string]any{}}))
+
+	for _, id := range []string{"call-1", "call-2"} {
+		if resp := responseFor(events, id); resp["error"] != "Google Calendar sign-in was cancelled" {
+			t.Errorf("%s response = %v, want the cancelled error", id, resp)
+		}
+	}
+	if got := te.callCount(); got != 0 {
+		t.Errorf("token endpoint called %d times, want 0", got)
+	}
+	if got := rs.handlerRuns(); got != 0 {
+		t.Errorf("calendar_list ran %d times, want 0", got)
+	}
+}
+
 func TestResumeReject_providerDenied(t *testing.T) {
 	h, cfg, rs, te := rejectSetup(t, http.StatusOK, exchangeReply)
 	events := rejectCase(t, h, func(payload map[string]any, state string) map[string]any {
