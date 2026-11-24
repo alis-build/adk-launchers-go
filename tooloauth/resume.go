@@ -234,7 +234,10 @@ func (r *resolver) resumeSignIn(ctx agent.Context, toolName string, t Tool) (res
 		// issue changes nothing.
 		return nil, false, nil
 	case !ok:
-		return nil, true, outOfDate
+		// Not a request this agent issued. ADK keeps an answer for the whole
+		// invocation under a key with no agent in it, so this can be another
+		// agent's sign-in: run on the token it stored, never exchanging.
+		return r.runOnStoredToken(ctx, toolName, t, outOfDate)
 	}
 	c, f := r.claimSignIn(ctx, key)
 	switch c {
@@ -249,14 +252,7 @@ func (r *resolver) resumeSignIn(ctx agent.Context, toolName string, t Tool) (res
 		if f.err != nil {
 			return nil, true, f.err
 		}
-		switch _, err := r.credential(ctx, toolName, ctx.AppName(), ctx.UserID()); {
-		case err == nil:
-			return nil, true, nil
-		case errors.Is(err, errMiss):
-			return nil, true, outOfDate
-		default:
-			return nil, true, unavailable(t)
-		}
+		return r.runOnStoredToken(ctx, toolName, t, outOfDate)
 	}
 	defer close(f.done)
 	if answer.AuthResponseURI == "" {
@@ -277,6 +273,20 @@ type authResponse struct {
 	ExchangedAuthCredential struct {
 		OAuth2 *toolauth.OAuth2Auth `json:"oauth2"`
 	} `json:"exchangedAuthCredential"`
+}
+
+// runOnStoredToken lets a call that saw a sign-in answer it does not
+// complete run on the user's stored token, and fails it with noToken when
+// there is none.
+func (r *resolver) runOnStoredToken(ctx agent.Context, toolName string, t Tool, noToken error) (map[string]any, bool, error) {
+	switch _, err := r.credential(ctx, toolName, ctx.AppName(), ctx.UserID()); {
+	case err == nil:
+		return nil, true, nil
+	case errors.Is(err, errMiss):
+		return nil, true, noToken
+	default:
+		return nil, true, unavailable(t)
+	}
 }
 
 // completeSignIn completes the sign-in of a rerun call, given the user's
