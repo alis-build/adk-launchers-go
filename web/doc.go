@@ -101,6 +101,11 @@
 // The checks cover ADK's REST API only. ADK's A2A routes have no
 // authentication.
 //
+// ADK's bundled web UI sends OAuth sign-in popups back to /dev-ui/, the path
+// adk-python serves it from. With the webui sublauncher active, GET and HEAD
+// requests under /dev-ui/ are redirected to the same path and query under
+// /ui/, so the popup loads the UI and completes the sign-in.
+//
 // ADK's web UI acts as user "user" unless its page is loaded with ?userId=. A
 // browser opening /ui/ without one, with an identity on the request, is
 // redirected to /ui/?userId=<identity ID>, so the UI sends the caller's real ID

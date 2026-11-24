@@ -335,6 +335,9 @@ func (w *webLauncher) buildRouter(config *launcher.Config) (*mux.Router, error) 
 	// Opens ADK's web UI as the caller, so its requests pass authz.Strict.
 	// On every other route it is a no-op path comparison.
 	router.Use(webUIUserRedirect)
+	if _, ok := w.activeSublaunchers["webui"]; ok {
+		registerDevUIRedirect(router)
+	}
 
 	// Before any sublauncher runs, so the REST server ADK's api sublauncher
 	// builds is given the operator's origins too. Clipped so neither this

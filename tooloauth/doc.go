@@ -72,7 +72,9 @@
 // # Resuming from a client
 //
 // ADK's dev web UI completes the flow itself: it opens the authorization
-// URI in a popup and answers the request.
+// URI in a popup and answers the request. The popup returns to /dev-ui/,
+// which go.alis.build/adk/launchers/web forwards to ADK Go's /ui/; a host
+// serving the UI some other way needs the same route.
 //
 // Over AG-UI (go.alis.build/adk/launchers/agui) the pause is an interrupt
 // with reason "auth_required" and the stripped config in
