@@ -550,6 +550,12 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 				if IsPendingProxyResponse(part.FunctionResponse.Response) {
 					continue
 				}
+				// A call waiting for the user's sign-in answers with a
+				// placeholder that ADK replaces when it reruns the call;
+				// clients see only the real result, as for any pause.
+				if _, waiting := ev.Actions.RequestedAuthConfigs[part.FunctionResponse.ID]; waiting {
+					continue
+				}
 				respJSON, err := MarshalPooled(part.FunctionResponse.Response)
 				if err != nil {
 					return false, fmt.Errorf("failed to marshal function response: %w", err)

@@ -96,6 +96,46 @@ func at(v map[string]any, path ...string) any {
 	return cur
 }
 
+// toolResultsFor runs ev through processEvent and returns the toolCallIds
+// of the TOOL_CALL_RESULT events it emitted.
+func toolResultsFor(t *testing.T, ev *session.Event) []any {
+	t.Helper()
+	l := newTestLauncher("test-app")
+	e, rec := newTestEmitter()
+	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
+	if _, err := l.processEvent(e, ev, state, nil); err != nil {
+		t.Fatalf("processEvent() error = %v", err)
+	}
+	var ids []any
+	for _, sev := range parseSSEEvents(rec.Body.String()) {
+		if sev.Raw["type"] == "TOOL_CALL_RESULT" {
+			ids = append(ids, sev.Raw["toolCallId"])
+		}
+	}
+	return ids
+}
+
+// A call waiting for the user's sign-in answers with a placeholder that ADK
+// replaces when it reruns the call; clients see only the real result.
+func TestAuthInterrupt_placeholderResultNotStreamed(t *testing.T) {
+	waiting := session.NewEvent(t.Context(), "inv1")
+	waiting.Actions.RequestedAuthConfigs = map[string]toolauth.Config{"call-cal-1": *signInConfig()}
+	waiting.Content = &genai.Content{Role: string(genai.RoleUser), Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+		ID: "call-cal-1", Name: "calendar_list", Response: map[string]any{"status": "waiting for the user to sign in to Google Calendar"},
+	}}}}
+	if got := toolResultsFor(t, waiting); len(got) != 0 {
+		t.Errorf("placeholder emitted TOOL_CALL_RESULT for %v, want none", got)
+	}
+
+	ran := session.NewEvent(t.Context(), "inv1")
+	ran.Content = &genai.Content{Role: string(genai.RoleUser), Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+		ID: "call-cal-1", Name: "calendar_list", Response: map[string]any{"status": 200},
+	}}}}
+	if diff := cmp.Diff([]any{"call-cal-1"}, toolResultsFor(t, ran)); diff != "" {
+		t.Errorf("rerun TOOL_CALL_RESULT ids (-want +got):\n%s", diff)
+	}
+}
+
 // In a live run ADK's credential call carries the config as a Go value.
 func TestAuthInterrupt_emitsAuthRequired(t *testing.T) {
 	intr, body := credentialInterrupt(t, map[string]any{"functionCallId": "call-cal-1", "authConfig": signInConfig()})

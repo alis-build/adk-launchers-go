@@ -8,6 +8,7 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolauth"
 	"google.golang.org/genai"
 )
 
@@ -479,6 +480,36 @@ func TestConvertSessionToMessages_FunctionCallAuthorName(t *testing.T) {
 	}
 	if msgs[0].Name != "tool-agent" {
 		t.Errorf("Name = %q, want tool-agent", msgs[0].Name)
+	}
+}
+
+// A call waiting for the user's sign-in answers with a placeholder; thread
+// history keeps only the result of ADK's rerun.
+func TestConvertSessionToMessages_skipsSignInPlaceholder(t *testing.T) {
+	sess := buildSession(func(s *mockSession) {
+		waiting := session.NewEvent(t.Context(), "inv1")
+		waiting.Author = "assistant"
+		waiting.Actions.RequestedAuthConfigs = map[string]toolauth.Config{"call-1": {CredentialKey: "k"}}
+		waiting.Content = &genai.Content{Role: string(genai.RoleUser), Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+			ID: "call-1", Name: "calendar_list", Response: map[string]any{"status": "waiting for the user to sign in to Google Calendar"},
+		}}}}
+		ran := session.NewEvent(t.Context(), "inv1")
+		ran.Author = "assistant"
+		ran.Content = &genai.Content{Role: string(genai.RoleUser), Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+			ID: "call-1", Name: "calendar_list", Response: map[string]any{"status": 200},
+		}}}}
+		s.events = append(s.events, waiting, ran)
+	})
+
+	msgs, err := ConvertSessionToMessages(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1: %+v", len(msgs), msgs)
+	}
+	if msgs[0].ToolCallID != "call-1" || msgs[0].Content != `{"status":200}` {
+		t.Errorf("message = %+v, want the rerun's result for call-1", msgs[0])
 	}
 }
 

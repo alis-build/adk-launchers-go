@@ -210,6 +210,12 @@ func convertEvent(ctx context.Context, ev *session.Event, cfg *convertConfig) ([
 		}
 
 		if part.FunctionResponse != nil {
+			// A call waiting for the user's sign-in answers with a placeholder
+			// that ADK's rerun replaces; history keeps only the real result,
+			// as the live stream does.
+			if _, waiting := ev.Actions.RequestedAuthConfigs[part.FunctionResponse.ID]; waiting {
+				continue
+			}
 			respJSON, err := marshalMap(part.FunctionResponse.Response)
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal function response: %w", err)
