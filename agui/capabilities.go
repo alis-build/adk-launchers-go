@@ -165,8 +165,9 @@ type HumanInTheLoopCapabilities struct {
 
 // SupportedInterruptReasons returns the interrupt reasons this launcher emits
 // out of the box: tool confirmations, the two shapes a workflow input
-// request is classified into, and OAuth sign-in confirmations
-// (auth_required, from go.alis.build/adk/launchers/tooloauth).
+// request is classified into, and sign-in requests (auth_required, from
+// ADK's adk_request_credential, which go.alis.build/adk/launchers/tooloauth
+// sends).
 //
 // A host classifier can return reasons outside this set; those are the host's
 // to advertise.

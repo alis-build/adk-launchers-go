@@ -310,26 +310,29 @@
 //
 // # OAuth sign-in interrupts (auth_required)
 //
-// A tool confirmation whose payload is an OAuth auth config with an
-// authorization URI, as go.alis.build/adk/launchers/tooloauth sends when a
-// tool needs the user's sign-in, becomes an interrupt with reason
-// "auth_required". Its metadata.adk.authConfig holds the config with the
-// client secret and other configured secrets stripped (toolauth's
-// WithoutSecrets; it does not remove tokens, which a sign-in request never
-// holds), and its
-// responseSchema requires exchangedAuthCredential. The client opens
-// authConfig.exchangedAuthCredential.oauth2.authUri, catches the provider's
-// redirect, and resumes with the config filled in:
+// ADK's adk_request_credential call, which go.alis.build/adk/launchers/tooloauth
+// (and ADK's own tools) send when a tool needs the user's sign-in, becomes an
+// interrupt with reason "auth_required". Its id is the credential call's,
+// its toolCallId the call waiting for the sign-in, and its
+// metadata.adk.authConfig the auth config with the client secret and other
+// configured secrets stripped (toolauth's WithoutSecrets; it does not remove
+// tokens, which a sign-in request never holds). Its responseSchema requires
+// exchangedAuthCredential. The waiting call's placeholder result is not
+// streamed: the client sees the call's real result once it runs. The client
+// opens authConfig.exchangedAuthCredential.oauth2.authUri, catches the
+// provider's redirect, and resumes with the config filled in:
 //
-//	resume: [{ interruptId: "<confirmation-call-id>", status: "resolved", payload: {
+//	resume: [{ interruptId: "<credential-call-id>", status: "resolved", payload: {
 //	  exchangedAuthCredential: { authType: "oauth2", oauth2: {
 //	    authResponseUri: "<the redirect URI the provider called, with state and code>",
 //	    redirectUri: "<the redirect URI used, if the client changed it>" } } } }]
 //
-// No "approved" field is needed: the sign-in is the answer. A "cancelled"
-// status declines the sign-in. The server checks the state and exchanges the
-// code itself; the tool does not run on that resume, and the model is told to
-// call it again.
+// No "approved" field is needed: the sign-in is the answer. Only
+// authResponseUri and redirectUri are passed on to ADK, which takes
+// everything else, the state included, from the request it sent. A
+// "cancelled" status cancels the sign-in. The server checks the state,
+// exchanges the code itself, and runs the waiting tool in that same resumed
+// run.
 //
 // # Non-tool interrupts (input_required and confirmation)
 //
@@ -623,7 +626,7 @@
 // # Limitations
 //
 // AG-UI interrupt emit and resume cover ADK tool confirmations (reason
-// "tool_call"), OAuth sign-in confirmations (reason "auth_required") and
+// "tool_call"), sign-in requests (reason "auth_required") and
 // workflow input requests (reasons "input_required" and "confirmation"). The latter come only from workflow agents; a plain llmagent
 // cannot produce them. The launcher never emits adk_request_input itself, so a
 // host wanting non-tool interrupts has to emit them from a workflow node.
