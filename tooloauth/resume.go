@@ -231,22 +231,19 @@ type authResponse struct {
 	} `json:"exchangedAuthCredential"`
 }
 
-// completeSignIn handles the resumed call of a sign-in pause: it checks the
+// completeSignIn handles the resumed call of a sign-in pause, given the
+// client's answer (nil when it carried no auth response): it checks the
 // response's state against the one the plugin sent, exchanges the code,
 // stores the token and answers with connectedResult instead of running the
 // tool. The checks run in a fixed order, so the state is verified before the
 // code is ever sent, and no failure writes to the store. Failure texts name
 // the provider only: never the provider's own error description, the
 // endpoint's response, or the state.
-func (r *resolver) completeSignIn(ctx agent.Context, t Tool, requested *toolauth.Config, conf *toolconfirmation.ToolConfirmation) (map[string]any, error) {
+func (r *resolver) completeSignIn(ctx agent.Context, t Tool, requested *toolauth.Config, o *toolauth.OAuth2Auth) (map[string]any, error) {
 	failed := func(reason string) error {
 		return fmt.Errorf("%s sign-in failed: %s", t.Provider, reason)
 	}
-	if !conf.Confirmed {
-		return nil, fmt.Errorf("%s sign-in was declined", t.Provider)
-	}
-	o, ok := decodeAuthResponse(conf.Payload)
-	if !ok {
+	if o == nil {
 		return nil, failed("no auth response")
 	}
 	u, err := url.Parse(o.AuthResponseURI)

@@ -54,7 +54,11 @@ func (r *resolver) beforeTool(ctx agent.Context, t tool.Tool, _ map[string]any) 
 			if req.answered || req.conflicting {
 				return nil, fmt.Errorf("%s sign-in failed: the sign-in request is out of date", cfgTool.Provider)
 			}
-			return r.completeSignIn(ctx, cfgTool, req.config, conf)
+			if !conf.Confirmed {
+				return nil, fmt.Errorf("%s sign-in was declined", cfgTool.Provider)
+			}
+			answer, _ := decodeAuthResponse(conf.Payload)
+			return r.completeSignIn(ctx, cfgTool, req.config, answer)
 		}
 		// A sign-in response with no sign-in request on record must never
 		// pass as the tool's own approval, which any confirmed
