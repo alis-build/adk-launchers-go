@@ -43,25 +43,33 @@
 // an outage or a client-setup error keeps it and reports the sign-in as
 // unavailable.
 //
-// With no usable token, the plugin pauses the call with ADK's confirmation
-// request. Its hint is "Sign in to <Provider> to continue." and its payload
-// is the auth config: the scheme with the tool's scopes, the client ID and
+// With no usable token, the plugin asks the user to sign in the way ADK's
+// own tools do: it records the auth config as the call's requested
+// credential and answers the call with "waiting for the user to sign in to
+// <Provider>". ADK then sends an adk_request_credential call, one per
+// credential key however many calls asked, and ends the run. The auth
+// config holds the scheme with the tool's scopes, the client ID and
 // redirect URI, and an authorization URI carrying a fresh random state,
 // offline access and forced consent. The client secret is stripped before
 // the request is stored or sent.
 //
-// When the user answers, the plugin checks the reply's state against the one
-// it sent, exchanges the code with its own client credentials, stores the
-// token, and answers the call with "connected to <Provider>, call the tool
-// again". The tool does not run on that answer: ADK would take the sign-in's
-// confirmation as the tool's own approval. The model's next call is a fresh
-// one, so a tool that requires confirmation asks for it then. A declined,
-// forged, stale or failed reply fails with an error naming the provider and
-// stores nothing. A replayed reply never resumes the call or sends the code
-// twice: ADK drops an approval whose call it has already answered, and the
-// plugin refuses one that still reaches it with the same error.
+// When the user answers, ADK keeps the answer for the rest of the run, out
+// of the session's stored state and events, and runs the waiting calls
+// again. The plugin checks the answer against the requests it issued in the
+// session and the redirect's state against the one it sent, exchanges the
+// code with its own client credentials, stores the token, and lets the tool
+// run in that same turn. Calls sharing one sign-in exchange the code once.
+// A forged, stale or failed answer fails with an error naming the provider
+// and stores nothing; an answer with no auth response URI cancels with
+// "<Provider> sign-in was cancelled". A replayed answer never resumes the
+// call or sends the code twice: ADK drops an answer to a call it has
+// already answered, and the plugin refuses a duplicate that still reaches
+// it.
 //
 // # Resuming from a client
+//
+// ADK's dev web UI completes the flow itself: it opens the authorization
+// URI in a popup and answers the request.
 //
 // Over AG-UI (go.alis.build/adk/launchers/agui) the pause is an interrupt
 // with reason "auth_required" and the stripped config in
@@ -69,13 +77,17 @@
 // exchangedAuthCredential.oauth2.authUri, catches the provider's redirect,
 // and resumes with the config, setting exchangedAuthCredential.oauth2's
 // authResponseUri to the URL the provider redirected to (and redirectUri if
-// it used its own redirect). A "cancelled" resume declines.
+// it used its own redirect). A "cancelled" resume cancels.
 //
-// Over ADK's REST API the client answers the adk_request_confirmation call
-// with a FunctionResponse of {"confirmed": true, "payload": <the filled
-// config>}. Only exchangedAuthCredential.oauth2.authResponseUri and
-// redirectUri are read from it; everything else in a client's reply is
-// ignored.
+// Over ADK's REST API the client answers the adk_request_credential call
+// with a FunctionResponse whose response is the filled config, or a bare
+// credential such as {"authType": "oauth2", "oauth2": {"authResponseUri":
+// ..., "redirectUri": ...}}; an empty oauth2 object cancels. Only
+// authResponseUri and redirectUri are read from it: ADK takes the rest,
+// the state included, from the request it sent, and the client ID and
+// secret always come from the plugin's Config. A sign-in answer sent as a
+// tool confirmation, as clients of the plugin's earlier versions sent it,
+// is refused as out of date.
 //
 // # Storing tokens
 //
@@ -111,16 +123,12 @@
 //   - Only confidential clients (with a client secret) and the oauth2
 //     authorization code flow or openIdConnect with inline endpoints are
 //     supported.
-//   - One sign-in per tool call per turn.
-//   - ADK's own dev web UI cannot complete the flow: its sign-in popup opens
-//     only for adk_request_credential, which this plugin does not emit.
-//     AG-UI clients and REST clients can.
-//   - agui strips secrets from the interrupt only; message snapshots and
-//     history carry the request's arguments as stored, which the plugin has
-//     already stripped. The client's reply is kept in the session as the
-//     user's confirmation response, so its auth response URI, with the
-//     spent single-use code and the state, appears in that thread's agui
-//     history and snapshots; ADK never puts it in the model's input.
+//   - The user's answer is kept in the session as the user's message, so
+//     its auth response URI, with the spent single-use code and the state,
+//     appears in the session's history (and an agui thread's history and
+//     snapshots); ADK never puts it in the model's input.
+//   - An answer ADK cannot read as an auth config or a credential ends the
+//     run with an error rather than a tool error the model sees.
 //   - A token the provider revokes is served until its stored entry
 //     expires: the provider does not refresh or drop a token a downstream
 //     API rejects. A token with neither an expiry nor a refresh token is
@@ -131,10 +139,13 @@
 //     name as the app name. It never pauses, and its provider reports it is
 //     not connected.
 //   - Refusing a reused authorization code is per process: two duplicate
-//     replies arriving at the same moment on different instances can both be
-//     exchanged. A replay after a reply completed never resumes the call
+//     answers arriving at the same moment on different instances can both be
+//     exchanged. A replay after an answer completed never resumes the call
 //     on any instance: ADK finds the call already answered in the session.
-//   - When a tool's own approval is resumed and the call then needs a
-//     sign-in, ADK emits no request on that resume path; the sign-in prompt
-//     comes on the model's next call.
+//   - A tool that also requires the user's own approval does not ask for it
+//     on ADK's rerun after the sign-in: the rerun answers that the tool
+//     requires confirmation, and the approval prompt comes on the model's
+//     next call. Likewise, when a tool's own approval is resumed and the
+//     call then needs a sign-in, the sign-in prompt comes on the model's next
+//     call.
 package tooloauth
