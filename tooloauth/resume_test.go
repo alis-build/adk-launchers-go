@@ -786,6 +786,30 @@ func TestResume_oldConfirmationRailIsRefused(t *testing.T) {
 	keepsStateClean(t, events)
 }
 
+// The refusal covers any sign-in config sent as a confirmation, not only
+// one carrying a response URI: otherwise a stale reply from a session
+// paused before the upgrade could pass as the tool's own approval.
+func TestResume_oldConfirmationRailWithoutURIIsRefused(t *testing.T) {
+	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
+	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
+	seed(t, cfg, "app-resume", "user-7", &Token{AccessToken: "at-31", Expiry: time.Now().Add(time.Hour)}, time.Now().Add(24*time.Hour))
+	rs := newResourceServer(t)
+	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarToolWith(t, cfg, rs, true))
+	approval := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+
+	events := h.run(t.Context(), "user-7", "s-1", confirmationResponse(approval, map[string]any{"confirmed": true, "payload": map[string]any{
+		"exchangedAuthCredential": map[string]any{"authType": "oauth2", "oauth2": map[string]any{"state": "s-old"}},
+	}}))
+
+	resp, ok := functionResponse(events, "calendar_list")
+	if want := "Google Calendar sign-in failed: the sign-in request is out of date"; !ok || resp["error"] != want {
+		t.Errorf("response = %v, want error %q", resp, want)
+	}
+	if got := rs.handlerRuns(); got != 0 {
+		t.Errorf("calendar_list ran %d times, want 0", got)
+	}
+}
+
 // A run that another plugin ends in its BeforeRun never reaches tooloauth's
 // hooks. The request it answered stays open: answering again completes the
 // sign-in once.

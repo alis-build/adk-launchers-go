@@ -53,7 +53,7 @@ func (r *resolver) beforeTool(ctx agent.Context, t tool.Tool, _ map[string]any) 
 	// versions sent it, never completes and must never pass as the tool's
 	// own approval, which any confirmed confirmation would.
 	if conf := ctx.ToolConfirmation(); conf != nil {
-		if _, isSignIn := decodeAuthResponse(conf.Payload); isSignIn {
+		if isSignInPayload(conf.Payload) {
 			return nil, fmt.Errorf("%s sign-in failed: the sign-in request is out of date", cfgTool.Provider)
 		}
 	}

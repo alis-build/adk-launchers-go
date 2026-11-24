@@ -343,22 +343,19 @@ func (r *resolver) completeSignIn(ctx agent.Context, t Tool, requested *toolauth
 	return nil, nil
 }
 
-// decodeAuthResponse reads the exchanged OAuth2 credential from a
-// confirmation payload, a JSON map, and reports false when it has no auth
-// response URI. Only the refusal of sign-in answers sent as confirmations
-// uses it.
-func decodeAuthResponse(payload any) (*toolauth.OAuth2Auth, bool) {
+// isSignInPayload reports whether a confirmation payload, a JSON map, is a
+// sign-in config: one with an exchanged OAuth2 credential, with or without
+// an auth response URI. Sign-ins now complete only through ADK's credential
+// requests; the plugin uses this only to refuse a sign-in config sent as a
+// confirmation.
+func isSignInPayload(payload any) bool {
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return nil, false
+		return false
 	}
 	var resp authResponse
 	if json.Unmarshal(raw, &resp) != nil {
-		return nil, false
+		return false
 	}
-	o := resp.ExchangedAuthCredential.OAuth2
-	if o == nil || o.AuthResponseURI == "" {
-		return nil, false
-	}
-	return o, true
+	return resp.ExchangedAuthCredential.OAuth2 != nil
 }
