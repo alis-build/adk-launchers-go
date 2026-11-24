@@ -6,51 +6,98 @@ import (
 	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
-	"google.golang.org/adk/v2/tool/toolconfirmation"
+	"github.com/google/go-cmp/cmp"
+	"google.golang.org/adk/v2/tool/toolauth"
 )
 
-func TestEntriesToResumeContent_authRequiredResolved(t *testing.T) {
-	pending := []Record{{ID: "c-9", Reason: ReasonAuthRequired}}
-	payload := map[string]any{"exchangedAuthCredential": map[string]any{"authType": "oauth2", "oauth2": map[string]any{
-		"authResponseUri": "http://localhost:4200/?state=s-1&code=c-1",
-	}}}
+// signInRecord is the pending record of an auth_required interrupt for
+// ADK's credential call c-9.
+func signInRecord() []Record {
+	return []Record{{ID: "c-9", Reason: ReasonAuthRequired, CallName: toolauth.RequestCredentialFunctionCallName}}
+}
 
-	content, err := EntriesToResumeContent([]types.ResumeEntry{{InterruptID: "c-9", Status: types.ResumeStatusResolved, Payload: payload}}, pending)
+func TestEntriesToResumeContent_authRequiredResolved(t *testing.T) {
+	payload := map[string]any{
+		"authScheme": map[string]any{"type": "oauth2"},
+		"exchangedAuthCredential": map[string]any{"authType": "oauth2", "oauth2": map[string]any{
+			"authResponseUri": "https://app.example.com/cb?state=s1&code=c1",
+			"redirectUri":     "https://app.example.com/cb",
+			"authUri":         "https://accounts.example.com/o/oauth2/auth?state=s1",
+			"clientSecret":    "from-the-client",
+			"state":           "client-chosen",
+		}},
+		"tokenUri": "https://evil.example.com/token",
+	}
+
+	content, err := EntriesToResumeContent([]types.ResumeEntry{{InterruptID: "c-9", Status: types.ResumeStatusResolved, Payload: payload}}, signInRecord())
 	if err != nil {
 		t.Fatalf("EntriesToResumeContent() error = %v", err)
 	}
 
 	fr := partsByID(t, content)["c-9"]
-	if fr.Name != toolconfirmation.FunctionCallName {
-		t.Errorf("FunctionResponse.Name = %q, want %q", fr.Name, toolconfirmation.FunctionCallName)
+	if fr.Name != toolauth.RequestCredentialFunctionCallName {
+		t.Errorf("FunctionResponse.Name = %q, want %q", fr.Name, toolauth.RequestCredentialFunctionCallName)
 	}
-	if fr.Response["confirmed"] != true {
-		t.Errorf("confirmed = %v, want true", fr.Response["confirmed"])
+	want := map[string]any{"authType": "oauth2", "oauth2": map[string]any{
+		"authResponseUri": "https://app.example.com/cb?state=s1&code=c1",
+		"redirectUri":     "https://app.example.com/cb",
+	}}
+	if diff := cmp.Diff(want, fr.Response); diff != "" {
+		t.Errorf("response (-want +got):\n%s", diff)
 	}
-	got, _ := fr.Response["payload"].(map[string]any)
-	ex, _ := got["exchangedAuthCredential"].(map[string]any)
-	o, _ := ex["oauth2"].(map[string]any)
-	if o["authResponseUri"] != "http://localhost:4200/?state=s-1&code=c-1" {
-		t.Errorf("payload = %v, want the filled auth config", fr.Response["payload"])
+}
+
+// An OpenID Connect sign-in keeps its credential type; anything else is
+// answered as oauth2.
+func TestEntriesToResumeContent_authRequiredKeepsOpenIDConnect(t *testing.T) {
+	for _, tc := range []struct{ authType, want string }{
+		{"openIdConnect", "openIdConnect"},
+		{"oauth2", "oauth2"},
+		{"apiKey", "oauth2"},
+		{"", "oauth2"},
+	} {
+		payload := map[string]any{"exchangedAuthCredential": map[string]any{"authType": tc.authType, "oauth2": map[string]any{
+			"authResponseUri": "https://app.example.com/cb?state=s1&code=c1",
+		}}}
+		content, err := EntriesToResumeContent([]types.ResumeEntry{{InterruptID: "c-9", Status: types.ResumeStatusResolved, Payload: payload}}, signInRecord())
+		if err != nil {
+			t.Fatalf("authType %q: EntriesToResumeContent() error = %v", tc.authType, err)
+		}
+		if got := partsByID(t, content)["c-9"].Response["authType"]; got != tc.want {
+			t.Errorf("authType %q answered as %v, want %s", tc.authType, got, tc.want)
+		}
+	}
+}
+
+func TestEntriesToResumeContent_authRequiredNeedsResponseURI(t *testing.T) {
+	payload := map[string]any{"exchangedAuthCredential": map[string]any{"authType": "oauth2", "oauth2": map[string]any{
+		"redirectUri": "https://app.example.com/cb",
+	}}}
+
+	_, err := EntriesToResumeContent([]types.ResumeEntry{{InterruptID: "c-9", Status: types.ResumeStatusResolved, Payload: payload}}, signInRecord())
+
+	if err == nil || !strings.Contains(err.Error(), "authResponseUri") {
+		t.Errorf("EntriesToResumeContent() error = %v, want one naming authResponseUri", err)
 	}
 }
 
 func TestEntriesToResumeContent_authRequiredCancelled(t *testing.T) {
-	pending := []Record{{ID: "c-9", Reason: ReasonAuthRequired}}
-
-	content, err := EntriesToResumeContent([]types.ResumeEntry{{InterruptID: "c-9", Status: types.ResumeStatusCancelled}}, pending)
+	content, err := EntriesToResumeContent([]types.ResumeEntry{{InterruptID: "c-9", Status: types.ResumeStatusCancelled}}, signInRecord())
 	if err != nil {
 		t.Fatalf("EntriesToResumeContent() error = %v", err)
 	}
 
 	fr := partsByID(t, content)["c-9"]
-	if len(fr.Response) != 1 || fr.Response["confirmed"] != false {
-		t.Errorf("response = %v, want {confirmed: false}", fr.Response)
+	if fr.Name != toolauth.RequestCredentialFunctionCallName {
+		t.Errorf("FunctionResponse.Name = %q, want %q", fr.Name, toolauth.RequestCredentialFunctionCallName)
+	}
+	if diff := cmp.Diff(map[string]any{"authType": "oauth2", "oauth2": map[string]any{}}, fr.Response); diff != "" {
+		t.Errorf("response (-want +got):\n%s", diff)
 	}
 }
 
 func TestValidateResume_authRequiredNeedsExchangedCredential(t *testing.T) {
-	pending := []Record{{ID: "c-9", Reason: ReasonAuthRequired, ResponseSchema: AuthRequiredResponseSchema()}}
+	pending := []Record{{ID: "c-9", Reason: ReasonAuthRequired, CallName: toolauth.RequestCredentialFunctionCallName, ResponseSchema: AuthRequiredResponseSchema()}}
 
 	err := ValidateResumeAgainstPending([]types.ResumeEntry{{InterruptID: "c-9", Status: types.ResumeStatusResolved, Payload: map[string]any{"authScheme": map[string]any{}}}}, pending, time.Now())
 

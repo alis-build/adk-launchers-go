@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"google.golang.org/adk/v2/tool/toolauth"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/adk/v2/workflow"
 	"google.golang.org/genai"
@@ -25,9 +26,9 @@ const (
 	ReasonInputRequired = "input_required"
 	// ReasonConfirmation is a free-standing yes/no decision not bound to a tool.
 	ReasonConfirmation = "confirmation"
-	// ReasonAuthRequired is a tool call paused for the user's OAuth sign-in:
-	// a tool confirmation whose payload is an auth config, as the tooloauth
-	// plugin sends. The client signs the user in and resumes with the config
+	// ReasonAuthRequired is a tool call paused for the user's sign-in: ADK's
+	// adk_request_credential call, which the tooloauth plugin and ADK's own
+	// tools send. The client signs the user in and resumes with the config
 	// filled in.
 	ReasonAuthRequired = "auth_required"
 )
@@ -185,11 +186,10 @@ func DecodeRecords(raw any) ([]Record, error) {
 // pending by interrupt id. Dispatch follows [Record.CallName] rather than the
 // reason: a host classifier may return any custom reason string, which says
 // nothing about which ADK call is waiting, so keying on reason would resume
-// into the wrong call. Within tool confirmations the reason does pick the
-// response shape: an auth_required record is answered with the client's
-// filled auth config, a reason only this launcher sets. An entry with no
-// pending record falls back to a tool confirmation, which is what a record
-// predating CallName always was.
+// into the wrong call. An auth_required record answers ADK's
+// adk_request_credential call with a bare credential built from the client's
+// filled auth config. An entry with no pending record falls back to a tool
+// confirmation, which is what a record predating CallName always was.
 func EntriesToResumeContent(entries []types.ResumeEntry, pending []Record) (*genai.Content, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("resume entries must not be empty")
@@ -213,10 +213,13 @@ func EntriesToResumeContent(entries []types.ResumeEntry, pending []Record) (*gen
 			response map[string]any
 			err      error
 		)
-		if callName == workflow.WorkflowInputFunctionCallName {
+		switch callName {
+		case workflow.WorkflowInputFunctionCallName:
 			response, err = inputResponseFromResumeEntry(entry)
-		} else {
-			response, err = confirmationResponseFromResumeEntry(entry, rec)
+		case toolauth.RequestCredentialFunctionCallName:
+			response, err = credentialAnswerFromResumeEntry(entry)
+		default:
+			response, err = confirmationResponseFromResumeEntry(entry)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("resume[%d]: %w", i, err)
@@ -260,15 +263,8 @@ func inputResponseFromResumeEntry(entry types.ResumeEntry) (map[string]any, erro
 }
 
 // confirmationResponseFromResumeEntry builds the ADK tool confirmation for a
-// resume entry. An auth_required record answers with the client's filled
-// auth config as the payload, confirmed when resolved; every other record
-// reads payload.approved. Dispatching on the reason is safe here, unlike for
-// input requests: this launcher sets a tool confirmation's reason itself,
-// never a host classifier.
-func confirmationResponseFromResumeEntry(entry types.ResumeEntry, rec Record) (map[string]any, error) {
-	if rec.Reason == ReasonAuthRequired {
-		return authResponseFromResumeEntry(entry)
-	}
+// resume entry from payload.approved.
+func confirmationResponseFromResumeEntry(entry types.ResumeEntry) (map[string]any, error) {
 	switch entry.Status {
 	case types.ResumeStatusCancelled:
 		return map[string]any{"confirmed": false}, nil
@@ -305,19 +301,38 @@ func confirmationResponseFromResumeEntry(entry types.ResumeEntry, rec Record) (m
 	}
 }
 
-// authResponseFromResumeEntry answers a sign-in interrupt: resolved passes the
-// filled auth config through as the confirmation payload, cancelled declines.
-// The payload needs no "approved": the sign-in itself is the answer.
-func authResponseFromResumeEntry(entry types.ResumeEntry) (map[string]any, error) {
+// credentialAnswerFromResumeEntry answers ADK's adk_request_credential call
+// behind an auth_required interrupt with a bare credential. Only the
+// client's authResponseUri (required) and redirectUri are passed on: ADK
+// fills the rest in from the request it sent, the state included, and the
+// client ID and secret come from the server's own configuration. The
+// credential type is the client's when it is oauth2 or openIdConnect, else
+// oauth2. A cancelled entry answers with an empty credential, which the
+// tooloauth plugin reads as the user cancelling.
+func credentialAnswerFromResumeEntry(entry types.ResumeEntry) (map[string]any, error) {
 	switch entry.Status {
 	case types.ResumeStatusCancelled:
-		return map[string]any{"confirmed": false}, nil
+		return map[string]any{"authType": string(toolauth.CredentialTypeOAuth2), "oauth2": map[string]any{}}, nil
 	case types.ResumeStatusResolved:
 		payload, err := ResumePayloadMap(entry.Payload)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"confirmed": true, "payload": payload}, nil
+		ex, _ := payload["exchangedAuthCredential"].(map[string]any)
+		o, _ := ex["oauth2"].(map[string]any)
+		responseURI, _ := o["authResponseUri"].(string)
+		if responseURI == "" {
+			return nil, fmt.Errorf("resolved resume requires payload.exchangedAuthCredential.oauth2.authResponseUri")
+		}
+		answer := map[string]any{"authResponseUri": responseURI}
+		if redirect, ok := o["redirectUri"].(string); ok && redirect != "" {
+			answer["redirectUri"] = redirect
+		}
+		authType := toolauth.CredentialTypeOAuth2
+		if t, _ := ex["authType"].(string); t == string(toolauth.CredentialTypeOpenIDConnect) {
+			authType = toolauth.CredentialTypeOpenIDConnect
+		}
+		return map[string]any{"authType": string(authType), "oauth2": answer}, nil
 	default:
 		return nil, fmt.Errorf("unsupported resume status %q", entry.Status)
 	}
