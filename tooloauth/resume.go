@@ -42,9 +42,18 @@ type signInKey struct {
 type pendingRun struct {
 	requests map[signInKey]*toolauth.Config
 	// claimed holds, for each request whose answer a call has taken up, the
-	// ID of that call, so the code is exchanged once.
-	claimed map[signInKey]string
+	// sign-in that call runs, so the code is exchanged once.
+	claimed map[signInKey]*signInFlight
 	seen    time.Time
+}
+
+// signInFlight is one sign-in completing. The call that claimed it
+// exchanges the code; other calls the answer reaches wait for it and share
+// its outcome.
+type signInFlight struct {
+	callID string        // the call that claimed the request
+	done   chan struct{} // closed when that call finishes
+	err    error         // its outcome, set before done closes; nil on success
 }
 
 // pendingSignIns holds the sign-in requests of recent invocations. A tool
@@ -80,7 +89,7 @@ func (r *resolver) beforeRun(ctx agent.InvocationContext) (*genai.Content, error
 		if r.pending.byInvocation == nil {
 			r.pending.byInvocation = map[string]*pendingRun{}
 		}
-		run = &pendingRun{claimed: map[signInKey]string{}}
+		run = &pendingRun{claimed: map[signInKey]*signInFlight{}}
 		r.pending.byInvocation[ctx.InvocationID()] = run
 	}
 	// The session only grows, so a later snapshot covers an earlier one.
@@ -134,22 +143,24 @@ const (
 )
 
 // claimSignIn records that the current call takes up the answer to the
-// request key names, and reports who had taken it up already.
-func (r *resolver) claimSignIn(ctx agent.Context, key signInKey) claim {
+// request key names, and reports who had taken it up already, with the
+// sign-in that call runs.
+func (r *resolver) claimSignIn(ctx agent.Context, key signInKey) (claim, *signInFlight) {
 	r.pending.mu.Lock()
 	defer r.pending.mu.Unlock()
 	run := r.pending.byInvocation[ctx.InvocationID()]
 	if run == nil {
-		return claimSameCall
+		return claimSameCall, nil
 	}
-	switch by, ok := run.claimed[key]; {
+	switch f, ok := run.claimed[key]; {
 	case !ok:
-		run.claimed[key] = ctx.FunctionCallID()
-		return claimTaken
-	case by == ctx.FunctionCallID():
-		return claimSameCall
+		f = &signInFlight{callID: ctx.FunctionCallID(), done: make(chan struct{})}
+		run.claimed[key] = f
+		return claimTaken, f
+	case f.callID == ctx.FunctionCallID():
+		return claimSameCall, f
 	default:
-		return claimOtherCall
+		return claimOtherCall, f
 	}
 }
 
@@ -205,8 +216,9 @@ func storedAnswer(ctx agent.Context, t Tool) (*toolauth.OAuth2Auth, bool) {
 // the stored-token lookup, when there is no answer for t. The answer counts
 // only for a request the plugin issued in this invocation's session; ADK
 // pins the answer's state to the request it sent. When another call in this
-// invocation already took the answer up, the call runs on the token that
-// sign-in stored, or fails as out of date when there is none.
+// invocation already took the answer up, the call waits for that sign-in to
+// finish and shares its outcome: it fails with the same error, or runs on
+// the token that sign-in stored, or fails as out of date when there is none.
 func (r *resolver) resumeSignIn(ctx agent.Context, toolName string, t Tool) (result map[string]any, handled bool, err error) {
 	answer, ok := storedAnswer(ctx, t)
 	if !ok || answer.AuthResponseURI == "" {
@@ -218,10 +230,19 @@ func (r *resolver) resumeSignIn(ctx agent.Context, toolName string, t Tool) (res
 	if !ok {
 		return nil, true, outOfDate
 	}
-	switch r.claimSignIn(ctx, key) {
+	c, f := r.claimSignIn(ctx, key)
+	switch c {
 	case claimSameCall:
 		return nil, true, outOfDate
 	case claimOtherCall:
+		select {
+		case <-f.done:
+		case <-ctx.Done():
+			return nil, true, unavailable(t)
+		}
+		if f.err != nil {
+			return nil, true, f.err
+		}
 		switch _, err := r.credential(ctx, toolName, ctx.AppName(), ctx.UserID()); {
 		case err == nil:
 			return nil, true, nil
@@ -231,7 +252,9 @@ func (r *resolver) resumeSignIn(ctx agent.Context, toolName string, t Tool) (res
 			return nil, true, unavailable(t)
 		}
 	}
+	defer close(f.done)
 	result, err = r.completeSignIn(ctx, t, requested, answer)
+	f.err = err
 	return result, true, err
 }
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -479,6 +480,93 @@ func TestResume_overlappingAnswersExchangeOnce(t *testing.T) {
 		t.Errorf("held answer's rerun = %v, want error %q", resp, want)
 	}
 	keepsStateClean(t, append(first, second...))
+}
+
+// twoCallsHarness returns a harness whose model calls calendar_list twice a
+// turn, and a token endpoint, answering status and body, that holds its
+// reply until the rerun of call-2 has reached the plugins, so the two reruns
+// of one sign-in overlap whichever of them exchanges the code.
+func twoCallsHarness(t *testing.T, status int, body string) (*harness, Config, *resourceServer, *tokenEndpoint) {
+	t.Helper()
+	secondArrived := make(chan struct{})
+	var once sync.Once
+	te := newTokenEndpoint(t, status, body, func(*testing.T, *http.Request) {
+		select {
+		case <-secondArrived:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
+	rs := newResourceServer(t)
+	slot := cfg.Tools["calendar_list"].slot()
+	gate, err := plugin.New(plugin.Config{Name: "gate", BeforeToolCallback: func(ctx agent.Context, _ tool.Tool, _ map[string]any) (map[string]any, error) {
+		// Only the rerun carries the answer in temp: state; the pausing turn
+		// must not open the gate.
+		if v, err := ctx.State().Get("temp:" + slot); err == nil && v != nil && ctx.FunctionCallID() == "call-2" {
+			once.Do(func() { close(secondArrived) })
+		}
+		return nil, nil
+	}})
+	if err != nil {
+		t.Fatalf("plugin.New() error = %v", err)
+	}
+	return newHarnessOn(t, session.InMemoryService(), "app-resume", "calendar_list", 2, cfg, []*plugin.Plugin{gate}, calendarTool(t, cfg, rs)), cfg, rs, te
+}
+
+// ADK sends one sign-in request per credential key and reruns every call
+// that asked for it: the code is exchanged once and both calls run with
+// the token.
+func TestResume_twoCallsOneSignIn(t *testing.T) {
+	h, _, rs, te := twoCallsHarness(t, http.StatusOK, exchangeReply)
+	answer := signedIn(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)), "code-49")
+
+	events := h.run(t.Context(), "user-7", "s-1", answer)
+
+	if got := te.callCount(); got != 1 {
+		t.Errorf("token endpoint called %d times, want 1", got)
+	}
+	ranWith(t, rs, 2)
+	for _, id := range []string{"call-1", "call-2"} {
+		if resp := responseFor(events, id); resp == nil || resp["error"] != nil {
+			t.Errorf("%s response = %v, want the tool's result", id, resp)
+		}
+	}
+	keepsStateClean(t, events)
+}
+
+// When the exchange fails, every call sharing the sign-in gets its error.
+func TestResume_twoCallsLeaderFails(t *testing.T) {
+	h, _, rs, te := twoCallsHarness(t, http.StatusBadRequest, `{"error":"invalid_grant"}`)
+	answer := signedIn(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)), "code-50")
+
+	events := h.run(t.Context(), "user-7", "s-1", answer)
+
+	if got := te.callCount(); got != 1 {
+		t.Errorf("token endpoint called %d times, want 1", got)
+	}
+	if got := rs.handlerRuns(); got != 0 {
+		t.Errorf("calendar_list ran %d times, want 0", got)
+	}
+	for _, id := range []string{"call-1", "call-2"} {
+		if resp := responseFor(events, id); resp["error"] != "Google Calendar sign-in failed: token exchange refused" {
+			t.Errorf("%s response = %v, want the exchange-refused error", id, resp)
+		}
+	}
+}
+
+// responseFor returns the response to the tool call with ID id in events.
+func responseFor(events []*session.Event, id string) map[string]any {
+	for _, ev := range events {
+		if ev.Content == nil {
+			continue
+		}
+		for _, p := range ev.Content.Parts {
+			if p != nil && p.FunctionResponse != nil && p.FunctionResponse.ID == id {
+				return p.FunctionResponse.Response
+			}
+		}
+	}
+	return nil
 }
 
 // A credential request written by another author, such as a peer agent, is
