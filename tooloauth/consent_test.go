@@ -19,18 +19,13 @@ import (
 	"google.golang.org/genai"
 )
 
-// authRequestCall is one adk_request_confirmation call, decoded.
+// authRequestCall is one adk_request_credential call, decoded.
 type authRequestCall struct {
-	OriginalFunctionCall struct {
-		ID string `json:"id"`
-	} `json:"originalFunctionCall"`
-	ToolConfirmation struct {
-		Hint    string          `json:"hint"`
-		Payload json.RawMessage `json:"payload"`
-	} `json:"toolConfirmation"`
+	FunctionCallID string          `json:"functionCallId"`
+	AuthConfig     json.RawMessage `json:"authConfig"`
 }
 
-// authRequests returns every adk_request_confirmation call in events,
+// authRequests returns every adk_request_credential call in events,
 // decoded by a JSON round trip of its arguments, as a client would see them.
 func authRequests(t *testing.T, events []*session.Event) []authRequestCall {
 	t.Helper()
@@ -40,16 +35,16 @@ func authRequests(t *testing.T, events []*session.Event) []authRequestCall {
 			continue
 		}
 		for _, p := range ev.Content.Parts {
-			if p == nil || p.FunctionCall == nil || p.FunctionCall.Name != "adk_request_confirmation" {
+			if p == nil || p.FunctionCall == nil || p.FunctionCall.Name != toolauth.RequestCredentialFunctionCallName {
 				continue
 			}
 			raw, err := json.Marshal(p.FunctionCall.Args)
 			if err != nil {
-				t.Fatalf("marshal confirmation args: %v", err)
+				t.Fatalf("marshal credential request args: %v", err)
 			}
 			var c authRequestCall
 			if err := json.Unmarshal(raw, &c); err != nil {
-				t.Fatalf("decode confirmation args %s: %v", raw, err)
+				t.Fatalf("decode credential request args %s: %v", raw, err)
 			}
 			out = append(out, c)
 		}
@@ -57,12 +52,12 @@ func authRequests(t *testing.T, events []*session.Event) []authRequestCall {
 	return out
 }
 
-// payloadConfig decodes a confirmation payload as a toolauth.Config.
+// payloadConfig decodes a credential request's auth config.
 func payloadConfig(t *testing.T, c authRequestCall) toolauth.Config {
 	t.Helper()
 	var cfg toolauth.Config
-	if err := json.Unmarshal(c.ToolConfirmation.Payload, &cfg); err != nil {
-		t.Fatalf("decode payload %s: %v", c.ToolConfirmation.Payload, err)
+	if err := json.Unmarshal(c.AuthConfig, &cfg); err != nil {
+		t.Fatalf("decode auth config %s: %v", c.AuthConfig, err)
 	}
 	return cfg
 }
@@ -92,15 +87,16 @@ func TestConsent_noToken_pausesWithAuthRequest(t *testing.T) {
 		t.Fatalf("auth requests = %d, want 1", len(reqs))
 	}
 	req := reqs[0]
-	if req.OriginalFunctionCall.ID != "call-1" {
-		t.Errorf("original call ID = %q, want call-1", req.OriginalFunctionCall.ID)
+	if req.FunctionCallID != "call-1" {
+		t.Errorf("requesting call ID = %q, want call-1", req.FunctionCallID)
 	}
-	if req.ToolConfirmation.Hint != "Sign in to Google Calendar to continue." {
-		t.Errorf("hint = %q, want %q", req.ToolConfirmation.Hint, "Sign in to Google Calendar to continue.")
+	resp, ok := functionResponse(events, "calendar_list")
+	if want := map[string]any{"status": "waiting for the user to sign in to Google Calendar"}; !ok || !cmp.Equal(resp, want) {
+		t.Errorf("calendar_list response = %v, want %v", resp, want)
 	}
 	payload := payloadConfig(t, req)
 	if payload.ExchangedAuthCredential == nil || payload.ExchangedAuthCredential.OAuth2 == nil {
-		t.Fatalf("payload has no exchanged OAuth2 credential: %s", req.ToolConfirmation.Payload)
+		t.Fatalf("auth config has no exchanged OAuth2 credential: %s", req.AuthConfig)
 	}
 	o := payload.ExchangedAuthCredential.OAuth2
 	u, err := url.Parse(o.AuthURI)
@@ -183,8 +179,8 @@ func TestConsent_payloadHasADKPythonShape(t *testing.T) {
 		t.Fatalf("auth requests = %d, want 1", len(reqs))
 	}
 	var got map[string]any
-	if err := json.Unmarshal(reqs[0].ToolConfirmation.Payload, &got); err != nil {
-		t.Fatalf("decode payload: %v", err)
+	if err := json.Unmarshal(reqs[0].AuthConfig, &got); err != nil {
+		t.Fatalf("decode auth config: %v", err)
 	}
 	for _, path := range [][]string{
 		nil,

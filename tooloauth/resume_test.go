@@ -13,45 +13,61 @@ import (
 	"google.golang.org/adk/v2/plugin"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
-	"google.golang.org/adk/v2/tool/toolconfirmation"
+	"google.golang.org/adk/v2/tool/toolauth"
 	"google.golang.org/genai"
 )
 
-// confirmationCall returns the only adk_request_confirmation call in events.
+// credentialCall returns the only adk_request_credential call in events.
+func credentialCall(t *testing.T, events []*session.Event) *genai.FunctionCall {
+	t.Helper()
+	calls := namedCalls(events, toolauth.RequestCredentialFunctionCallName)
+	if len(calls) != 1 {
+		t.Fatalf("credential requests = %d, want 1", len(calls))
+	}
+	return calls[0]
+}
+
+// confirmationCall returns the only adk_request_confirmation call in events:
+// a tool's own approval request.
 func confirmationCall(t *testing.T, events []*session.Event) *genai.FunctionCall {
 	t.Helper()
-	var calls []*genai.FunctionCall
-	for _, ev := range events {
-		if ev.Content == nil {
-			continue
-		}
-		for _, p := range ev.Content.Parts {
-			if p != nil && p.FunctionCall != nil && p.FunctionCall.Name == "adk_request_confirmation" {
-				calls = append(calls, p.FunctionCall)
-			}
-		}
-	}
+	calls := namedCalls(events, "adk_request_confirmation")
 	if len(calls) != 1 {
 		t.Fatalf("confirmation requests = %d, want 1", len(calls))
 	}
 	return calls[0]
 }
 
-// pausedPayload returns the request's toolConfirmation payload as a JSON
-// map, the form a client echoes back.
+func namedCalls(events []*session.Event, name string) []*genai.FunctionCall {
+	var calls []*genai.FunctionCall
+	for _, ev := range events {
+		if ev.Content == nil {
+			continue
+		}
+		for _, p := range ev.Content.Parts {
+			if p != nil && p.FunctionCall != nil && p.FunctionCall.Name == name {
+				calls = append(calls, p.FunctionCall)
+			}
+		}
+	}
+	return calls
+}
+
+// pausedPayload returns a credential request's auth config as a JSON map,
+// the form a client echoes back.
 func pausedPayload(t *testing.T, fc *genai.FunctionCall) map[string]any {
 	t.Helper()
-	raw, err := json.Marshal(fc.Args["toolConfirmation"])
+	raw, err := json.Marshal(fc.Args)
 	if err != nil {
-		t.Fatalf("marshal toolConfirmation: %v", err)
+		t.Fatalf("marshal credential request args: %v", err)
 	}
-	var tc struct {
-		Payload map[string]any `json:"payload"`
+	var args struct {
+		AuthConfig map[string]any `json:"authConfig"`
 	}
-	if err := json.Unmarshal(raw, &tc); err != nil {
-		t.Fatalf("decode toolConfirmation %s: %v", raw, err)
+	if err := json.Unmarshal(raw, &args); err != nil || args.AuthConfig == nil {
+		t.Fatalf("decode credential request args %s: %v", raw, err)
 	}
-	return tc.Payload
+	return args.AuthConfig
 }
 
 // pausedState returns the OAuth state in a paused payload.
@@ -75,11 +91,27 @@ func withADKWebResponse(payload map[string]any, authResponseURI, redirectURI str
 	return payload
 }
 
+// credentialAnswer is the user turn answering credential request fc.
+func credentialAnswer(fc *genai.FunctionCall, response map[string]any) *genai.Content {
+	return &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+		ID: fc.ID, Name: toolauth.RequestCredentialFunctionCallName, Response: response,
+	}}}}
+}
+
 // confirmationResponse is the user turn answering confirmation request fc.
 func confirmationResponse(fc *genai.FunctionCall, response map[string]any) *genai.Content {
 	return &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
 		ID: fc.ID, Name: "adk_request_confirmation", Response: response,
 	}}}}
+}
+
+// signedIn answers the credential request in events with a redirect
+// carrying code and the request's state, as ADK Web sends it.
+func signedIn(t *testing.T, events []*session.Event, code string) *genai.Content {
+	t.Helper()
+	fc := credentialCall(t, events)
+	payload := pausedPayload(t, fc)
+	return credentialAnswer(fc, withADKWebResponse(payload, "http://localhost:4200/?state="+pausedState(t, payload)+"&code="+code, "http://localhost:4200"))
 }
 
 // checkCodeExchange asserts an authorization_code grant for code and
@@ -118,47 +150,62 @@ func storedFor(t *testing.T, cfg Config, userID string) (*Token, bool) {
 	return tok, ok
 }
 
-// connected asserts that the resumed call answered with the sign-in result.
-func connected(t *testing.T, events []*session.Event) {
+// ranWith asserts that calendar_list ran want times in total, every time
+// with "Bearer at-31".
+func ranWith(t *testing.T, rs *resourceServer, want int) {
 	t.Helper()
-	resp, ok := functionResponse(events, "calendar_list")
-	if !ok {
-		t.Fatal("no calendar_list response on resume")
+	if got := rs.handlerRuns(); got != want {
+		t.Errorf("calendar_list ran %d times, want %d", got, want)
 	}
-	if got, _ := resp["result"].(string); got != "connected to Google Calendar, call the tool again" {
-		t.Errorf("resume response = %v, want result %q", resp, "connected to Google Calendar, call the tool again")
+	for _, a := range rs.authorizations() {
+		if a != "Bearer at-31" {
+			t.Errorf("resource server saw %q, want %q", a, "Bearer at-31")
+		}
 	}
 }
 
-func TestResume_adkWebResponse_exchangesAndStoresWithoutRunning(t *testing.T) {
+// keepsStateClean fails when any event writes the sign-in answer, an
+// authorization code, a token or the client secret into state: ADK keeps
+// the answer out of events, and the plugin stores tokens only in its store.
+func keepsStateClean(t *testing.T, events []*session.Event) {
+	t.Helper()
+	for _, ev := range events {
+		for k, v := range ev.Actions.StateDelta {
+			raw, _ := json.Marshal(v)
+			s := string(raw)
+			if strings.HasPrefix(k, "temp:") || strings.Contains(s, "code-") || strings.Contains(s, "at-3") || strings.Contains(s, "rt-31") || strings.Contains(s, "secret-7") {
+				t.Errorf("event by %s writes state %q = %s", ev.Author, k, raw)
+			}
+		}
+	}
+}
+
+func TestResume_adkWebResponse_exchangesAndRuns(t *testing.T) {
 	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, checkCodeExchange("code-31", "http://localhost:4200"))
 	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
 	rs := newResourceServer(t)
 	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
+	paused := h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
 
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
-	payload := pausedPayload(t, fc)
-	payload = withADKWebResponse(payload, "http://localhost:4200/?state="+pausedState(t, payload)+"&code=code-31", "http://localhost:4200")
-	events := h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": payload}))
+	events := h.run(t.Context(), "user-7", "s-1", signedIn(t, paused, "code-31"))
 
-	connected(t, events)
+	ranWith(t, rs, 1)
+	if resp, ok := functionResponse(events, "calendar_list"); !ok || resp["error"] != nil || resp["status"] == nil {
+		t.Errorf("calendar_list response on the sign-in run = %v, want the tool's result", resp)
+	}
 	if tok, ok := storedFor(t, cfg, "user-7"); !ok || tok.AccessToken != "at-31" || tok.RefreshToken != "rt-31" {
 		t.Errorf("stored token = %+v, %v; want at-31 / rt-31", tok, ok)
 	}
-	if got := rs.handlerRuns(); got != 0 {
-		t.Errorf("calendar_list ran %d times on the sign-in resume, want 0", got)
+	if got := te.callCount(); got != 1 {
+		t.Errorf("token endpoint called %d times, want 1", got)
 	}
+	keepsStateClean(t, events)
 
 	events = h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("and now?", genai.RoleUser))
 
-	if got := rs.handlerRuns(); got != 1 {
-		t.Errorf("calendar_list ran %d times after sign-in, want 1", got)
-	}
-	if got := rs.authorizations(); len(got) != 1 || got[0] != "Bearer at-31" {
-		t.Errorf("resource server saw %q, want one %q", got, "Bearer at-31")
-	}
-	if hasFunctionCall(events, "adk_request_confirmation") {
-		t.Error("third turn paused again, want none")
+	ranWith(t, rs, 2)
+	if hasFunctionCall(events, toolauth.RequestCredentialFunctionCallName) {
+		t.Error("third turn asked to sign in again, want the stored token")
 	}
 }
 
@@ -167,22 +214,21 @@ func TestResume_capturedADKWebShape_usesOwnClient(t *testing.T) {
 	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
 	rs := newResourceServer(t)
 	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+	fc := credentialCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
 	state := pausedState(t, pausedPayload(t, fc))
 
-	payload := capturedResponse(t, state, false)
-	events := h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": payload}))
+	events := h.run(t.Context(), "user-7", "s-1", credentialAnswer(fc, capturedResponse(t, state)))
 
-	connected(t, events)
+	ranWith(t, rs, 1)
 	if te.callCount() != 1 {
 		t.Errorf("token endpoint called %d times, want 1", te.callCount())
 	}
+	keepsStateClean(t, events)
 }
 
 // capturedResponse returns the captured ADK Web response with its state
-// replaced by state, and without exchangedAuthCredential.authType when
-// dropAuthType is set.
-func capturedResponse(t *testing.T, state string, dropAuthType bool) map[string]any {
+// replaced by state.
+func capturedResponse(t *testing.T, state string) map[string]any {
 	t.Helper()
 	raw, err := os.ReadFile("testdata/adkweb_auth_response.json")
 	if err != nil {
@@ -192,44 +238,28 @@ func capturedResponse(t *testing.T, state string, dropAuthType bool) map[string]
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatalf("decode fixture: %v", err)
 	}
-	ex := payload["exchangedAuthCredential"].(map[string]any)
-	o := ex["oauth2"].(map[string]any)
+	o := payload["exchangedAuthCredential"].(map[string]any)["oauth2"].(map[string]any)
 	old := pausedState(t, payload)
 	o["authResponseUri"] = strings.Replace(o["authResponseUri"].(string), "state="+old, "state="+state, 1)
-	if dropAuthType {
-		delete(ex, "authType")
-	}
 	return payload
 }
 
-func TestResume_payloadWithoutAuthType(t *testing.T) {
-	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, checkCodeExchange("probe-code", "http://localhost:4200"))
-	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
-	rs := newResourceServer(t)
-	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
-	state := pausedState(t, pausedPayload(t, fc))
-
-	events := h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": capturedResponse(t, state, true)}))
-
-	connected(t, events)
-}
-
-func TestResume_payloadWithOnlyExchangedCredential(t *testing.T) {
+// A bare credential, the shape agui answers with, completes the sign-in:
+// ADK fills the rest in from its own request.
+func TestResume_bareCredentialAnswer(t *testing.T) {
 	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, checkCodeExchange("code-32", "http://localhost:4200"))
 	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
 	rs := newResourceServer(t)
 	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+	fc := credentialCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
 	state := pausedState(t, pausedPayload(t, fc))
 
-	payload := map[string]any{"exchangedAuthCredential": map[string]any{"authType": "oauth2", "oauth2": map[string]any{
+	h.run(t.Context(), "user-7", "s-1", credentialAnswer(fc, map[string]any{"authType": "oauth2", "oauth2": map[string]any{
 		"authResponseUri": "http://localhost:4200/?state=" + state + "&code=code-32",
 		"redirectUri":     "http://localhost:4200",
-	}}}
-	events := h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": payload}))
+	}}))
 
-	connected(t, events)
+	ranWith(t, rs, 1)
 	if tok, ok := storedFor(t, cfg, "user-7"); !ok || tok.AccessToken != "at-31" {
 		t.Errorf("stored token = %+v, %v; want at-31", tok, ok)
 	}
@@ -241,35 +271,35 @@ func TestResume_nilStore_keepsTokenForLaterRuns(t *testing.T) {
 	rs := newResourceServer(t)
 	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
 	const user = "user-default-store-1"
-	fc := confirmationCall(t, h.run(t.Context(), user, "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
-	payload := pausedPayload(t, fc)
-	payload = withADKWebResponse(payload, "http://localhost:4200/?state="+pausedState(t, payload)+"&code=code-33", "http://localhost:4200")
-	h.run(t.Context(), user, "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": payload}))
+	paused := h.run(t.Context(), user, "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
+	h.run(t.Context(), user, "s-1", signedIn(t, paused, "code-33"))
 
 	events := h.run(t.Context(), user, "s-1", genai.NewContentFromText("and now?", genai.RoleUser))
 
-	if hasFunctionCall(events, "adk_request_confirmation") {
-		t.Error("third turn paused again, want the default store's token")
+	if hasFunctionCall(events, toolauth.RequestCredentialFunctionCallName) {
+		t.Error("third turn asked to sign in again, want the default store's token")
 	}
-	if got := rs.authorizations(); len(got) != 1 || got[0] != "Bearer at-31" {
-		t.Errorf("resource server saw %q, want one %q", got, "Bearer at-31")
-	}
+	ranWith(t, rs, 2)
 }
 
-// Spec Decision "Approval gap": the sign-in's confirmation is never taken
-// as the tool's own approval; the retried call asks for it.
+// The sign-in is never taken as the tool's own approval: ADK's rerun of a
+// tool that requires confirmation answers that it needs one, and the
+// model's next call asks for it.
 func TestResume_retryAsksToolsOwnApproval(t *testing.T) {
 	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
 	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
 	rs := newResourceServer(t)
 	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarToolWith(t, cfg, rs, true))
+	paused := h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
 
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
-	payload := pausedPayload(t, fc)
-	payload = withADKWebResponse(payload, "http://localhost:4200/?state="+pausedState(t, payload)+"&code=code-34", "http://localhost:4200")
-	connected(t, h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": payload})))
+	events := h.run(t.Context(), "user-7", "s-1", signedIn(t, paused, "code-34"))
+
+	resp, ok := functionResponse(events, "calendar_list")
+	if want := `error tool "calendar_list" requires confirmation, please approve or reject`; !ok || resp["error"] != want {
+		t.Errorf("rerun response = %v, want error %q", resp, want)
+	}
 	if got := rs.handlerRuns(); got != 0 {
-		t.Fatalf("calendar_list ran %d times on the sign-in resume, want 0", got)
+		t.Fatalf("calendar_list ran %d times on the sign-in rerun, want 0", got)
 	}
 
 	approval := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("and now?", genai.RoleUser)))
@@ -298,18 +328,10 @@ func TestResume_retryAsksToolsOwnApproval(t *testing.T) {
 	if !strings.HasPrefix(args.ToolConfirmation.Hint, "Please approve or reject the tool call calendar_list()") {
 		t.Errorf("approval hint = %q, want the tool's own approval request", args.ToolConfirmation.Hint)
 	}
-	if got := rs.handlerRuns(); got != 0 {
-		t.Fatalf("calendar_list ran %d times before approval, want 0", got)
-	}
 
 	h.run(t.Context(), "user-7", "s-1", confirmationResponse(approval, map[string]any{"confirmed": true}))
 
-	if got := rs.handlerRuns(); got != 1 {
-		t.Errorf("calendar_list ran %d times after approval, want 1", got)
-	}
-	if got := rs.authorizations(); len(got) != 1 || got[0] != "Bearer at-31" {
-		t.Errorf("resource server saw %q, want one %q", got, "Bearer at-31")
-	}
+	ranWith(t, rs, 1)
 	if te.callCount() != 1 {
 		t.Errorf("token endpoint called %d times, want 1", te.callCount())
 	}
@@ -323,12 +345,10 @@ func TestResume_tokenWithoutRefreshKeptUntilExpiry(t *testing.T) {
 	cfg := refreshConfig(store, te, 72*time.Hour)
 	rs := newResourceServer(t)
 	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
-	payload := pausedPayload(t, fc)
-	payload = withADKWebResponse(payload, "http://localhost:4200/?state="+pausedState(t, payload)+"&code=code-35", "http://localhost:4200")
+	answer := signedIn(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)), "code-35")
 
 	start := time.Now()
-	h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": payload}))
+	h.run(t.Context(), "user-7", "s-1", answer)
 	end := time.Now()
 
 	expiresWithin(t, store.expiresAt(), start, end, time.Hour)
@@ -342,11 +362,9 @@ func TestResume_spentTokenIsNotStored(t *testing.T) {
 	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
 	rs := newResourceServer(t)
 	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
-	payload := pausedPayload(t, fc)
-	payload = withADKWebResponse(payload, "http://localhost:4200/?state="+pausedState(t, payload)+"&code=code-36", "http://localhost:4200")
+	answer := signedIn(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)), "code-36")
 
-	h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": payload}))
+	h.run(t.Context(), "user-7", "s-1", answer)
 
 	if tok, ok := storedFor(t, cfg, "user-7"); ok {
 		t.Errorf("stored token = %+v, want none", tok)
@@ -367,7 +385,7 @@ func TestRefresh_invalidScopeAsksToSignInAgain(t *testing.T) {
 	if tok, ok := storedToken(t, cfg); ok {
 		t.Errorf("stored token = %+v, want the entry dropped", tok)
 	}
-	if !hasFunctionCall(events, "adk_request_confirmation") {
+	if !hasFunctionCall(events, toolauth.RequestCredentialFunctionCallName) {
 		t.Error("user was not asked to sign in again")
 	}
 }
@@ -398,24 +416,25 @@ func TestRefresh_refusalsThatAskToSignInAgain(t *testing.T) {
 			events := h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
 
 			_, kept := storedToken(t, cfg)
-			if asked := hasFunctionCall(events, "adk_request_confirmation"); asked != tt.signInWant || kept == tt.signInWant {
+			if asked := hasFunctionCall(events, toolauth.RequestCredentialFunctionCallName); asked != tt.signInWant || kept == tt.signInWant {
 				t.Errorf("asked to sign in = %v, entry kept = %v; want asked %v, kept %v", asked, kept, tt.signInWant, !tt.signInWant)
 			}
 		})
 	}
 }
 
-// Two resumes of one paused turn run under the same invocation ID. When
-// they overlap, the first to finish must not leave the second without its
-// sign-in request, or the second's sign-in confirmation would pass as the
-// tool's own approval.
-func TestResume_overlappingResumesNeverRunTheTool(t *testing.T) {
+// Two copies of one answer, as a double submit sends them, arrive while the
+// first rerun is still in flight. ADK reruns the call for both; the code is
+// exchanged once, the tool runs once, and the other rerun of the same call
+// gets the out-of-date error.
+func TestResume_overlappingAnswersExchangeOnce(t *testing.T) {
 	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
 	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
 	rs := newResourceServer(t)
 	held, release := make(chan struct{}), make(chan struct{})
+	var holding atomic.Bool
 	gate, err := plugin.New(plugin.Config{Name: "gate", BeforeToolCallback: func(ctx agent.Context, _ tool.Tool, _ map[string]any) (map[string]any, error) {
-		if ctx.FunctionCallID() == "call-2" && ctx.ToolConfirmation() != nil {
+		if v, err := ctx.State().Get("temp:" + cfg.Tools["calendar_list"].slot()); err == nil && v != nil && holding.CompareAndSwap(false, true) {
 			close(held)
 			<-release
 		}
@@ -424,129 +443,168 @@ func TestResume_overlappingResumesNeverRunTheTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plugin.New() error = %v", err)
 	}
-	h := newHarnessOn(t, session.InMemoryService(), "app-resume", "calendar_list", 2, cfg, []*plugin.Plugin{gate}, calendarToolWith(t, cfg, rs, true))
+	h := newHarnessOn(t, session.InMemoryService(), "app-resume", "calendar_list", 1, cfg, []*plugin.Plugin{gate}, calendarTool(t, cfg, rs))
+	answer := signedIn(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)), "code-41")
 
-	events := h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
-	calls := map[string]*genai.FunctionCall{}
-	for _, ev := range events {
-		if ev.Content == nil {
-			continue
-		}
-		for _, p := range ev.Content.Parts {
-			if p != nil && p.FunctionCall != nil && p.FunctionCall.Name == "adk_request_confirmation" {
-				orig, err := toolconfirmation.OriginalCallFrom(p.FunctionCall)
-				if err != nil {
-					t.Fatalf("OriginalCallFrom: %v", err)
-				}
-				calls[orig.ID] = p.FunctionCall
-			}
-		}
-	}
-	if len(calls) != 2 {
-		t.Fatalf("sign-in requests = %d, want 2", len(calls))
-	}
-	respond := func(fc *genai.FunctionCall, code string) *genai.Content {
-		payload := pausedPayload(t, fc)
-		return confirmationResponse(fc, map[string]any{"confirmed": true, "payload": withADKWebResponse(payload,
-			"http://localhost:4200/?state="+pausedState(t, payload)+"&code="+code, "http://localhost:4200")})
-	}
-
-	// Resume call-2 first and hold it inside the run; resume call-1 to the
-	// end meanwhile; then let call-2 go on.
-	var second []*session.Event
-	var secondErr error
+	var first []*session.Event
+	var firstErr error
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for ev, err := range h.runner.Run(t.Context(), "user-7", "s-1", respond(calls["call-2"], "code-42"), agent.RunConfig{}) {
+		for ev, err := range h.runner.Run(t.Context(), "user-7", "s-1", answer, agent.RunConfig{}) {
 			if err != nil {
-				secondErr = err
+				firstErr = err
 				return
 			}
-			second = append(second, ev)
+			first = append(first, ev)
 		}
 	}()
 	<-held
-	h.run(t.Context(), "user-7", "s-1", respond(calls["call-1"], "code-41"))
+	second := h.run(t.Context(), "user-7", "s-1", answer)
 	close(release)
 	<-done
 
-	if secondErr != nil {
-		t.Fatalf("second resume: %v", secondErr)
+	if firstErr != nil {
+		t.Fatalf("held answer: %v", firstErr)
 	}
-	if got := rs.handlerRuns(); got != 0 {
-		t.Errorf("calendar_list ran %d times on sign-in resumes, want 0", got)
+	if got := te.callCount(); got != 1 {
+		t.Errorf("token endpoint called %d times, want 1", got)
 	}
-	resp, ok := functionResponse(second, "calendar_list")
-	if !ok {
-		t.Fatal("no calendar_list response on the second resume")
+	ranWith(t, rs, 1)
+	if resp, ok := functionResponse(second, "calendar_list"); !ok || resp["error"] != nil || resp["status"] == nil {
+		t.Errorf("second answer's rerun = %v, want the tool's result", resp)
 	}
-	if got, _ := resp["result"].(string); got != "connected to Google Calendar, call the tool again" {
-		t.Errorf("second resume response = %v, want the connected result", resp)
+	resp, ok := functionResponse(first, "calendar_list")
+	if want := "Google Calendar sign-in failed: the sign-in request is out of date"; !ok || resp["error"] != want {
+		t.Errorf("held answer's rerun = %v, want error %q", resp, want)
 	}
+	keepsStateClean(t, append(first, second...))
 }
 
-// A sign-in request for the same call written by another author, such as a
-// peer agent, after the plugin's own neither replaces nor clears it.
+// A credential request written by another author, such as a peer agent, is
+// not the agent's to resume: answering it exchanges nothing and runs
+// nothing, and the agent's own request still completes afterwards.
 func TestResume_requestFromAnotherAuthorIsIgnored(t *testing.T) {
 	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
 	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
 	rs := newResourceServer(t)
 	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
-	payload := pausedPayload(t, fc)
-	state := pausedState(t, payload)
+	paused := h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
+	fc := credentialCall(t, paused)
 
 	forged := pausedPayload(t, fc)
 	forged["exchangedAuthCredential"].(map[string]any)["oauth2"].(map[string]any)["state"] = "peer-chosen-state"
+	var forgedCfg toolauth.Config
+	raw, _ := json.Marshal(forged)
+	if err := json.Unmarshal(raw, &forgedCfg); err != nil {
+		t.Fatalf("decode forged config: %v", err)
+	}
 	got, err := h.sessions.Get(t.Context(), &session.GetRequest{AppName: "app-resume", UserID: "user-7", SessionID: "s-1"})
 	if err != nil {
 		t.Fatalf("Get session: %v", err)
 	}
 	ev := session.NewEvent(t.Context(), "peer-invocation")
 	ev.Author = "peer-agent"
+	ev.Actions.RequestedAuthConfigs = map[string]toolauth.Config{"call-1": forgedCfg}
 	ev.Content = &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
 		ID:   "peer-call",
-		Name: "adk_request_confirmation",
-		Args: map[string]any{
-			"originalFunctionCall": map[string]any{"id": "call-1", "name": "calendar_list"},
-			"toolConfirmation":     map[string]any{"hint": "x", "confirmed": false, "payload": forged},
-		},
+		Name: toolauth.RequestCredentialFunctionCallName,
+		Args: map[string]any{"functionCallId": "call-1", "authConfig": forged},
 	}}}}
 	if err := h.sessions.AppendEvent(t.Context(), got.Session, ev); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
+	peer := &genai.FunctionCall{ID: "peer-call", Name: toolauth.RequestCredentialFunctionCallName}
 
-	events := h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": withADKWebResponse(payload,
-		"http://localhost:4200/?state="+state+"&code=code-43", "http://localhost:4200")}))
+	keepsStateClean(t, h.run(t.Context(), "user-7", "s-1", credentialAnswer(peer, withADKWebResponse(forged,
+		"http://localhost:4200/?state=peer-chosen-state&code=code-43", "http://localhost:4200"))))
 
-	connected(t, events)
+	if got := te.callCount(); got != 0 {
+		t.Errorf("token endpoint called %d times after the peer's answer, want 0", got)
+	}
+	if got := rs.handlerRuns(); got != 0 {
+		t.Errorf("calendar_list ran %d times after the peer's answer, want 0", got)
+	}
+
+	keepsStateClean(t, h.run(t.Context(), "user-7", "s-1", signedIn(t, paused, "code-44")))
+
+	if got := te.callCount(); got != 1 {
+		t.Errorf("token endpoint called %d times, want 1", got)
+	}
+	ranWith(t, rs, 1)
 }
 
-// Replaying a sign-in reply, as a client double-submit or a network retry
+// A credential request planted in the agent's name, as a client can write
+// events through ADK's REST API, carries a state the plugin never issued.
+// ADK pins the answer to that request, so the answer reaches the rerun with
+// the planted state; the plugin only trusts the requests in its agent's
+// RequestedAuthConfigs, which clients cannot write, and refuses it.
+func TestResume_plantedRequestIsRefused(t *testing.T) {
+	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
+	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
+	rs := newResourceServer(t)
+	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
+	fc := credentialCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+
+	planted := pausedPayload(t, fc)
+	planted["exchangedAuthCredential"].(map[string]any)["oauth2"].(map[string]any)["state"] = "planted-state"
+	got, err := h.sessions.Get(t.Context(), &session.GetRequest{AppName: "app-resume", UserID: "user-7", SessionID: "s-1"})
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	ev := session.NewEvent(t.Context(), "planted-invocation")
+	ev.Author = "assistant"
+	ev.Content = &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+		ID:   "planted-call",
+		Name: toolauth.RequestCredentialFunctionCallName,
+		Args: map[string]any{"functionCallId": "call-1", "authConfig": planted},
+	}}}}
+	if err := h.sessions.AppendEvent(t.Context(), got.Session, ev); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+	plantedCall := &genai.FunctionCall{ID: "planted-call", Name: toolauth.RequestCredentialFunctionCallName}
+
+	events := h.run(t.Context(), "user-7", "s-1", credentialAnswer(plantedCall, withADKWebResponse(planted,
+		"http://localhost:4200/?state=planted-state&code=code-48", "http://localhost:4200")))
+
+	resp, ok := functionResponse(events, "calendar_list")
+	if want := "Google Calendar sign-in failed: the sign-in request is out of date"; !ok || resp["error"] != want {
+		t.Errorf("rerun response = %v, want error %q", resp, want)
+	}
+	keepsStateClean(t, events)
+	if got := te.callCount(); got != 0 {
+		t.Errorf("token endpoint called %d times, want 0", got)
+	}
+	if got := rs.handlerRuns(); got != 0 {
+		t.Errorf("calendar_list ran %d times, want 0", got)
+	}
+}
+
+// Replaying a sign-in answer, as a client double-submit or a network retry
 // does, must not send the spent code to the provider again: providers
 // revoke the tokens issued from a reused code. Nor may it resume the paused
-// call. ADK drops an approval whose call it has already answered, and
-// tooloauth refuses one that still reaches it; either way the original call
-// gets no answer but the out-of-date error. The model may call the tool
-// again on the replay's turn, and that fresh call runs on the stored token.
+// call: ADK drops an answer to a call it has already answered. The model may
+// call the tool again on the replay's turn, and that fresh call runs on the
+// stored token.
 func TestResume_replayedReplyIsRefused(t *testing.T) {
 	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
 	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
 	rs := newResourceServer(t)
 	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
-	payload := pausedPayload(t, fc)
-	reply := confirmationResponse(fc, map[string]any{"confirmed": true, "payload": withADKWebResponse(payload,
-		"http://localhost:4200/?state="+pausedState(t, payload)+"&code=code-44", "http://localhost:4200")})
-	connected(t, h.run(t.Context(), "user-7", "s-1", reply))
-	original := originalCallID(t, fc)
+	paused := h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser))
+	original := originalCallID(t, credentialCall(t, paused))
+	reply := signedIn(t, paused, "code-44")
+	h.run(t.Context(), "user-7", "s-1", reply)
 
 	events := h.run(t.Context(), "user-7", "s-1", reply)
 
 	if got := te.callCount(); got != 1 {
 		t.Errorf("token endpoint called %d times, want 1", got)
 	}
+	// The sign-in run's rerun, and the model's fresh call on the replay's
+	// turn, both on the stored token.
+	ranWith(t, rs, 2)
+	keepsStateClean(t, events)
 	for _, ev := range events {
 		if ev.Content == nil {
 			continue
@@ -563,38 +621,58 @@ func TestResume_replayedReplyIsRefused(t *testing.T) {
 	}
 }
 
-// originalCallID returns the ID of the tool call that the confirmation
-// request fc paused.
+// originalCallID returns the ID of the tool call that credential request
+// fc asks a sign-in for.
 func originalCallID(t *testing.T, fc *genai.FunctionCall) string {
 	t.Helper()
 	raw, err := json.Marshal(fc.Args)
 	if err != nil {
-		t.Fatalf("marshal confirmation args: %v", err)
+		t.Fatalf("marshal credential request args: %v", err)
 	}
-	var args struct {
-		OriginalFunctionCall struct {
-			ID string `json:"id"`
-		} `json:"originalFunctionCall"`
+	var args toolauth.ToolArguments
+	if err := json.Unmarshal(raw, &args); err != nil || args.FunctionCallID == "" {
+		t.Fatalf("credential request args %s name no call: %v", raw, err)
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		t.Fatalf("decode confirmation args %s: %v", raw, err)
+	return args.FunctionCallID
+}
+
+// A sign-in answer sent as a confirmation, as clients of the plugin's
+// earlier versions sent it, never completes a sign-in and never passes as
+// the tool's own approval.
+func TestResume_oldConfirmationRailIsRefused(t *testing.T) {
+	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
+	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
+	seed(t, cfg, "app-resume", "user-7", &Token{AccessToken: "at-31", Expiry: time.Now().Add(time.Hour)}, time.Now().Add(24*time.Hour))
+	rs := newResourceServer(t)
+	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarToolWith(t, cfg, rs, true))
+	approval := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+
+	events := h.run(t.Context(), "user-7", "s-1", confirmationResponse(approval, map[string]any{"confirmed": true, "payload": map[string]any{
+		"exchangedAuthCredential": map[string]any{"authType": "oauth2", "oauth2": map[string]any{
+			"state": "s-old", "authResponseUri": "http://localhost:4200/?state=s-old&code=code-46",
+		}},
+	}}))
+
+	resp, ok := functionResponse(events, "calendar_list")
+	if want := "Google Calendar sign-in failed: the sign-in request is out of date"; !ok || resp["error"] != want {
+		t.Errorf("response = %v, want error %q", resp, want)
 	}
-	if args.OriginalFunctionCall.ID == "" {
-		t.Fatalf("confirmation args %s name no original call", raw)
+	if got := te.callCount(); got != 0 {
+		t.Errorf("token endpoint called %d times, want 0", got)
 	}
-	return args.OriginalFunctionCall.ID
+	if got := rs.handlerRuns(); got != 0 {
+		t.Errorf("calendar_list ran %d times, want 0", got)
+	}
+	keepsStateClean(t, events)
 }
 
 // A run that another plugin ends in its BeforeRun never reaches tooloauth's
-// hooks. It must not cost a resume in flight its record: a bare
-// {"confirmed": true} answering a sign-in would otherwise fall through to a
-// token stored meanwhile and pass as the tool's own approval.
-func TestResume_runEndedEarlyByAnotherPluginKeepsTheRecord(t *testing.T) {
+// hooks. The request it answered stays open: answering again completes the
+// sign-in once.
+func TestResume_runEndedEarlyByAnotherPluginStillCompletes(t *testing.T) {
 	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
-	store := newRecordingStore()
-	cfg := refreshConfig(store, te, 72*time.Hour)
+	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
 	rs := newResourceServer(t)
-	held, release := make(chan struct{}), make(chan struct{})
 	var endEarly atomic.Bool
 	guard, err := plugin.New(plugin.Config{
 		Name: "guard",
@@ -604,108 +682,20 @@ func TestResume_runEndedEarlyByAnotherPluginKeepsTheRecord(t *testing.T) {
 			}
 			return nil, nil
 		},
-		BeforeToolCallback: func(ctx agent.Context, _ tool.Tool, _ map[string]any) (map[string]any, error) {
-			if ctx.FunctionCallID() == "call-2" && ctx.ToolConfirmation() != nil {
-				close(held)
-				<-release
-			}
-			return nil, nil
-		},
 	})
 	if err != nil {
 		t.Fatalf("plugin.New() error = %v", err)
 	}
-	h := newHarnessOn(t, session.InMemoryService(), "app-resume", "calendar_list", 2, cfg, []*plugin.Plugin{guard}, calendarToolWith(t, cfg, rs, true))
-	calls := pausedCalls(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
-
-	done := make(chan []*session.Event)
-	go func() {
-		var evs []*session.Event
-		for ev, err := range h.runner.Run(t.Context(), "user-7", "s-1", confirmationResponse(calls["call-2"], map[string]any{"confirmed": true}), agent.RunConfig{}) {
-			if err == nil {
-				evs = append(evs, ev)
-			}
-		}
-		done <- evs
-	}()
-	<-held
-	seed(t, cfg, "app-resume", "user-7", &Token{AccessToken: "at-other-tab", Expiry: time.Now().Add(time.Hour)}, time.Now().Add(24*time.Hour))
+	h := newHarnessOn(t, session.InMemoryService(), "app-resume", "calendar_list", 1, cfg, []*plugin.Plugin{guard}, calendarTool(t, cfg, rs))
+	answer := signedIn(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)), "code-47")
 	endEarly.Store(true)
-	h.run(t.Context(), "user-7", "s-1", confirmationResponse(calls["call-1"], map[string]any{"confirmed": true}))
-	close(release)
-	second := <-done
+	h.run(t.Context(), "user-7", "s-1", answer)
+	endEarly.Store(false)
 
-	if got := rs.handlerRuns(); got != 0 {
-		t.Errorf("calendar_list ran %d times, want 0", got)
-	}
-	resp, ok := functionResponse(second, "calendar_list")
-	if !ok {
-		t.Fatal("no calendar_list response on the held resume")
-	}
-	if got, _ := resp["error"].(string); got != "Google Calendar sign-in failed: no auth response" {
-		t.Errorf("held resume response = %v, want the no-auth-response error", resp)
-	}
-}
+	keepsStateClean(t, h.run(t.Context(), "user-7", "s-1", answer))
 
-// pausedCalls returns the sign-in requests in events by the call each paused.
-func pausedCalls(t *testing.T, events []*session.Event) map[string]*genai.FunctionCall {
-	t.Helper()
-	calls := map[string]*genai.FunctionCall{}
-	for _, ev := range events {
-		if ev.Content == nil {
-			continue
-		}
-		for _, p := range ev.Content.Parts {
-			if p != nil && p.FunctionCall != nil && p.FunctionCall.Name == "adk_request_confirmation" {
-				orig, err := toolconfirmation.OriginalCallFrom(p.FunctionCall)
-				if err != nil {
-					t.Fatalf("OriginalCallFrom: %v", err)
-				}
-				calls[orig.ID] = p.FunctionCall
-			}
-		}
+	if got := te.callCount(); got != 1 {
+		t.Errorf("token endpoint called %d times, want 1", got)
 	}
-	return calls
-}
-
-// Two sign-in requests from the agent for one call that disagree on the
-// state only come from a tampered session: the sign-in is refused.
-func TestResume_conflictingRequestsAreRefused(t *testing.T) {
-	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
-	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
-	rs := newResourceServer(t)
-	h := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
-	payload := pausedPayload(t, fc)
-	state := pausedState(t, payload)
-
-	second := pausedPayload(t, fc)
-	second["exchangedAuthCredential"].(map[string]any)["oauth2"].(map[string]any)["state"] = "other-state"
-	got, err := h.sessions.Get(t.Context(), &session.GetRequest{AppName: "app-resume", UserID: "user-7", SessionID: "s-1"})
-	if err != nil {
-		t.Fatalf("Get session: %v", err)
-	}
-	ev := session.NewEvent(t.Context(), "tampered")
-	ev.Author = "assistant"
-	ev.Content = &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
-		ID: "tampered-call", Name: "adk_request_confirmation",
-		Args: map[string]any{
-			"originalFunctionCall": map[string]any{"id": "call-1", "name": "calendar_list"},
-			"toolConfirmation":     map[string]any{"hint": "x", "confirmed": false, "payload": second},
-		},
-	}}}}
-	if err := h.sessions.AppendEvent(t.Context(), got.Session, ev); err != nil {
-		t.Fatalf("AppendEvent: %v", err)
-	}
-
-	events := h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, map[string]any{"confirmed": true, "payload": withADKWebResponse(payload,
-		"http://localhost:4200/?state="+state+"&code=code-45", "http://localhost:4200")}))
-
-	resp, _ := functionResponse(events, "calendar_list")
-	if got, _ := resp["error"].(string); got != "Google Calendar sign-in failed: the sign-in request is out of date" {
-		t.Errorf("response = %v, want the out-of-date error", resp)
-	}
-	if te.callCount() != 0 {
-		t.Errorf("token endpoint called %d times, want 0", te.callCount())
-	}
+	ranWith(t, rs, 1)
 }

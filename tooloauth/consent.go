@@ -10,8 +10,9 @@ import (
 	"google.golang.org/adk/v2/tool/toolauth"
 )
 
-// consentHint is the hint the plugin sends with a sign-in request.
-const consentHint = "Sign in to %s to continue."
+// waitingResult is the result a call waiting for the user's sign-in answers
+// with. ADK reruns the call once the user answers, replacing it.
+const waitingResult = "waiting for the user to sign in to %s"
 
 // authRequest builds the auth config a client needs to sign the user in to
 // t, in the shape adk-python sends: the scheme with t's scopes written in,

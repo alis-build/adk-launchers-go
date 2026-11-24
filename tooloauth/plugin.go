@@ -8,15 +8,17 @@ import (
 	"google.golang.org/adk/v2/auth"
 	"google.golang.org/adk/v2/plugin"
 	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/toolauth"
 )
 
 // NewPlugin returns the runner plugin, named "tooloauth", that gives each
 // configured tool the user's token: it serves a stored one, refreshing it
-// when expired; pauses a tool with no token for the user's sign-in; and
-// completes the sign-in when the user answers, without running the tool on
-// that answer. When a run answering a confirmation starts, it reads the
-// run's session for the sign-in requests it made. Add it through launcher.Config.PluginConfig. It
-// fails when cfg is invalid.
+// when expired; asks the user to sign in, through ADK's
+// adk_request_credential call, when a tool has none; and completes the
+// sign-in when ADK reruns the call after the user answers, so the tool runs
+// in that same turn. When a run answering a credential request starts, it
+// reads the run's session for the sign-in requests it made. Add it through
+// launcher.Config.PluginConfig. It fails when cfg is invalid.
 func NewPlugin(cfg Config) (*plugin.Plugin, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -32,12 +34,12 @@ func NewPlugin(cfg Config) (*plugin.Plugin, error) {
 // beforeTool runs before every tool call. Tools the Config does not name run
 // untouched. In a run marked WithoutStoredTokens every configured tool stops
 // with "<Provider> is not available in this run", before any lookup or
-// sign-in. Otherwise a configured tool whose user has a usable token runs. A
-// tool with no token pauses for the user's consent, and the resumed call
-// completes the sign-in instead of running the tool; in a run marked by
-// WithNonInteractive it stops with "connect <Provider> in chat first"
-// instead. A store failure stops the call with an error the model sees,
-// which names the provider but not the user.
+// sign-in. A call ADK reruns after the user answered a sign-in request
+// completes that sign-in and runs. Otherwise a configured tool whose user
+// has a usable token runs, and a tool with no token asks the user to sign
+// in; in a run marked by WithNonInteractive it stops with "connect
+// <Provider> in chat first" instead. A store failure stops the call with an
+// error the model sees, which names the provider but not the user.
 func (r *resolver) beforeTool(ctx agent.Context, t tool.Tool, _ map[string]any) (map[string]any, error) {
 	cfgTool, ok := r.cfg.Tools[t.Name()]
 	if !ok {
@@ -46,26 +48,17 @@ func (r *resolver) beforeTool(ctx agent.Context, t tool.Tool, _ map[string]any) 
 	if StoredTokensDisabled(ctx) {
 		return nil, notAvailable(cfgTool)
 	}
+	// Sign-ins complete only through ADK's credential requests. A sign-in
+	// answer sent as a confirmation, as clients of the plugin's earlier
+	// versions sent it, never completes and must never pass as the tool's
+	// own approval, which any confirmed confirmation would.
 	if conf := ctx.ToolConfirmation(); conf != nil {
-		if req, ok := r.lookupSignIn(ctx); ok {
-			// An answered or conflicting request, or one another resume is
-			// already exchanging, is never completed again and never passes
-			// as the tool's own approval.
-			if req.answered || req.conflicting {
-				return nil, fmt.Errorf("%s sign-in failed: the sign-in request is out of date", cfgTool.Provider)
-			}
-			if !conf.Confirmed {
-				return nil, fmt.Errorf("%s sign-in was declined", cfgTool.Provider)
-			}
-			answer, _ := decodeAuthResponse(conf.Payload)
-			return r.completeSignIn(ctx, cfgTool, req.config, answer)
-		}
-		// A sign-in response with no sign-in request on record must never
-		// pass as the tool's own approval, which any confirmed
-		// confirmation would.
 		if _, isSignIn := decodeAuthResponse(conf.Payload); isSignIn {
 			return nil, fmt.Errorf("%s sign-in failed: the sign-in request is out of date", cfgTool.Provider)
 		}
+	}
+	if result, handled, err := r.resumeSignIn(ctx, t.Name(), cfgTool); handled {
+		return result, err
 	}
 	_, err := r.credential(ctx, t.Name(), ctx.AppName(), ctx.UserID())
 	switch {
@@ -75,26 +68,28 @@ func (r *resolver) beforeTool(ctx agent.Context, t tool.Tool, _ map[string]any) 
 		// No auth URI here: this text is persisted and fed to the model.
 		return nil, fmt.Errorf("connect %s in chat first", cfgTool.Provider)
 	case errors.Is(err, errMiss):
-		return r.pauseForConsent(ctx, t.Name(), cfgTool)
+		return r.pauseForConsent(ctx, cfgTool)
 	default:
 		return nil, unavailable(cfgTool)
 	}
 }
 
-// pauseForConsent asks the user to sign in to t's provider: it requests a
-// confirmation whose payload is the auth config, and stops the call with
-// tool.ErrConfirmationRequired, ADK's own pause, so the tool does not run in
-// this turn.
-func (r *resolver) pauseForConsent(ctx agent.Context, name string, t Tool) (map[string]any, error) {
+// pauseForConsent asks the user to sign in to t's provider: it records the
+// auth config as the call's requested credential and answers the call with
+// a waiting result instead of running the tool. ADK then sends an
+// adk_request_credential call, one per credential key, and ends the run.
+func (r *resolver) pauseForConsent(ctx agent.Context, t Tool) (map[string]any, error) {
 	key := auth.CredentialKey{AppName: ctx.AppName(), UserID: ctx.UserID(), Key: t.slot()}
 	req, err := r.authRequest(t, key)
 	if err != nil {
 		return nil, unavailable(t)
 	}
-	if err := ctx.RequestConfirmation(fmt.Sprintf(consentHint, t.Provider), req); err != nil {
-		return nil, unavailable(t)
+	actions := ctx.Actions()
+	if actions.RequestedAuthConfigs == nil {
+		actions.RequestedAuthConfigs = map[string]toolauth.Config{}
 	}
-	return nil, fmt.Errorf("tool %q: %w", name, tool.ErrConfirmationRequired)
+	actions.RequestedAuthConfigs[ctx.FunctionCallID()] = *req
+	return map[string]any{"status": fmt.Sprintf(waitingResult, t.Provider)}, nil
 }
 
 // notAvailable is the error the model sees for a configured tool in a run

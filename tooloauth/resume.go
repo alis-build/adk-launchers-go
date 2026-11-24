@@ -3,6 +3,7 @@ package tooloauth
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -13,14 +14,8 @@ import (
 	"google.golang.org/adk/v2/auth"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool/toolauth"
-	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
-
-// connectedResult is the tool result of a completed sign-in. The tool itself
-// does not run on the sign-in's confirmation, which ADK would also accept as
-// the tool's own approval; the model's next call is a fresh one.
-const connectedResult = "connected to %s, call the tool again"
 
 // pendingTTL is how long a run's record of sign-in requests is kept after
 // the run's last start. A resumed call is dispatched right after its run
@@ -29,34 +24,26 @@ const connectedResult = "connected to %s, call the tool again"
 // ADK does not report reliably to every plugin.
 const pendingTTL = time.Hour
 
-// signInKey identifies a sign-in request by the author of its event and the
-// call it paused, so an event from another author can neither replace nor
-// clear the plugin's own request.
+// signInKey identifies a sign-in request by the author of its event, the
+// credential key it asked for and the state it was issued with. ADK sends
+// one request per credential key, so the state tells requests for the same
+// key apart, and the author keeps another agent's events from standing in
+// for the plugin's own.
 type signInKey struct {
-	author string
-	callID string
-}
-
-// signInRequest is one sign-in request found in a session.
-type signInRequest struct {
-	config *toolauth.Config
-	// answered is set when a reply to the paused call follows the request:
-	// the sign-in already completed or failed, and its code must not be sent
-	// again.
-	answered bool
-	// conflicting is set when the session holds two different sign-in
-	// requests for the same call, which only a tampered session does.
-	conflicting bool
+	author        string
+	credentialKey string
+	state         string
 }
 
 // pendingRun is the record of one invocation's sign-in requests, as of the
-// latest start of a run under that invocation. Resumes run under the paused
-// run's invocation ID, so several runs can share a record.
+// latest start of a run under that invocation. ADK reruns an answered call
+// under the paused run's invocation ID, so the answering run and the rerun
+// share a record.
 type pendingRun struct {
-	requests map[signInKey]signInRequest
-	// claimed holds the requests whose code a resume is exchanging, so a
-	// concurrent duplicate of the reply does not send the code again.
-	claimed map[signInKey]bool
+	requests map[signInKey]*toolauth.Config
+	// claimed holds, for each request whose answer a call has taken up, the
+	// ID of that call, so the code is exchanged once.
+	claimed map[signInKey]string
 	seen    time.Time
 }
 
@@ -68,12 +55,12 @@ type pendingSignIns struct {
 	byInvocation map[string]*pendingRun
 }
 
-// beforeRun records the sign-in requests in the run's session, so a resumed
-// call can be checked against the request the plugin sent, and prunes
-// records unused for pendingTTL. Only a run answering a confirmation can
+// beforeRun records the sign-in requests in the run's session, so an answer
+// can be checked against the requests the plugin issued, and prunes records
+// unused for pendingTTL. Only a run answering a credential request can
 // resume a call, so other runs record nothing.
 func (r *resolver) beforeRun(ctx agent.InvocationContext) (*genai.Content, error) {
-	if !answersConfirmation(ctx.UserContent()) {
+	if !answersCredentialRequest(ctx.UserContent()) {
 		return nil, nil
 	}
 	reqs := signInRequests(ctx.Session())
@@ -93,7 +80,7 @@ func (r *resolver) beforeRun(ctx agent.InvocationContext) (*genai.Content, error
 		if r.pending.byInvocation == nil {
 			r.pending.byInvocation = map[string]*pendingRun{}
 		}
-		run = &pendingRun{claimed: map[signInKey]bool{}}
+		run = &pendingRun{claimed: map[signInKey]string{}}
 		r.pending.byInvocation[ctx.InvocationID()] = run
 	}
 	// The session only grows, so a later snapshot covers an earlier one.
@@ -102,149 +89,174 @@ func (r *resolver) beforeRun(ctx agent.InvocationContext) (*genai.Content, error
 	return nil, nil
 }
 
-// lookupSignIn returns the sign-in request the current agent made for the
-// current call, if any, as ADK itself matches confirmations by author.
-func (r *resolver) lookupSignIn(ctx agent.Context) (signInRequest, bool) {
+// lookupSignIn returns the request key names in the current invocation's
+// record, if the plugin issued it.
+func (r *resolver) lookupSignIn(ctx agent.Context, key signInKey) (*toolauth.Config, bool) {
 	r.pending.mu.Lock()
 	defer r.pending.mu.Unlock()
 	run := r.pending.byInvocation[ctx.InvocationID()]
 	if run == nil {
-		return signInRequest{}, false
+		return nil, false
 	}
 	run.seen = time.Now()
-	req, ok := run.requests[signInKey{author: ctx.AgentName(), callID: ctx.FunctionCallID()}]
+	req, ok := run.requests[key]
 	return req, ok
 }
 
-// answersConfirmation reports whether content, a run's new user message,
-// answers a confirmation request: only such a run can resume a paused call.
-func answersConfirmation(content *genai.Content) bool {
+// answersCredentialRequest reports whether content, a run's new user
+// message, answers an adk_request_credential call: only such a run can
+// resume a paused call.
+func answersCredentialRequest(content *genai.Content) bool {
 	if content == nil {
 		return false
 	}
 	for _, p := range content.Parts {
-		if p != nil && p.FunctionResponse != nil && p.FunctionResponse.Name == toolconfirmation.FunctionCallName {
+		if p != nil && p.FunctionResponse != nil && p.FunctionResponse.Name == toolauth.RequestCredentialFunctionCallName {
 			return true
 		}
 	}
 	return false
 }
 
-// claimSignIn marks the current call's sign-in request as being exchanged,
-// and reports false when another resume already claimed it.
-func (r *resolver) claimSignIn(ctx agent.Context) bool {
+// claim is the outcome of a call taking up a sign-in request's answer.
+type claim int
+
+const (
+	// claimTaken: the call is the first to take up the answer and completes
+	// the sign-in.
+	claimTaken claim = iota
+	// claimSameCall: the same call took it up before, so a duplicate answer
+	// re-dispatched the call.
+	claimSameCall
+	// claimOtherCall: another call took it up. ADK keeps the answer in temp:
+	// state for the rest of the invocation, so later calls see it too.
+	claimOtherCall
+)
+
+// claimSignIn records that the current call takes up the answer to the
+// request key names, and reports who had taken it up already.
+func (r *resolver) claimSignIn(ctx agent.Context, key signInKey) claim {
 	r.pending.mu.Lock()
 	defer r.pending.mu.Unlock()
 	run := r.pending.byInvocation[ctx.InvocationID()]
 	if run == nil {
-		return false
+		return claimSameCall
 	}
-	key := signInKey{author: ctx.AgentName(), callID: ctx.FunctionCallID()}
-	if run.claimed[key] {
-		return false
+	switch by, ok := run.claimed[key]; {
+	case !ok:
+		run.claimed[key] = ctx.FunctionCallID()
+		return claimTaken
+	case by == ctx.FunctionCallID():
+		return claimSameCall
+	default:
+		return claimOtherCall
 	}
-	run.claimed[key] = true
-	return true
 }
 
-// signInRequests returns the sign-in requests in sess, keyed by author and
-// the ID of the call each paused. User-authored events never count. A
-// request is marked answered when a non-user reply to its call follows it,
-// and conflicting when another request for the same call carries a
-// different state.
-func signInRequests(sess session.Session) map[signInKey]signInRequest {
+// signInRequests returns the sign-in requests in sess, read from the
+// RequestedAuthConfigs of events not authored by the user, keyed by author,
+// credential key and issued state. The call arguments ADK sends are not
+// read: a client can write events in an agent's name through ADK's REST
+// API, but never their RequestedAuthConfigs. Requests without an OAuth2
+// state are skipped.
+func signInRequests(sess session.Session) map[signInKey]*toolauth.Config {
 	if sess == nil {
 		return nil
 	}
-	out := map[signInKey]signInRequest{}
+	out := map[signInKey]*toolauth.Config{}
 	events := sess.Events()
 	for i := range events.Len() {
 		ev := events.At(i)
-		if ev == nil || ev.Author == "" || ev.Author == "user" || ev.Content == nil {
+		if ev == nil || ev.Author == "" || ev.Author == "user" {
 			continue
 		}
-		for _, p := range ev.Content.Parts {
-			switch {
-			case p == nil:
-			case p.FunctionResponse != nil:
-				key := signInKey{author: ev.Author, callID: p.FunctionResponse.ID}
-				if req, ok := out[key]; ok {
-					req.answered = true
-					out[key] = req
-				}
-			case p.FunctionCall != nil && p.FunctionCall.Name == toolconfirmation.FunctionCallName:
-				orig, err := toolconfirmation.OriginalCallFrom(p.FunctionCall)
-				if err != nil || orig.ID == "" {
-					continue
-				}
-				cfg, ok := decodeRequestedConfig(p.FunctionCall.Args["toolConfirmation"])
-				if !ok {
-					continue
-				}
-				key := signInKey{author: ev.Author, callID: orig.ID}
-				prev, seen := out[key]
-				if !seen {
-					out[key] = signInRequest{config: cfg}
-					continue
-				}
-				// A repeat keeps what is already known about the call; one
-				// with another state makes it conflicting for good.
-				prev.conflicting = prev.conflicting || prev.config.ExchangedAuthCredential.OAuth2.State != cfg.ExchangedAuthCredential.OAuth2.State
-				out[key] = prev
+		for _, cfg := range ev.Actions.RequestedAuthConfigs {
+			c := cfg.ExchangedAuthCredential
+			if c == nil || c.OAuth2 == nil || c.OAuth2.State == "" {
+				continue
 			}
+			out[signInKey{author: ev.Author, credentialKey: cfg.CredentialKey, state: c.OAuth2.State}] = &cfg
 		}
 	}
 	return out
 }
 
-// decodeRequestedConfig decodes a request's toolConfirmation argument, a Go
-// value in an in-memory session and a JSON map in a persisted one, and
-// returns its payload when it is a sign-in request carrying OAuth2 state.
-func decodeRequestedConfig(arg any) (*toolauth.Config, bool) {
-	raw, err := json.Marshal(arg)
+// storedAnswer reads the user's answer to a sign-in request for t, which
+// ADK keeps in session state under "temp:" plus the request's credential
+// key for the rest of the invocation. It reports false when there is none.
+func storedAnswer(ctx agent.Context, t Tool) (*toolauth.OAuth2Auth, bool) {
+	v, err := ctx.State().Get("temp:" + t.slot())
+	if err != nil || v == nil {
+		return nil, false
+	}
+	raw, err := json.Marshal(v)
 	if err != nil {
 		return nil, false
 	}
-	var tc struct {
-		Payload json.RawMessage `json:"payload"`
-	}
-	if json.Unmarshal(raw, &tc) != nil || len(tc.Payload) == 0 || string(tc.Payload) == "null" {
+	var cred toolauth.Credential
+	if json.Unmarshal(raw, &cred) != nil || cred.OAuth2 == nil {
 		return nil, false
 	}
-	var cfg toolauth.Config
-	if json.Unmarshal(tc.Payload, &cfg) != nil {
-		return nil, false
-	}
-	if c := cfg.ExchangedAuthCredential; c == nil || c.OAuth2 == nil || c.OAuth2.State == "" {
-		return nil, false
-	}
-	return &cfg, true
+	return cred.OAuth2, true
 }
 
-// authResponse is the part of a client's filled auth config the plugin
-// reads. Only the exchanged credential's response and redirect URIs are
-// taken: the rest of a client-returned config is untrusted, and the client
-// ID and secret always come from the plugin's own Config.
+// resumeSignIn completes a sign-in when ADK reruns a call after the user
+// answered the plugin's request, and reports false, so the call goes on to
+// the stored-token lookup, when there is no answer for t. The answer counts
+// only for a request the plugin issued in this invocation's session; ADK
+// pins the answer's state to the request it sent. When another call in this
+// invocation already took the answer up, the call runs on the token that
+// sign-in stored, or fails as out of date when there is none.
+func (r *resolver) resumeSignIn(ctx agent.Context, toolName string, t Tool) (result map[string]any, handled bool, err error) {
+	answer, ok := storedAnswer(ctx, t)
+	if !ok || answer.AuthResponseURI == "" {
+		return nil, false, nil
+	}
+	outOfDate := fmt.Errorf("%s sign-in failed: the sign-in request is out of date", t.Provider)
+	key := signInKey{author: ctx.AgentName(), credentialKey: t.slot(), state: answer.State}
+	requested, ok := r.lookupSignIn(ctx, key)
+	if !ok {
+		return nil, true, outOfDate
+	}
+	switch r.claimSignIn(ctx, key) {
+	case claimSameCall:
+		return nil, true, outOfDate
+	case claimOtherCall:
+		switch _, err := r.credential(ctx, toolName, ctx.AppName(), ctx.UserID()); {
+		case err == nil:
+			return nil, true, nil
+		case errors.Is(err, errMiss):
+			return nil, true, outOfDate
+		default:
+			return nil, true, unavailable(t)
+		}
+	}
+	result, err = r.completeSignIn(ctx, t, requested, answer)
+	return result, true, err
+}
+
+// authResponse is the part of a confirmation payload that marks it as a
+// sign-in answer: an exchanged OAuth2 credential. Sign-ins now complete only
+// through ADK's credential requests; the plugin reads this only to refuse a
+// sign-in answer sent as a confirmation.
 type authResponse struct {
 	ExchangedAuthCredential struct {
 		OAuth2 *toolauth.OAuth2Auth `json:"oauth2"`
 	} `json:"exchangedAuthCredential"`
 }
 
-// completeSignIn handles the resumed call of a sign-in pause, given the
-// client's answer (nil when it carried no auth response): it checks the
-// response's state against the one the plugin sent, exchanges the code,
-// stores the token and answers with connectedResult instead of running the
-// tool. The checks run in a fixed order, so the state is verified before the
-// code is ever sent, and no failure writes to the store. Failure texts name
+// completeSignIn completes the sign-in of a rerun call, given the user's
+// stored answer: it checks the response's
+// state against the one the plugin sent, exchanges the code and stores the
+// token, then returns nil so the tool runs with it in this turn. The checks
+// run in a fixed order, so the state is verified before the code is ever
+// sent, and no failure writes to the store. The caller has claimed the
+// request, so the code is sent once. Failure texts name
 // the provider only: never the provider's own error description, the
 // endpoint's response, or the state.
 func (r *resolver) completeSignIn(ctx agent.Context, t Tool, requested *toolauth.Config, o *toolauth.OAuth2Auth) (map[string]any, error) {
 	failed := func(reason string) error {
 		return fmt.Errorf("%s sign-in failed: %s", t.Provider, reason)
-	}
-	if o == nil {
-		return nil, failed("no auth response")
 	}
 	u, err := url.Parse(o.AuthResponseURI)
 	if err != nil {
@@ -265,17 +277,10 @@ func (r *resolver) completeSignIn(ctx agent.Context, t Tool, requested *toolauth
 	if code == "" {
 		return nil, failed("no authorization code")
 	}
+	// The request was looked up under t's current credential key, so a
+	// Config changed since the pause never files a token granted for the old
+	// scopes or client under the new key.
 	key := auth.CredentialKey{AppName: ctx.AppName(), UserID: ctx.UserID(), Key: t.slot()}
-	// A Config changed between pause and resume would file a token granted
-	// for the old scopes or client under the new key.
-	if subtle.ConstantTimeCompare([]byte(requested.CredentialKey), []byte(key.Key)) != 1 {
-		return nil, failed("the sign-in request is out of date")
-	}
-	// A code may be sent once: a concurrent duplicate of this reply waits
-	// for nothing and fails instead.
-	if !r.claimSignIn(ctx) {
-		return nil, failed("the sign-in request is out of date")
-	}
 	// The exchange repeats the redirect URI the authorization used (RFC 6749
 	// section 4.1.3); ADK Web rewrites it to its own origin and reports it.
 	redirect := o.RedirectURI
@@ -291,12 +296,13 @@ func (r *resolver) completeSignIn(ctx agent.Context, t Tool, requested *toolauth
 	if err := r.save(ctx, key, tok, time.Now()); err != nil {
 		return nil, unavailable(t)
 	}
-	return map[string]any{"result": fmt.Sprintf(connectedResult, t.Provider)}, nil
+	return nil, nil
 }
 
-// decodeAuthResponse reads the exchanged OAuth2 credential from a client's
+// decodeAuthResponse reads the exchanged OAuth2 credential from a
 // confirmation payload, a JSON map, and reports false when it has no auth
-// response URI.
+// response URI. Only the refusal of sign-in answers sent as confirmations
+// uses it.
 func decodeAuthResponse(payload any) (*toolauth.OAuth2Auth, bool) {
 	raw, err := json.Marshal(payload)
 	if err != nil {

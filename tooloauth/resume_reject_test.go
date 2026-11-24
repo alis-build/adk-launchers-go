@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolauth"
 	"google.golang.org/genai"
 )
 
@@ -14,18 +15,18 @@ import (
 // returns the resumed turn's events.
 func rejectCase(t *testing.T, h *harness, respond func(payload map[string]any, state string) map[string]any) []*session.Event {
 	t.Helper()
-	fc := confirmationCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+	fc := credentialCall(t, h.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
 	payload := pausedPayload(t, fc)
-	return h.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, respond(payload, pausedState(t, payload))))
+	return h.run(t.Context(), "user-7", "s-1", credentialAnswer(fc, respond(payload, pausedState(t, payload))))
 }
 
-// rejected asserts the resumed call failed with want, the tool did not run,
+// rejected asserts the rerun call failed with want, the tool did not run,
 // nothing was stored, and the token endpoint was called endpointCalls times.
 func rejected(t *testing.T, events []*session.Event, cfg Config, rs *resourceServer, te *tokenEndpoint, want string, endpointCalls int) {
 	t.Helper()
 	resp, ok := functionResponse(events, "calendar_list")
 	if !ok {
-		t.Fatal("no calendar_list response on resume")
+		t.Fatal("no calendar_list response on the rerun")
 	}
 	if got, _ := resp["error"].(string); got != want {
 		t.Errorf("error = %q, want %q", got, want)
@@ -39,6 +40,7 @@ func rejected(t *testing.T, events []*session.Event, cfg Config, rs *resourceSer
 	if got := te.callCount(); got != endpointCalls {
 		t.Errorf("token endpoint called %d times, want %d", got, endpointCalls)
 	}
+	keepsStateClean(t, events)
 }
 
 // rejectSetup returns a harness for calendar_list with a token endpoint
@@ -51,16 +53,9 @@ func rejectSetup(t *testing.T, status int, body string) (*harness, Config, *reso
 	return newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs)), cfg, rs, te
 }
 
-// redirectResponse is a confirmed resume whose auth response URI carries
-// query.
+// redirectResponse is an answer whose auth response URI carries query.
 func redirectResponse(payload map[string]any, query string) map[string]any {
-	return map[string]any{"confirmed": true, "payload": withADKWebResponse(payload, "http://localhost:4200/?"+query, "http://localhost:4200")}
-}
-
-func TestResumeReject_declined(t *testing.T) {
-	h, cfg, rs, te := rejectSetup(t, http.StatusOK, exchangeReply)
-	events := rejectCase(t, h, func(map[string]any, string) map[string]any { return map[string]any{"confirmed": false} })
-	rejected(t, events, cfg, rs, te, "Google Calendar sign-in was declined", 0)
+	return withADKWebResponse(payload, "http://localhost:4200/?"+query, "http://localhost:4200")
 }
 
 func TestResumeReject_providerDenied(t *testing.T) {
@@ -79,14 +74,6 @@ func TestResumeReject_providerError(t *testing.T) {
 	rejected(t, events, cfg, rs, te, "Google Calendar sign-in failed: the provider returned an error", 0)
 }
 
-func TestResumeReject_noAuthResponse(t *testing.T) {
-	h, cfg, rs, te := rejectSetup(t, http.StatusOK, exchangeReply)
-	events := rejectCase(t, h, func(map[string]any, string) map[string]any {
-		return map[string]any{"confirmed": true, "payload": map[string]any{}}
-	})
-	rejected(t, events, cfg, rs, te, "Google Calendar sign-in failed: no auth response", 0)
-}
-
 func TestResumeReject_stateMismatch(t *testing.T) {
 	h, cfg, rs, te := rejectSetup(t, http.StatusOK, exchangeReply)
 	events := rejectCase(t, h, func(payload map[string]any, _ string) map[string]any {
@@ -103,14 +90,16 @@ func TestResumeReject_noCode(t *testing.T) {
 	rejected(t, events, cfg, rs, te, "Google Calendar sign-in failed: no authorization code", 0)
 }
 
-// The Config's scopes change between the pause and the resume: the token
-// would be granted for the old scopes but filed under the new key.
+// The Config's scopes change between the pause and the answer: the token
+// would be granted for the old scopes but filed under the new key. The
+// answer is for the old key, so the rerun finds none for the new one and
+// asks the user to sign in again; nothing is exchanged or stored.
 func TestResumeReject_staleRequest(t *testing.T) {
 	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
 	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
 	rs := newResourceServer(t)
 	before := newHarness(t, "app-resume", "calendar_list", cfg, calendarTool(t, cfg, rs))
-	fc := confirmationCall(t, before.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
+	fc := credentialCall(t, before.run(t.Context(), "user-7", "s-1", genai.NewContentFromText("what is on my calendar?", genai.RoleUser)))
 	payload := pausedPayload(t, fc)
 	state := pausedState(t, payload)
 
@@ -119,9 +108,20 @@ func TestResumeReject_staleRequest(t *testing.T) {
 	tl.Scopes = append(append([]string(nil), tl.Scopes...), "https://www.example.com/auth/calendar.events")
 	changed.Tools = map[string]Tool{"calendar_list": tl}
 	after := newHarnessOn(t, before.sessions, "app-resume", "calendar_list", 1, changed, nil, calendarTool(t, changed, rs))
-	events := after.run(t.Context(), "user-7", "s-1", confirmationResponse(fc, redirectResponse(payload, "state="+state+"&code=code-31")))
+	events := after.run(t.Context(), "user-7", "s-1", credentialAnswer(fc, redirectResponse(payload, "state="+state+"&code=code-31")))
 
-	rejected(t, events, cfg, rs, te, "Google Calendar sign-in failed: the sign-in request is out of date", 0)
+	if !hasFunctionCall(events, toolauth.RequestCredentialFunctionCallName) {
+		t.Error("rerun did not ask to sign in again under the new key")
+	}
+	if got := te.callCount(); got != 0 {
+		t.Errorf("token endpoint called %d times, want 0", got)
+	}
+	if got := rs.handlerRuns(); got != 0 {
+		t.Errorf("calendar_list ran %d times, want 0", got)
+	}
+	if tok, ok := storedFor(t, cfg, "user-7"); ok {
+		t.Errorf("token stored under the old key = %+v, want none", tok)
+	}
 	if tok, ok := storedFor(t, changed, "user-7"); ok {
 		t.Errorf("token stored under the new key = %+v, want none", tok)
 	}
