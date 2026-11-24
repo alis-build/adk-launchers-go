@@ -517,6 +517,14 @@
 // answer every interrupt in outcome.interrupts, not just the first: resume
 // validation rejects a resume that leaves any pending interrupt unaddressed.
 //
+// The same holds across events for sign-ins. ADK yields a turn's
+// adk_request_credential event before any tool confirmation from that turn,
+// so auth_required interrupts are held until the next interrupt event or the
+// end of the ADK stream, and the run ends on all of them together. Unlike
+// other interrupts, a sign-in therefore does not stop reading the stream: in a
+// graph workflow, branches still running in parallel keep streaming their
+// events until ADK ends the run.
+//
 // At run start and before interrupt RunFinished, the launcher emits StateSnapshot
 // (and MessagesSnapshot at interrupt boundaries) so clients have baseline context.
 // A resume run emits no baseline StateSnapshot: the interrupt snapshot that paused

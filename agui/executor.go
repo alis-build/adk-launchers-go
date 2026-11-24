@@ -87,6 +87,11 @@ type BeforeExecuteCallback func(ctx context.Context, execCtx ExecutorContext) (c
 // the emitted events. If you need to change events before they hit the wire, use
 // CallInterceptor.OnEmit instead (which runs in the HTTP handler after Execute yields).
 // Return a non-nil error to abort the run mid-stream with RunError.
+//
+// A sign-in request's auth_required interrupt is held until the ADK stream ends (see
+// "Multiple interrupts per event" in the package docs), so the callback sees an empty
+// emitted slice for its adk_request_credential event, and the run's terminal events go
+// out after the last callback with no ADK event to attach them to.
 type AfterEventCallback func(execCtx ExecutorContext, adkEvent *session.Event, emitted []events.Event) error
 
 // AfterExecuteCallback runs exactly once after the run completes, whether it finished
