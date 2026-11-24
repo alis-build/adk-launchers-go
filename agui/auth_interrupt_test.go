@@ -32,24 +32,38 @@ func signInConfig() *toolauth.Config {
 	}
 }
 
+// credentialInterrupt runs one adk_request_credential event carrying args
+// through processEvent and returns the RUN_FINISHED interrupt and the SSE
+// body.
+func credentialInterrupt(t *testing.T, args map[string]any) (map[string]any, string) {
+	t.Helper()
+	return interruptFor(t, &genai.FunctionCall{ID: "cred-cal-1", Name: toolauth.RequestCredentialFunctionCallName, Args: args})
+}
+
 // confirmationInterrupt runs one adk_request_confirmation event carrying
 // payload through processEvent and returns the RUN_FINISHED interrupt and
 // the SSE body.
 func confirmationInterrupt(t *testing.T, payload any) (map[string]any, string) {
+	t.Helper()
+	return interruptFor(t, &genai.FunctionCall{
+		ID:   "confirm-cal-1",
+		Name: toolconfirmation.FunctionCallName,
+		Args: map[string]any{
+			"toolConfirmation":     map[string]any{"hint": "Approve?", "payload": payload},
+			"originalFunctionCall": map[string]any{"ID": "call-cal-1", "Name": "calendar_list"},
+		},
+	})
+}
+
+func interruptFor(t *testing.T, fc *genai.FunctionCall) (map[string]any, string) {
 	t.Helper()
 	l := newTestLauncher("test-app")
 	e, rec := newTestEmitter()
 	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
 	ev := session.NewEvent(t.Context(), "inv1")
 	ev.InvocationID = "e-auth"
-	ev.Content = &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
-		ID:   "confirm-cal-1",
-		Name: toolconfirmation.FunctionCallName,
-		Args: map[string]any{
-			"toolConfirmation":     map[string]any{"hint": "Sign in to Google Calendar to continue.", "payload": payload},
-			"originalFunctionCall": map[string]any{"ID": "call-cal-1", "Name": "calendar_list"},
-		},
-	}}}}
+	ev.LongRunningToolIDs = []string{fc.ID}
+	ev.Content = &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{FunctionCall: fc}}}
 	if _, err := l.processEvent(e, ev, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
@@ -82,8 +96,9 @@ func at(v map[string]any, path ...string) any {
 	return cur
 }
 
+// In a live run ADK's credential call carries the config as a Go value.
 func TestAuthInterrupt_emitsAuthRequired(t *testing.T) {
-	intr, body := confirmationInterrupt(t, signInConfig())
+	intr, body := credentialInterrupt(t, map[string]any{"functionCallId": "call-cal-1", "authConfig": signInConfig()})
 
 	if got := intr["reason"]; got != "auth_required" {
 		t.Errorf("reason = %v, want auth_required", got)
@@ -91,14 +106,20 @@ func TestAuthInterrupt_emitsAuthRequired(t *testing.T) {
 	if got := intr["toolCallId"]; got != "call-cal-1" {
 		t.Errorf("toolCallId = %v, want call-cal-1", got)
 	}
-	if got := intr["id"]; got != "confirm-cal-1" {
-		t.Errorf("id = %v, want confirm-cal-1", got)
+	if got := intr["id"]; got != "cred-cal-1" {
+		t.Errorf("id = %v, want cred-cal-1", got)
+	}
+	if got := intr["message"]; got != "Sign in to continue." {
+		t.Errorf("message = %v, want %q", got, "Sign in to continue.")
+	}
+	if got := at(intr, "metadata", "adk", "callName"); got != toolauth.RequestCredentialFunctionCallName {
+		t.Errorf("metadata.adk.callName = %v, want %s", got, toolauth.RequestCredentialFunctionCallName)
+	}
+	if got := at(intr, "metadata", "adk", "invocationId"); got != "e-auth" {
+		t.Errorf("metadata.adk.invocationId = %v, want e-auth", got)
 	}
 	if got := at(intr, "metadata", "adk", "authConfig", "exchangedAuthCredential", "oauth2", "authUri"); got != "https://accounts.example.com/o/oauth2/auth?state=s-1" {
 		t.Errorf("authConfig authUri = %v", got)
-	}
-	if got := at(intr, "metadata", "adk", "confirmationPayload"); got != nil {
-		t.Errorf("confirmationPayload = %v, want absent", got)
 	}
 	if diff := cmp.Diff([]any{"exchangedAuthCredential"}, at(intr, "responseSchema", "required")); diff != "" {
 		t.Errorf("responseSchema.required (-want +got):\n%s", diff)
@@ -106,29 +127,54 @@ func TestAuthInterrupt_emitsAuthRequired(t *testing.T) {
 	if strings.Contains(body, "secret-7") {
 		t.Error("SSE body carries the client secret")
 	}
+	for _, sev := range parseSSEEvents(body) {
+		if sev.Raw["type"] == "TOOL_CALL_START" {
+			t.Errorf("credential request emitted a tool call: %v", sev.Raw)
+		}
+	}
 }
 
-// A stored session hands the payload back as a JSON map.
-func TestAuthInterrupt_mapPayloadFromStoredSession(t *testing.T) {
-	raw, err := json.Marshal(signInConfig())
+// A stored session hands the arguments back as JSON maps.
+func TestAuthInterrupt_mapArgsFromStoredSession(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{"functionCallId": "call-cal-1", "authConfig": signInConfig()})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	intr, body := confirmationInterrupt(t, payload)
+	intr, body := credentialInterrupt(t, args)
 
 	if got := intr["reason"]; got != "auth_required" {
 		t.Errorf("reason = %v, want auth_required", got)
+	}
+	if got := intr["toolCallId"]; got != "call-cal-1" {
+		t.Errorf("toolCallId = %v, want call-cal-1", got)
 	}
 	if got := at(intr, "metadata", "adk", "authConfig", "exchangedAuthCredential", "oauth2", "authUri"); got != "https://accounts.example.com/o/oauth2/auth?state=s-1" {
 		t.Errorf("authConfig authUri = %v", got)
 	}
 	if strings.Contains(body, "secret-7") {
 		t.Error("SSE body carries the client secret")
+	}
+}
+
+// Sign-ins no longer come as tool confirmations: a confirmation is always
+// the tool's own approval, whatever its payload.
+func TestAuthInterrupt_confirmationWithAuthPayloadIsToolCall(t *testing.T) {
+	cfg, err := signInConfig().WithoutSecrets()
+	if err != nil {
+		t.Fatalf("WithoutSecrets() error = %v", err)
+	}
+	intr, _ := confirmationInterrupt(t, cfg)
+
+	if got := intr["reason"]; got != "tool_call" {
+		t.Errorf("reason = %v, want tool_call", got)
+	}
+	if got := at(intr, "metadata", "adk", "authConfig"); got != nil {
+		t.Errorf("metadata.adk.authConfig = %v, want absent", got)
 	}
 }
 
@@ -140,46 +186,5 @@ func TestAuthInterrupt_otherPayloadStaysToolCall(t *testing.T) {
 	}
 	if diff := cmp.Diff(map[string]any{"note": "x"}, at(intr, "metadata", "adk", "confirmationPayload")); diff != "" {
 		t.Errorf("confirmationPayload (-want +got):\n%s", diff)
-	}
-}
-
-// A live run carries a ToolConfirmation value whose payload is a
-// *toolauth.Config, not a decoded map.
-func TestAuthInterrupt_liveConfigPayload(t *testing.T) {
-	l := newTestLauncher("test-app")
-	e, rec := newTestEmitter()
-	state := &streamState{RunID: "r1", ThreadID: "t1", RootAppName: "test-app"}
-	ev := session.NewEvent(t.Context(), "inv1")
-	ev.InvocationID = "e-auth"
-	ev.Content = &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
-		ID:   "confirm-cal-1",
-		Name: toolconfirmation.FunctionCallName,
-		Args: map[string]any{
-			"toolConfirmation":     toolconfirmation.ToolConfirmation{Hint: "Sign in to Google Calendar to continue.", Payload: signInConfig()},
-			"originalFunctionCall": &genai.FunctionCall{ID: "call-cal-1", Name: "calendar_list"},
-		},
-	}}}}
-	if _, err := l.processEvent(e, ev, state, nil); err != nil {
-		t.Fatalf("processEvent() error = %v", err)
-	}
-	body := rec.Body.String()
-	var intr map[string]any
-	for _, sev := range parseSSEEvents(body) {
-		if sev.Raw["type"] == "RUN_FINISHED" {
-			outcome, _ := sev.Raw["outcome"].(map[string]any)
-			intrs, _ := outcome["interrupts"].([]any)
-			if len(intrs) == 1 {
-				intr, _ = intrs[0].(map[string]any)
-			}
-		}
-	}
-	if intr == nil {
-		t.Fatalf("no interrupt in %s", body)
-	}
-	if got := intr["reason"]; got != "auth_required" {
-		t.Errorf("reason = %v, want auth_required", got)
-	}
-	if strings.Contains(body, "secret-7") {
-		t.Error("SSE body carries the client secret")
 	}
 }

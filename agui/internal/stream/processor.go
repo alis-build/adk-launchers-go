@@ -698,8 +698,9 @@ type interruptCallHandler func(p *Processor, sink eventSink, state *State, fc *g
 //
 // See https://docs.ag-ui.com/concepts/interrupts#reason-taxonomy
 var interruptCallHandlers = map[string]interruptCallHandler{
-	toolconfirmation.FunctionCallName:      buildToolCallInterrupt,
-	workflow.WorkflowInputFunctionCallName: buildInputRequestInterrupt,
+	toolconfirmation.FunctionCallName:          buildToolCallInterrupt,
+	workflow.WorkflowInputFunctionCallName:     buildInputRequestInterrupt,
+	toolauth.RequestCredentialFunctionCallName: buildAuthRequestInterrupt,
 }
 
 // buildToolCallInterrupt converts an adk_request_confirmation FunctionCall into
@@ -742,17 +743,7 @@ func buildToolCallInterrupt(p *Processor, sink eventSink, state *State, fc *gena
 	if invocationID != "" {
 		adkMeta["invocationId"] = invocationID
 	}
-	reason, schema := interrupt.ReasonToolCall, interrupt.ToolConfirmationResponseSchema()
-	if authCfg, ok := authConfigFrom(tc.Payload); ok {
-		// An OAuth sign-in: send the config the client needs, with its
-		// secrets stripped, and never the raw payload.
-		if stripped, err := authCfg.WithoutSecrets(); err != nil {
-			log.Printf("agui: emitInterrupt: auth config: %v", err)
-		} else {
-			adkMeta["authConfig"] = stripped
-			reason, schema = interrupt.ReasonAuthRequired, interrupt.AuthRequiredResponseSchema()
-		}
-	} else if tc.Payload != nil {
+	if tc.Payload != nil {
 		adkMeta["confirmationPayload"] = tc.Payload
 	}
 	interruptMeta := map[string]any{
@@ -770,42 +761,58 @@ func buildToolCallInterrupt(p *Processor, sink eventSink, state *State, fc *gena
 	// constants and helpers are used just below.
 	intr := types.Interrupt{
 		ID:             fc.ID,
-		Reason:         reason,
+		Reason:         interrupt.ReasonToolCall,
 		Message:        hintMessage,
 		ToolCallID:     originalCall.ID,
-		ResponseSchema: schema,
+		ResponseSchema: interrupt.ToolConfirmationResponseSchema(),
 		Metadata:       interruptMeta,
 	}
 	return intr, nil
 }
 
-// authConfigFrom reports whether a tool confirmation's payload is an OAuth
-// auth config a client can act on: one that decodes as a toolauth.Config and
-// carries an authorization URI. The payload is a *toolauth.Config in a live
-// run and a JSON map when read back from a stored session.
-func authConfigFrom(payload any) (*toolauth.Config, bool) {
-	var cfg *toolauth.Config
-	switch v := payload.(type) {
-	case nil:
-		return nil, false
-	case *toolauth.Config:
-		cfg = v
-	case toolauth.Config:
-		cfg = &v
-	default:
-		raw, err := json.Marshal(v)
-		if err != nil {
-			return nil, false
-		}
-		cfg = &toolauth.Config{}
-		if json.Unmarshal(raw, cfg) != nil {
-			return nil, false
-		}
+// signInMessage is the message and summary of an auth_required interrupt.
+// ADK's credential request names no provider, so the text stays generic.
+const signInMessage = "Sign in to continue."
+
+// buildAuthRequestInterrupt converts an adk_request_credential FunctionCall,
+// ADK's request for the end user's sign-in (sent for go.alis.build/adk/
+// launchers/tooloauth and ADK's own tools), into an auth_required interrupt.
+// The interrupt's ID is the credential call's, which resume answers; its
+// ToolCallID is the call waiting for the sign-in. The client gets the auth
+// config with its secrets stripped. No tool call lifecycle is emitted: the
+// waiting call was streamed when the model made it.
+func buildAuthRequestInterrupt(_ *Processor, _ eventSink, _ *State, fc *genai.FunctionCall, ev *session.Event) (types.Interrupt, error) {
+	raw, err := json.Marshal(fc.Args)
+	if err != nil {
+		return types.Interrupt{}, fmt.Errorf("encode %s args: %w", fc.Name, err)
 	}
-	if cfg == nil || cfg.ExchangedAuthCredential == nil || cfg.ExchangedAuthCredential.OAuth2 == nil || cfg.ExchangedAuthCredential.OAuth2.AuthURI == "" {
-		return nil, false
+	var args toolauth.ToolArguments
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return types.Interrupt{}, fmt.Errorf("decode %s args: %w", fc.Name, err)
 	}
-	return cfg, true
+	stripped, err := args.AuthConfig.WithoutSecrets()
+	if err != nil {
+		return types.Interrupt{}, fmt.Errorf("strip %s auth config: %w", fc.Name, err)
+	}
+	// callName is what resume dispatches on, as for input requests.
+	adkMeta := map[string]any{
+		"callName":   toolauth.RequestCredentialFunctionCallName,
+		"authConfig": stripped,
+	}
+	if ev.InvocationID != "" {
+		adkMeta["invocationId"] = ev.InvocationID
+	}
+	return types.Interrupt{
+		ID:             fc.ID,
+		Reason:         interrupt.ReasonAuthRequired,
+		Message:        signInMessage,
+		ToolCallID:     args.FunctionCallID,
+		ResponseSchema: interrupt.AuthRequiredResponseSchema(),
+		Metadata: map[string]any{
+			"adk":  adkMeta,
+			"hitl": map[string]any{"summary": signInMessage},
+		},
+	}, nil
 }
 
 // buildInputRequestInterrupt converts an adk_request_input FunctionCall into an
