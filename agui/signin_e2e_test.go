@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/google/go-cmp/cmp"
 	"go.alis.build/adk/launchers/agui/internal/interrupt"
 	"go.alis.build/adk/launchers/internal/adkrun"
 	"go.alis.build/adk/launchers/tooloauth"
@@ -41,13 +42,14 @@ const (
 	e2eSecret  = "secret-e2e"
 )
 
-// callOnceModel calls calendar_list for a user message and answers "done"
-// once a tool response comes back.
-type callOnceModel struct{}
+// callOnceModel calls each of its tools once, in one response, for a user
+// message, and answers "done" once a tool response comes back. Call IDs are
+// "call-cal-1" for calendar_list and "call-<name>" for the others.
+type callOnceModel struct{ tools []string }
 
 func (callOnceModel) Name() string { return "call-once" }
 
-func (callOnceModel) GenerateContent(_ context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+func (m callOnceModel) GenerateContent(_ context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		if n := len(req.Contents); n > 0 {
 			for _, p := range req.Contents[n-1].Parts {
@@ -57,9 +59,15 @@ func (callOnceModel) GenerateContent(_ context.Context, req *model.LLMRequest, _
 				}
 			}
 		}
-		yield(&model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{
-			FunctionCall: &genai.FunctionCall{ID: "call-cal-1", Name: "calendar_list", Args: map[string]any{}},
-		}}}}, nil)
+		var parts []*genai.Part
+		for _, name := range m.tools {
+			id := "call-" + name
+			if name == "calendar_list" {
+				id = "call-cal-1"
+			}
+			parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{ID: id, Name: name, Args: map[string]any{}}})
+		}
+		yield(&model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: parts}}, nil)
 	}
 }
 
@@ -72,7 +80,7 @@ type signInStack struct {
 	runs     func() int
 }
 
-func newSignInStack(t *testing.T) *signInStack {
+func newSignInStack(t *testing.T, extra ...tool.Tool) *signInStack {
 	t.Helper()
 	var mu sync.Mutex
 	exchanges, runs := 0, 0
@@ -112,7 +120,12 @@ func newSignInStack(t *testing.T) *signInStack {
 	if err != nil {
 		t.Fatalf("functiontool.New() error = %v", err)
 	}
-	a, err := llmagent.New(llmagent.Config{Name: e2eApp, Model: callOnceModel{}, Tools: []tool.Tool{tl}})
+	tools := append([]tool.Tool{tl}, extra...)
+	names := make([]string, len(tools))
+	for i, x := range tools {
+		names[i] = x.Name()
+	}
+	a, err := llmagent.New(llmagent.Config{Name: e2eApp, Model: callOnceModel{tools: names}, Tools: tools})
 	if err != nil {
 		t.Fatalf("llmagent.New() error = %v", err)
 	}
@@ -164,6 +177,10 @@ func (s *signInStack) run(t *testing.T, msg *genai.Content) (string, *streamStat
 		if done {
 			break
 		}
+	}
+	// As the executor does once the ADK stream ends.
+	if _, err := s.l.finishHeldInterrupts(e, state); err != nil {
+		t.Fatalf("finishHeldInterrupts: %v", err)
 	}
 	return rec.Body.String(), state, invocations
 }
@@ -287,5 +304,36 @@ func TestAuthRequiredResume_cancelReachesToolOAuth(t *testing.T) {
 	content, ok := toolResult(t, body, "call-cal-1")
 	if !ok || !strings.Contains(content, "Google Calendar sign-in was cancelled") {
 		t.Errorf("TOOL_CALL_RESULT for call-cal-1 = %q, %v; want the cancelled error", content, ok)
+	}
+}
+
+// ADK sends a sign-in request and a tool's own approval from one turn as two
+// events; agui ends the run on both, in one interrupt outcome.
+func TestAuthAndConfirmationSameTurn_bothInterrupt(t *testing.T) {
+	approve, err := functiontool.New(functiontool.Config{Name: "delete_all", Description: "Deletes everything.", RequireConfirmation: true},
+		func(agent.Context, struct{}) (map[string]any, error) { return map[string]any{"deleted": true}, nil })
+	if err != nil {
+		t.Fatalf("functiontool.New() error = %v", err)
+	}
+	s := newSignInStack(t, approve)
+
+	body, state, _ := s.run(t, genai.NewContentFromText("check my calendar, then delete everything", genai.RoleUser))
+
+	got := map[string]string{}
+	for _, intr := range state.EmittedInterrupts {
+		got[intr.ToolCallID] = intr.Reason
+	}
+	want := map[string]string{"call-cal-1": interrupt.ReasonAuthRequired, "call-delete_all": interrupt.ReasonToolCall}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("interrupts by tool call (-want +got):\n%s", diff)
+	}
+	finished := 0
+	for _, sev := range parseSSEEvents(body) {
+		if sev.Raw["type"] == "RUN_FINISHED" {
+			finished++
+		}
+	}
+	if finished != 1 {
+		t.Errorf("RUN_FINISHED events = %d, want 1", finished)
 	}
 }

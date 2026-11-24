@@ -60,6 +60,13 @@ func (l *aguiLauncher) processEvent(sink eventSink, ev *session.Event, state *st
 	return l.streamProcessor().ProcessEvent(sink, ev, state, partConverter)
 }
 
+// finishHeldInterrupts ends the run on sign-in interrupts processEvent held
+// back, once the ADK event stream has ended. See
+// [stream.Processor.FinishHeldInterrupts].
+func (l *aguiLauncher) finishHeldInterrupts(sink eventSink, state *streamState) (bool, error) {
+	return l.streamProcessor().FinishHeldInterrupts(sink, state)
+}
+
 // finalizeRun closes every lifecycle a run can leave open — text, reasoning,
 // step and the sub-agent activation — before a terminal event.
 func finalizeRun(sink eventSink, state *streamState) {

@@ -523,6 +523,14 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 			}
 		}
 
+		// Sign-in interrupts wait for a same-turn tool confirmation; with the
+		// stream over, the run ends on them now.
+		if runErr == nil && !sinkStopped(sink) {
+			if _, err := l.finishHeldInterrupts(sink, state); err != nil {
+				emitError(err)
+			}
+		}
+
 		// Close any still-open text, reasoning, or step lifecycles before a success terminal event.
 		if !sinkStopped(sink) {
 			finalizeRun(sink, state)

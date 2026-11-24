@@ -167,9 +167,13 @@ type State struct {
 	StreamedStep              string          // step name of the producer whose partials StreamedText and StreamedReasoning hold
 	RunFinalized              bool
 	EmittedInterrupts         []types.Interrupt
-	EmittedToolCallArgsJSON   map[string]string
-	PredictStateMappings      map[string][]PredictStateMapping
-	EmittedPredictStateTools  map[string]bool
+	// HeldInterrupts are sign-in interrupts not yet sent: ADK yields a turn's
+	// adk_request_credential event before any tool confirmation from the same
+	// turn, so the run ends on both together. See [Processor.FinishHeldInterrupts].
+	HeldInterrupts           []types.Interrupt
+	EmittedToolCallArgsJSON  map[string]string
+	PredictStateMappings     map[string][]PredictStateMapping
+	EmittedPredictStateTools map[string]bool
 	// tokenUsage accumulates the run's reported token counts, emitted on the
 	// terminal event where the protocol carries them.
 	tokenUsage tokenCounts
@@ -567,7 +571,16 @@ func (p *Processor) ProcessEvent(sink eventSink, ev *session.Event, state *State
 		}
 
 		if len(pendingInterrupts) > 0 {
-			if err := p.finishWithInterrupts(sink, state, pendingInterrupts); err != nil {
+			// ADK ends the invocation after a sign-in request, but a tool
+			// confirmation from the same turn arrives as a later event: hold
+			// sign-in interrupts until it, or the end of the stream.
+			if allCredentialInterrupts(pendingInterrupts) {
+				state.HeldInterrupts = append(state.HeldInterrupts, pendingInterrupts...)
+				return false, nil
+			}
+			intrs := append(state.HeldInterrupts, pendingInterrupts...)
+			state.HeldInterrupts = nil
+			if err := p.finishWithInterrupts(sink, state, intrs); err != nil {
 				return false, err
 			}
 			return true, nil
@@ -774,6 +787,33 @@ func buildToolCallInterrupt(p *Processor, sink eventSink, state *State, fc *gena
 		Metadata:       interruptMeta,
 	}
 	return intr, nil
+}
+
+// allCredentialInterrupts reports whether every interrupt in intrs answers
+// an adk_request_credential call.
+func allCredentialInterrupts(intrs []types.Interrupt) bool {
+	for _, intr := range intrs {
+		adk, _ := intr.Metadata["adk"].(map[string]any)
+		if name, _ := adk["callName"].(string); name != toolauth.RequestCredentialFunctionCallName {
+			return false
+		}
+	}
+	return true
+}
+
+// FinishHeldInterrupts ends the run on the sign-in interrupts ProcessEvent
+// held, once the run's event stream has ended without another interrupt
+// event to send them with. It reports whether it ended the run.
+func (p *Processor) FinishHeldInterrupts(sink eventSink, state *State) (bool, error) {
+	if len(state.HeldInterrupts) == 0 || state.RunFinalized {
+		return false, nil
+	}
+	intrs := state.HeldInterrupts
+	state.HeldInterrupts = nil
+	if err := p.finishWithInterrupts(sink, state, intrs); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // signInMessage is the message and summary of an auth_required interrupt.

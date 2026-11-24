@@ -72,6 +72,10 @@ func interruptFor(t *testing.T, fc *genai.FunctionCall) (map[string]any, string)
 	if _, err := l.processEvent(e, ev, state, nil); err != nil {
 		t.Fatalf("processEvent() error = %v", err)
 	}
+	// A sign-in interrupt waits for the end of the stream, as in the executor.
+	if _, err := l.finishHeldInterrupts(e, state); err != nil {
+		t.Fatalf("finishHeldInterrupts() error = %v", err)
+	}
 	body := rec.Body.String()
 	for _, sev := range parseSSEEvents(body) {
 		if sev.Raw["type"] != "RUN_FINISHED" {
