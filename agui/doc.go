@@ -327,6 +327,10 @@
 //	    authResponseUri: "<the redirect URI the provider called, with state and code>",
 //	    redirectUri: "<the redirect URI used, if the client changed it>" } } } }]
 //
+// Only OAuth2 and OpenID Connect sign-ins can be resolved, since a resolved
+// resume requires authResponseUri; a credential request for another scheme
+// (an API key, HTTP auth) can only be cancelled.
+//
 // No "approved" field is needed: the sign-in is the answer. Only
 // authResponseUri and redirectUri are passed on to ADK, which takes
 // everything else, the state included, from the request it sent. A

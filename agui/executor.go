@@ -389,7 +389,8 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 		// ADK expects exactly one genai.Content per run, representing the user's turn. The
 		// content shape depends on how the client continued the thread:
 		//   - HITL resume: client sent resume entries → convert to FunctionResponse parts
-		//     that answer the pending adk_request_confirmation.
+		//     that answer the pending ADK call: a tool confirmation, a credential
+		//     request or a workflow input request.
 		//   - Tool results: client executed a tool locally and sent results → convert
 		//     trailing tool-role messages to FunctionResponse parts.
 		//   - Normal message: extract the last user message (text or multimodal).
@@ -445,7 +446,7 @@ func (d *defaultExecutor) Execute(ctx context.Context, execCtx ExecutorContext) 
 		//     ADK session. Client tools are injected under clienttool.StateKey so the
 		//     clienttool.Toolset can discover them at agent invocation time.
 		//   - NewMessage: on HITL resume, carries FunctionResponse parts whose ids match
-		//     the confirmation call stored on the session; ADK v2 runner reuses the paused
+		//     the pending ADK call stored on the session; ADK v2 runner reuses the paused
 		//     invocation id from session history automatically.
 		runReq := adkrun.RunRequest{
 			AppName:                   appName,
