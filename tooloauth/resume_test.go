@@ -525,7 +525,11 @@ func TestResume_requestFromAnotherAuthorIsIgnored(t *testing.T) {
 
 // Replaying a sign-in reply, as a client double-submit or a network retry
 // does, must not send the spent code to the provider again: providers
-// revoke the tokens issued from a reused code.
+// revoke the tokens issued from a reused code. Nor may it resume the paused
+// call. ADK drops an approval whose call it has already answered, and
+// tooloauth refuses one that still reaches it; either way the original call
+// gets no answer but the out-of-date error. The model may call the tool
+// again on the replay's turn, and that fresh call runs on the stored token.
 func TestResume_replayedReplyIsRefused(t *testing.T) {
 	te := newTokenEndpoint(t, http.StatusOK, exchangeReply, nil)
 	cfg := refreshConfig(newRecordingStore(), te, 72*time.Hour)
@@ -536,22 +540,49 @@ func TestResume_replayedReplyIsRefused(t *testing.T) {
 	reply := confirmationResponse(fc, map[string]any{"confirmed": true, "payload": withADKWebResponse(payload,
 		"http://localhost:4200/?state="+pausedState(t, payload)+"&code=code-44", "http://localhost:4200")})
 	connected(t, h.run(t.Context(), "user-7", "s-1", reply))
+	original := originalCallID(t, fc)
 
 	events := h.run(t.Context(), "user-7", "s-1", reply)
 
 	if got := te.callCount(); got != 1 {
 		t.Errorf("token endpoint called %d times, want 1", got)
 	}
-	resp, ok := functionResponse(events, "calendar_list")
-	if !ok {
-		t.Fatal("no calendar_list response on the replay")
+	for _, ev := range events {
+		if ev.Content == nil {
+			continue
+		}
+		for _, p := range ev.Content.Parts {
+			r := p.FunctionResponse
+			if r == nil || r.Name != "calendar_list" || r.ID != original {
+				continue
+			}
+			if got, _ := r.Response["error"].(string); got != "Google Calendar sign-in failed: the sign-in request is out of date" {
+				t.Errorf("replay answered the original call %s with %v, want the out-of-date error", original, r.Response)
+			}
+		}
 	}
-	if got, _ := resp["error"].(string); got != "Google Calendar sign-in failed: the sign-in request is out of date" {
-		t.Errorf("replay response = %v, want the out-of-date error", resp)
+}
+
+// originalCallID returns the ID of the tool call that the confirmation
+// request fc paused.
+func originalCallID(t *testing.T, fc *genai.FunctionCall) string {
+	t.Helper()
+	raw, err := json.Marshal(fc.Args)
+	if err != nil {
+		t.Fatalf("marshal confirmation args: %v", err)
 	}
-	if got := rs.handlerRuns(); got != 0 {
-		t.Errorf("calendar_list ran %d times, want 0", got)
+	var args struct {
+		OriginalFunctionCall struct {
+			ID string `json:"id"`
+		} `json:"originalFunctionCall"`
 	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		t.Fatalf("decode confirmation args %s: %v", raw, err)
+	}
+	if args.OriginalFunctionCall.ID == "" {
+		t.Fatalf("confirmation args %s name no original call", raw)
+	}
+	return args.OriginalFunctionCall.ID
 }
 
 // A run that another plugin ends in its BeforeRun never reaches tooloauth's

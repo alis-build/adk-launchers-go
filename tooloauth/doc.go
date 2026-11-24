@@ -56,8 +56,10 @@
 // again". The tool does not run on that answer: ADK would take the sign-in's
 // confirmation as the tool's own approval. The model's next call is a fresh
 // one, so a tool that requires confirmation asks for it then. A declined,
-// forged, stale, replayed or failed reply fails with an error naming the
-// provider and stores nothing; the code is never sent twice.
+// forged, stale or failed reply fails with an error naming the provider and
+// stores nothing. A replayed reply never resumes the call or sends the code
+// twice: ADK drops an approval whose call it has already answered, and the
+// plugin refuses one that still reaches it with the same error.
 //
 // # Resuming from a client
 //
@@ -130,7 +132,8 @@
 //     not connected.
 //   - Refusing a reused authorization code is per process: two duplicate
 //     replies arriving at the same moment on different instances can both be
-//     exchanged. A replay after a reply completed is refused everywhere.
+//     exchanged. A replay after a reply completed never resumes the call
+//     on any instance: ADK finds the call already answered in the session.
 //   - When a tool's own approval is resumed and the call then needs a
 //     sign-in, ADK emits no request on that resume path; the sign-in prompt
 //     comes on the model's next call.
