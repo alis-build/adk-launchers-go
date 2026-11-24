@@ -3,6 +3,210 @@
 What changed in each release of go.alis.build/adk/launchers. This file is
 generated from release tags and commit messages; do not edit it by hand.
 
+## [1.5.0](https://github.com/alis-build/adk-launchers-go/compare/v1.4.0...v1.5.0) (2026-11-24)
+
+ADK Go v2.8.0, and tooloauth sign-in through ADK's own credential request.
+
+Breaking:
+- tooloauth: a tool with no token asks for sign-in through ADK's
+  adk_request_credential call, not a tool confirmation. REST clients answer
+  that call with the filled auth config, or a bare credential such as
+  {"authType": "oauth2", "oauth2": {"authResponseUri": ...}}; an empty
+  oauth2 object cancels. Sign-in answers sent as confirmations
+  ({"confirmed": true, "payload": &lt;config>}) are refused as out of date, so
+  a sign-in paused before the upgrade has to start again.
+
+- deps: google.golang.org/adk/v2 v2.8.0.
+- tooloauth: after the user signs in, ADK reruns the call and the tool runs
+  in the same turn, instead of answering "connected, call the tool again".
+  The state check, code exchange, refresh and CredentialStore stay the
+  plugin's own, and tokens never land in session state. Calls sharing one
+  sign-in exchange the code once; a cancelled sign-in answers
+  "&lt;Provider> sign-in was cancelled".
+- agui: auth_required now comes from adk_request_credential, with the same
+  client contract, and resume answers that call. The waiting call's
+  placeholder result is neither streamed nor kept in history, a sign-in and
+  a tool approval from the same turn end the run together, and tool calls
+  in thread history always sit on an assistant message.
+- web: ADK's dev web UI completes a tooloauth sign-in: its /dev-ui/ OAuth
+  callback is redirected to /ui/.
+- ci: CHANGELOG.md and GitHub Releases are generated from tags with
+  git-cliff.
+
+### Features
+
+#### [breaking] tooloauth: Ask for sign-in through adk_request_credential ([1a0c2cd](https://github.com/alis-build/adk-launchers-go/commit/1a0c2cdd73ab8edd000421427f91399a9f6ac4ae))
+
+A tool with no token no longer pauses with a tool confirmation. The
+plugin records its auth config as the call's requested credential and
+answers with a waiting result; ADK sends an adk_request_credential
+call, one per credential key, and ends the run. When the user answers,
+ADK stores the answer under temp:&lt;credentialKey> and reruns the call:
+the plugin checks the answer's state against the requests its agent
+issued (read from RequestedAuthConfigs, which clients cannot write),
+exchanges the code with its own client secret, stores the token, and
+the tool runs in the same turn. Nothing goes into session state.
+
+ADK's dev web UI can now complete a sign-in: its popup opens only for
+adk_request_credential.
+
+#### tooloauth: Answer a cancelled sign-in with the cancelled error ([9fc0716](https://github.com/alis-build/adk-launchers-go/commit/9fc0716244024aaa4088f02f68ef422abda4da67))
+
+An answer to the plugin's credential request with no auth response URI
+(the bare credential {"authType": "oauth2", "oauth2": {}}) is the user
+cancelling. Every call that asked for that sign-in now answers
+"&lt;Provider> sign-in was cancelled" and nothing is stored, instead of
+asking the user to sign in again.
+
+#### agui: Turn adk_request_credential into the auth_required interrupt ([c7d08e1](https://github.com/alis-build/adk-launchers-go/commit/c7d08e147097d035ef60f8d1283eb35423749cd3))
+
+ADK's credential request, which tooloauth now sends for a sign-in, ends
+the run as an auth_required interrupt: its ID is the credential call's,
+its toolCallId the call waiting for the sign-in, and
+metadata.adk.authConfig the auth config with its secrets stripped, with
+the same response schema as before. metadata.adk.callName names the
+call so resume can answer it. A tool confirmation is now always the
+tool's own approval (tool_call), whatever its payload.
+
+#### agui: Resume auth_required by answering adk_request_credential ([1575e3b](https://github.com/alis-build/adk-launchers-go/commit/1575e3b5f50ea8933463843423af5ea05ad6901b))
+
+Resuming an auth_required interrupt now answers ADK's credential call
+instead of a tool confirmation. A resolved entry sends a bare
+credential with only the client's authResponseUri (required) and
+redirectUri, and its credential type when that is oauth2 or
+openIdConnect; ADK fills the rest, the state included, from the request
+it sent. A cancelled entry sends an empty credential, which tooloauth
+reads as the user cancelling. The client-facing resume contract is
+unchanged.
+
+### Fixes
+
+#### tooloauth: Exchange a sign-in's code once across its reruns ([c6e2858](https://github.com/alis-build/adk-launchers-go/commit/c6e2858c89dd1428bf4e293f3011aa113f521713))
+
+ADK sends one sign-in request per credential key and reruns every call
+that asked for it. A second call reaching the plugin while the first
+was still exchanging the code found the request claimed and no token
+yet, and failed as out of date. The claim is now a sign-in in flight:
+other calls wait for it and share its outcome, running on the stored
+token or failing with the same error. A second answer re-dispatching
+the same call still gets the out-of-date error.
+
+#### tooloauth: Run on the stored token when a sign-in was another agent's ([c6aa380](https://github.com/alis-build/adk-launchers-go/commit/c6aa380cd179f895eb898094b8d50584f62c9646))
+
+ADK keeps a sign-in answer for the whole invocation under a key with no
+agent in it. When another agent in the same run, one that did not issue
+the request, called a tool with the same sign-in, it failed as out of
+date although the first agent's sign-in had just stored a token. Such
+a call now runs on the stored token, and fails as out of date only when
+there is none. Nothing is exchanged on this path.
+
+#### tooloauth: Refuse any sign-in config sent as a confirmation ([252b280](https://github.com/alis-build/adk-launchers-go/commit/252b2806522cfa9be94f444e8413380622004f90))
+
+Only a sign-in payload carrying an auth response URI was refused on the
+old confirmation rail. A stale reply to a session paused before the
+upgrade, {"confirmed": true} with a config but no URI, answering a tool
+that requires its own approval, passed as that approval and ran the
+tool. Any payload with an exchanged OAuth2 credential is now refused as
+out of date.
+
+#### agui: Keep the sign-in placeholder result out of streams and history ([7c33226](https://github.com/alis-build/adk-launchers-go/commit/7c3322697702a8535cc02e1328e903198e832211))
+
+A call waiting for the user's sign-in now answers with a placeholder
+that ADK replaces when it reruns the call. AG-UI clients would have
+seen two results for one tool call. A response whose call ID is in its
+event's RequestedAuthConfigs is no longer emitted as TOOL_CALL_RESULT
+or put in thread history; the rerun's real result is, so clients see
+what they saw before: no result until the call completes.
+
+#### agui: Put tool calls on an assistant message in thread history ([b331bfe](https://github.com/alis-build/adk-launchers-go/commit/b331bfea4fdff2c919af8639eb2cd960bf320bde))
+
+ADK writes its adk_request_credential call as a user-role event, so
+thread history and the messages snapshot sent with every sign-in
+interrupt carried it as a user message with tool calls, which AG-UI
+user messages cannot have; clients dropped it and the tool message with
+the user's answer lost its call. Tool calls now always go on an
+assistant message.
+
+#### agui: End a run on a sign-in and a same-turn approval together ([c7df059](https://github.com/alis-build/adk-launchers-go/commit/c7df059fbc2c091189bc16860faa69a3547c4b6b))
+
+ADK yields a turn's adk_request_credential event before any tool
+confirmation from the same turn. agui ended the run on the first
+interrupt event, so when the model called a tool needing sign-in and a
+tool needing approval together, the approval interrupt was never sent.
+Sign-in interrupts are now held until the next interrupt event or the
+end of the ADK stream, and the run ends on all of them in one
+RUN_FINISHED. Confirmation and workflow interrupts end the run as
+before.
+
+#### web: Forward ADK web UI's /dev-ui/ sign-in callback to /ui/ ([05a8508](https://github.com/alis-build/adk-launchers-go/commit/05a85082de8d28b7ecaa4a0485c2a4c4558765a8))
+
+ADK's bundled web UI sends OAuth sign-in popups back to /dev-ui/, the
+path adk-python serves it from, and relies on the UI loaded there with
+?code= to hand the redirect to the window that opened the popup. ADK Go
+serves the UI at /ui/, so the popup hit a 404 and the sign-in never
+completed. With the webui sublauncher active, GET and HEAD under
+/dev-ui/ now redirect to the same path and query under /ui/.
+
+### Refactoring
+
+#### tooloauth: Pass completeSignIn the decoded auth response ([0fe34a1](https://github.com/alis-build/adk-launchers-go/commit/0fe34a118b35c4f3c12c4816b9e6cc1068a4ba3f))
+
+completeSignIn took the tool confirmation and decoded its payload
+itself. The caller now checks the declined case and decodes, and
+completeSignIn takes the OAuth2 answer, so a sign-in can be completed
+from an answer that does not arrive as a confirmation.
+
+### Documentation
+
+#### tooloauth: Describe sign-in through adk_request_credential ([e8e88de](https://github.com/alis-build/adk-launchers-go/commit/e8e88de319cf2ed7fba8ccaa8a4cf047ffe80152))
+
+The package docs and the README's Tool OAuth section now describe the
+credential request, the same-turn rerun, the REST answer shapes
+(filled config, bare credential, empty to cancel), the refusal of
+answers sent as confirmations, and the limitations that remain. The
+"ADK's dev web UI cannot complete the flow" limitation is gone.
+
+#### tooloauth: Note that a failed sign-in holds for the rest of the run ([0e9fef9](https://github.com/alis-build/adk-launchers-go/commit/0e9fef91e1b0476e43f5f8f4c646c6178c80c692))
+
+ADK keeps a sign-in answer for the whole invocation, so after a failed
+or cancelled sign-in every later call to a tool on that sign-in gets
+the same error until the user's next message. Say so in the package
+docs, and explain why a claim without a record is refused.
+
+#### agui: Describe auth_required on ADK's credential request ([8fe57a0](https://github.com/alis-build/adk-launchers-go/commit/8fe57a0e42adf24bd6323732ce7d52ea58991fd1))
+
+The OAuth sign-in interrupt section, the limitations and
+SupportedInterruptReasons now say that auth_required comes from ADK's
+adk_request_credential call, that resume answers that call with only
+the client's authResponseUri and redirectUri, that the waiting call's
+placeholder result is not streamed, and that the tool runs in the
+resumed run.
+
+#### agui: Say which sign-ins resume can resolve ([870ce79](https://github.com/alis-build/adk-launchers-go/commit/870ce797a1f351b27fb63c91ba795f03f7d07876))
+
+A resolved auth_required resume requires an authResponseUri, so only
+OAuth2 and OpenID Connect sign-ins can be completed; other credential
+requests can only be cancelled. The executor's comments no longer say a
+resume always answers a tool confirmation.
+
+#### agui: Note that sign-in interrupts wait for the end of the stream ([51b5236](https://github.com/alis-build/adk-launchers-go/commit/51b523622b3ea738fc17d1505eb00926346f869b))
+
+AfterEventCallback sees no emitted events for an adk_request_credential
+event, and the run's terminal events follow its last call. In a graph
+workflow, branches running in parallel keep streaming after a sign-in
+pause until ADK ends the run.
+
+### Other
+
+#### deps: Bump google.golang.org/adk/v2 to v2.8.0 ([ad57527](https://github.com/alis-build/adk-launchers-go/commit/ad575273547a1ed9d9ced281ccd945708f032b58))
+
+ADK now drops an approval whose call it has already answered, so a
+replayed sign-in reply no longer reaches tooloauth's hook. The replay
+test asserted the tool ran zero times, which the scripted model's fresh
+call broke. It now checks the invariant by call ID: the code is
+exchanged once and the paused call gets no answer but the out-of-date
+error. The package docs no longer promise that error for a replay.
+
 ## [1.4.0](https://github.com/alis-build/adk-launchers-go/compare/v1.3.0...v1.4.0) (2026-11-10)
 
 ADK Go v2.7.1, OAuth sign-in for agent tools, and evals parity with
